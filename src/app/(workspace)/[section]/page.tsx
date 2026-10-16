@@ -1,0 +1,15 @@
+import { notFound, redirect } from 'next/navigation';
+import { Workspace } from '@/components/workspace';
+import { getDashboardData } from '@/server/data';
+import { AppError } from '@/server/errors';
+export const dynamic = 'force-dynamic';
+const sections = ['dashboard','tasks','bugs','standup','team','projects','settings','account'];
+export default async function WorkspacePage({params}: {params: Promise<{section: string}>}) {
+  const {section} = await params;
+  if (!sections.includes(section)) notFound();
+  let data;
+  try { data = await getDashboardData(); }
+  catch (error) { if (error instanceof AppError && error.status === 401) redirect('/login'); throw error; }
+  if (data.currentUser.role !== 'admin' && ['standup','team','settings'].includes(section)) notFound();
+  return <Workspace key={section} initialData={data} />;
+}

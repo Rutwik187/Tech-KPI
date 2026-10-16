@@ -1,0 +1,12 @@
+node_modules/
+.next/
+.env
+.env.*
+!.env.example
+playwright-report/
+test-results/
+*.tsbuildinfo
+.DS_Store
+.admin-bootstrap.txt
+.neon
+.neon

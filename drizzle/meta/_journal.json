@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1791895575018,
+      "tag": "0000_sad_scorpion",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791902582484,
+      "tag": "0001_yummy_risque",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792055452942,
+      "tag": "0002_project_members_and_phases",
+      "breakpoints": true
+    }
+  ]
+}

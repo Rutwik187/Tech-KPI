@@ -1,0 +1,165 @@
+/** Local fixture authentication verifies permissions and data, not Microsoft OAuth. Records are removed in finally. */
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { config } from "dotenv";
+import { eq, inArray, like } from "drizzle-orm";
+import { ADHOC_PROJECT_ID } from "../lib/project-defaults";
+import type { DashboardData } from "../lib/types";
+
+config({ path: ".env.local", quiet: true });
+const baseURL = process.env.TEST_BASE_URL ?? "http://localhost:3100";
+const trace = `verification-${randomUUID().slice(0, 8)}`;
+let checks = 0;
+let requests = 0;
+async function main() {
+  const { db, pool } = await import("../db");
+  const schema = await import("../db/schema");
+  const { createOfflineSessionFixture, createOfflineSessionForUser } = await import("./verification-fixtures");
+  const fixture = await createOfflineSessionFixture({ baseURL, role: "admin", name: `${trace}-actor` });
+  const ids = new Set<string>();
+  const memberIds = new Set<string>();
+  const auditIds = new Set<string>();
+  async function call(path: string, cookie = "", body?: unknown, expected = 200) {
+    const response = await fetch(`${baseURL}${path}`, { method: body ? "POST" : "GET", headers: { ...(cookie ? { cookie } : {}), ...(body ? { "content-type": "application/json", origin: baseURL } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(45_000) });
+    assert.equal(response.status, expected, `Unexpected status for ${path}: ${response.status}`);
+    checks++;
+    requests++;
+    if (requests % 10 === 0) console.log(`Verified ${requests} HTTP requests (${checks} checks).`);
+    return response;
+  }
+  async function mutate(cookie: string, body: unknown, expected = 200): Promise<DashboardData> {
+    return (await call("/api/data", cookie, body, expected)).json();
+  }
+  try {
+    const adminCookie = fixture.cookieHeader;
+    await call("/api/data", "", undefined, 401);
+    await call("/api/auth/sign-in/email", "", { email: "blocked@example.invalid", password: "Disabled password flow" }, 404);
+    await call("/api/auth/sign-up/email", "", { email: `${trace}-public@example.invalid`, name: "Blocked signup", password: "Disabled password flow" }, 404);
+    await call("/api/auth/change-password", adminCookie, { currentPassword: "Disabled", newPassword: "Disabled password flow" }, 404);
+    await call("/api/auth/link-social", adminCookie, { provider: "microsoft" }, 404);
+    let data = await mutate(adminCookie, { action: "createProject", name: trace, color: "#2563eb", description: "Temporary verification project", memberIds: [fixture.userId], phaseNames: ["Build", "Release"] });
+    const project = data.projects.find((project) => project.name === trace)!; ids.add(project.id);
+    assert.deepEqual(project.memberIds, [fixture.userId]); assert.equal(project.isAdhoc, false); checks += 2;
+    const buildPhase = data.phases.find(phase => phase.projectId === project.id && phase.name === "Build")!;
+    assert(buildPhase); assert.equal(data.phases.filter(phase => phase.projectId === project.id).length, 2); checks += 2;
+    await mutate(adminCookie, { action: "createPhase", projectId: project.id, name: "build" }, 409);
+    await mutate(adminCookie, { action: "updateProject", id: ADHOC_PROJECT_ID, patch: { isArchived: true } }, 400);
+    await mutate(adminCookie, { action: "createPhase", projectId: ADHOC_PROJECT_ID, name: "Forbidden" }, 400);
+    const microsoftObjectId = randomUUID();
+    data = await mutate(adminCookie, { action: "createMember", name: trace, email: `${trace}@example.invalid`, microsoftObjectId: microsoftObjectId.toUpperCase(), capacity: 33 });
+    const member = data.members.find((member) => member.name === trace)!; ids.add(member.id); memberIds.add(member.id);
+    assert.equal(member.microsoftObjectId, microsoftObjectId); checks++;
+    await mutate(adminCookie, { action: "updateMember", id: member.id, patch: { microsoftObjectId } });
+    await mutate(adminCookie, { action: "updateMember", id: member.id, patch: { microsoftObjectId: randomUUID() } }, 409);
+    await mutate(adminCookie, { action: "createMember", name: `${trace}-duplicate`, email: `${trace}-duplicate@example.invalid`, microsoftObjectId }, 409);
+    const duplicate = await db.select().from(schema.user).where(eq(schema.user.email, `${trace}-duplicate@example.invalid`));
+    assert.equal(duplicate.length, 0); checks++;
+    const developerCookie = (await createOfflineSessionForUser(member.id, baseURL)).cookieHeader;
+    assert.equal(member.role, "developer"); checks++;
+    await mutate(developerCookie, { action: "createProject", name: `${trace}-forbidden`, memberIds: [member.id] }, 403);
+    await mutate(developerCookie, { action: "createPhase", projectId: project.id, name: "Forbidden" }, 403);
+    await mutate(developerCookie, { action: "updateProject", id: project.id, patch: { memberIds: [member.id] } }, 403);
+    await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-unassigned`, projectId: project.id, assigneeId: member.id, estimateHours: 1 }, 400);
+    data = await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { memberIds: [fixture.userId, member.id] } });
+    const assignedBeforeWork: DashboardData = await (await call("/api/data", developerCookie)).json();
+    assert(assignedBeforeWork.projects.some(row => row.id === project.id));
+    assert(assignedBeforeWork.phases.some(row => row.id === buildPhase.id));
+    assert(assignedBeforeWork.projects.every(row => row.id === project.id || row.id === ADHOC_PROJECT_ID));
+    assert(assignedBeforeWork.phases.every(row => row.projectId === project.id)); checks += 4;
+    await call("/projects", developerCookie);
+    data = await mutate(adminCookie, { action: "createPhase", projectId: project.id, name: "Testing" });
+    const testingPhase = data.phases.find(phase => phase.projectId === project.id && phase.name === "Testing")!;
+    await mutate(adminCookie, { action: "updatePhase", id: testingPhase.id, name: "QA" });
+    await mutate(developerCookie, { action: "updatePhase", id: testingPhase.id, name: "Forbidden" }, 403);
+    data = await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-adhoc`, assigneeId: member.id, estimateHours: 1 });
+    const adhoc = data.items.find(item => item.title === `${trace}-adhoc`)!; ids.add(adhoc.id);
+    assert.equal(adhoc.projectId, ADHOC_PROJECT_ID); assert.equal(adhoc.phaseId, null); checks += 2;
+    await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-bad-phase`, projectId: ADHOC_PROJECT_ID, phaseId: buildPhase.id, assigneeId: member.id, estimateHours: 1 }, 400);
+    data = await mutate(adminCookie, { action: "createItem", type: "task", title: trace, projectId: project.id, phaseId: buildPhase.id, assigneeId: member.id, estimateHours: 2 });
+    const task = data.items.find((item) => item.title === trace)!; ids.add(task.id);
+    data = await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-admin`, projectId: project.id, assigneeId: data.currentUser.id, estimateHours: 1 });
+    const adminTask = data.items.find((item) => item.title === `${trace}-admin`)!; ids.add(adminTask.id);
+    assert.equal(task.phaseId, buildPhase.id); checks++;
+    await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { memberIds: [fixture.userId] } }, 400);
+    const developerData: DashboardData = await (await call("/api/data", developerCookie)).json();
+    assert.equal(developerData.members.length, 1); assert(developerData.items.every((item) => item.assigneeId === member.id)); checks += 2;
+    await mutate(developerCookie, { action: "createItem", type: "task", title: "Forbidden", projectId: project.id, assigneeId: member.id }, 403);
+    await mutate(developerCookie, { action: "updateItem", id: adminTask.id, patch: { status: "in_progress" } }, 404);
+    await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { title: "Forbidden" } }, 403);
+    await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { status: "done" } }, 400);
+    await mutate(adminCookie, { action: "updateItem", id: task.id, patch: { estimateHours: 3 } }, 400);
+    const [unchanged] = await db.select().from(schema.workItems).where(eq(schema.workItems.id, task.id));
+    assert.equal(unchanged.estimateHours, 2); checks++;
+    await mutate(adminCookie, { action: "updateItem", id: task.id, patch: { estimateHours: 3 }, reason: "Additional scope agreed", reasonCategory: "underestimated" }, 400);
+    await mutate(adminCookie, { action: "updateItem", id: task.id, patch: { estimateHours: 3 }, reason: "Additional scope agreed", reasonCategory: "scope_change" });
+    await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { status: "blocked" } }, 400);
+    await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { status: "blocked", blocker: "Awaiting test dependency" } });
+    await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { status: "in_progress" } });
+    await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { status: "in_review" } });
+    await mutate(adminCookie, { action: "updateItem", id: task.id, patch: { status: "in_progress" } }, 400);
+    await mutate(adminCookie, { action: "updateItem", id: task.id, patch: { status: "in_progress" }, reason: "Fix review feedback" });
+    await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { status: "in_review" } });
+    data = await mutate(adminCookie, { action: "updateItem", id: task.id, patch: { status: "done" } });
+    assert(data.items.find((item) => item.id === task.id)?.completedAt); checks++;
+    await mutate(adminCookie, { action: "updateItem", id: task.id, patch: { status: "in_progress" } }, 400);
+    data = await mutate(adminCookie, { action: "updateItem", id: task.id, patch: { status: "in_progress" }, reason: "Reopen for additional checks" });
+    assert.equal(data.items.find((item) => item.id === task.id)?.completedAt, null); checks++;
+    data = await mutate(adminCookie, { action: "createItem", type: "bug", title: `${trace}-bug`, projectId: project.id, assigneeId: member.id, severity: "critical", taskId: task.id });
+    const bug = data.items.find((item) => item.title === `${trace}-bug`)!; ids.add(bug.id);
+    assert.equal(bug.phaseId, task.phaseId); checks++;
+    await mutate(adminCookie, { action: "createItem", type: "bug", title: `${trace}-bad-link`, projectId: project.id, phaseId: testingPhase.id, assigneeId: member.id, taskId: task.id }, 400);
+    await mutate(adminCookie, { action: "updateItem", id: task.id, patch: { phaseId: testingPhase.id } }, 400);
+    await mutate(adminCookie, { action: "updateItem", id: bug.id, patch: { phaseId: testingPhase.id } }, 400);
+    await mutate(developerCookie, { action: "updateItem", id: bug.id, patch: { status: "fixed" } });
+    await mutate(developerCookie, { action: "updateItem", id: bug.id, patch: { status: "verified" } }, 400);
+    await mutate(adminCookie, { action: "updateItem", id: bug.id, patch: { status: "verified" } });
+    await mutate(adminCookie, { action: "updateItem", id: bug.id, patch: { status: "open" } }, 400);
+    data = await mutate(adminCookie, { action: "updateItem", id: bug.id, patch: { status: "open" }, reason: "Verification found a regression" });
+    const reopened = data.items.find((item) => item.id === bug.id)!;
+    assert.equal(reopened.fixedAt, null); assert.equal(reopened.reportedAt, bug.reportedAt); assert.equal(reopened.reopenCount, 1); checks += 3;
+    data = await mutate(adminCookie, { action: "addLeave", userId: member.id, date: "2099-11-02", type: "half_day", note: trace });
+    const leave = data.leaves.find((leave) => leave.userId === member.id)!; ids.add(leave.id);
+    await mutate(adminCookie, { action: "deleteLeave", id: leave.id });
+    await mutate(adminCookie, { action: "saveSettings", settings: { ...data.settings, deliveryWeight: 75 } }, 400);
+    const beforeSettingAudits = new Set(data.activities.map((activity) => activity.id));
+    const savedSettings = await mutate(adminCookie, { action: "saveSettings", settings: data.settings });
+    savedSettings.activities.filter((activity) => activity.action === "settings.updated" && !beforeSettingAudits.has(activity.id)).forEach((activity) => auditIds.add(activity.id));
+    await mutate(adminCookie, { action: "updateMember", id: data.currentUser.id, patch: { isActive: false } }, 400);
+    await mutate(adminCookie, { action: "updateMember", id: member.id, patch: { isActive: false } });
+    await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { description: "Existing inactive membership retained", memberIds: [fixture.userId, member.id] } });
+    await mutate(adminCookie, { action: "createProject", name: `${trace}-inactive`, memberIds: [member.id] }, 400);
+    await call("/api/data", developerCookie, undefined, 401);
+    const timeline = await db.select().from(schema.activities).where(eq(schema.activities.entityId, task.id));
+    assert(timeline.some((event) => event.action === "task.estimate_revised" && event.reason));
+    assert(timeline.some((event) => event.action === "task.completed" && event.payload.creditedHours === 3)); checks += 2;
+    await call("/api/cron/weekly-snapshot", "", undefined, 401);
+    if (process.env.CRON_SECRET) {
+      const cron = await fetch(`${baseURL}/api/cron/weekly-snapshot`, { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } });
+      assert.equal(cron.status, 200); checks++;
+    }
+    console.log(`PASS: ${checks} backend checks (projects, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable). Local session fixtures used; real Microsoft OAuth is not exercised.`);
+  } finally {
+    await db.transaction(async (tx) => {
+      const testItems = await tx.select({ id: schema.workItems.id }).from(schema.workItems).where(like(schema.workItems.title, `${trace}%`));
+      testItems.forEach((item) => ids.add(item.id));
+      const testMembers = await tx.select({ id: schema.user.id }).from(schema.user).where(eq(schema.user.email, `${trace}@example.invalid`));
+      testMembers.forEach((member) => { ids.add(member.id); memberIds.add(member.id); });
+      if (ids.size) await tx.delete(schema.activities).where(inArray(schema.activities.entityId, [...ids]));
+      if (auditIds.size) await tx.delete(schema.activities).where(inArray(schema.activities.id, [...auditIds]));
+      if (memberIds.size) await tx.delete(schema.activities).where(inArray(schema.activities.actorId, [...memberIds]));
+      await tx.delete(schema.workItems).where(like(schema.workItems.title, `${trace}%`));
+      const testProjects = await tx.select({ id: schema.projects.id }).from(schema.projects).where(eq(schema.projects.name, trace));
+      if (testProjects.length) await tx.delete(schema.projectPhases).where(inArray(schema.projectPhases.projectId, testProjects.map(project => project.id)));
+      if (memberIds.size) await tx.delete(schema.user).where(inArray(schema.user.id, [...memberIds]));
+      await tx.delete(schema.projects).where(eq(schema.projects.name, trace));
+    });
+    await fixture.dispose();
+    await pool.end();
+    console.log("Temporary verification records removed.");
+  }
+}
+main().catch((error) => {
+  const cause = error as { code?: string; cause?: { code?: string } };
+  console.error(error instanceof assert.AssertionError ? error.message : `Verification failed (${cause.code ?? cause.cause?.code ?? 'connection or setup error'}).`);
+  process.exitCode = 1;
+});

@@ -1,0 +1,62 @@
+.login-page {
+  min-height: 100svh;
+  padding: 28px clamp(20px, 4vw, 64px) 40px;
+  background: var(--background);
+  color: var(--foreground);
+}
+.login-header {
+  max-width: 1360px;
+  margin: 0 auto 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+.login-brand { display: inline-flex; align-items: center; gap: 12px; font-size: 20px; font-weight: 650; letter-spacing: -.7px; line-height: 1.2; }
+.login-brand-light { font-weight: 400; }
+.login-brand small { display: block; margin-top: 6px; font-size: 8px; font-weight: 550; letter-spacing: 2px; color: var(--muted-foreground); }
+.login-logo { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 12px; background: var(--card); color: var(--primary); }
+.login-logo svg { width: 23px; height: 23px; }
+.login-grid { max-width: 1360px; min-height: calc(100svh - 154px); margin: auto; display: grid; grid-template-columns: 1.15fr 1fr; align-items: stretch; gap: clamp(32px, 5vw, 80px); }
+.login-story {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(32px, 5vw, 70px);
+  border: 1px solid color-mix(in oklch, var(--primary) 12%, var(--border));
+  border-radius: 24px;
+  background: color-mix(in oklch, var(--primary) 5%, var(--card));
+}
+.login-story::after { content: ''; position: absolute; z-index: -1; width: 560px; height: 560px; right: -350px; bottom: -280px; border: 1px solid color-mix(in oklch, var(--primary) 12%, transparent); border-radius: 50%; box-shadow: 0 0 0 56px color-mix(in oklch, var(--primary) 3%, transparent), 0 0 0 112px color-mix(in oklch, var(--primary) 2%, transparent); pointer-events: none; }
+.login-eyebrow { font-size: 10px; font-weight: 600; line-height: 1.5; letter-spacing: 1.5px; color: var(--muted-foreground); }
+.login-story h1 { margin: 25px 0 22px; font-size: clamp(46px, 4.9vw, 72px); font-weight: 550; letter-spacing: -.055em; line-height: 1.08; }
+.login-story h1 span { color: var(--primary); }
+.login-story-description { font-size: 15px; line-height: 1.8; color: var(--muted-foreground); }
+.login-benefits { display: flex; flex-direction: column; gap: 16px; margin-top: 40px; }
+.login-benefits > div { display: flex; align-items: center; gap: 12px; font-size: 13px; font-weight: 450; }
+.login-benefits > div > span { display: grid; place-items: center; width: 23px; height: 23px; flex-shrink: 0; border-radius: 50%; background: color-mix(in oklch, var(--primary) 10%, var(--card)); color: var(--primary); }
+.login-benefits svg { width: 13px; height: 13px; }
+.login-bottom { margin-top: 64px; color: var(--muted-foreground); font-size: 11px; }
+.login-panel { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; padding: 40px 0; min-width: 0; }
+.login-card { width: 100%; max-width: 420px; --card-spacing: clamp(24px, 3vw, 32px); }
+.login-account-mark { width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 10px; background: var(--muted); color: var(--primary); margin-bottom: 8px; }
+.login-account-mark svg { width: 20px; height: 20px; }
+.login-help { font-size: 12px; line-height: 1.7; color: var(--muted-foreground); }
+.login-demo-copy { font-size: 12px; color: var(--muted-foreground); text-align: center; }
+.login-footnote { color: var(--muted-foreground); font-size: 11px; text-align: center; }
+@media (min-width: 1600px) { .login-grid { min-height: min(800px, calc(100svh - 154px)); } }
+@media (max-width: 900px) { .login-grid { grid-template-columns: 1fr 1fr; gap: 28px; } .login-story { padding: 36px 28px; } .login-story h1 { font-size: 47px; } .login-benefits { gap: 14px; } .login-benefits > div { font-size: 12px; } }
+@media (max-width: 700px) {
+  .login-page { padding: 22px 20px 32px; }
+  .login-header { margin-bottom: 28px; }
+  .login-grid { min-height: auto; grid-template-columns: 1fr; gap: 28px; }
+  .login-story { padding: 30px 28px; border-radius: 18px; }
+  .login-story h1 { margin: 17px 0 16px; font-size: clamp(42px, 10vw, 58px); }
+  .login-story-description { font-size: 13px; }
+  .login-benefits, .login-bottom { display: none; }
+  .login-panel { padding: 0; gap: 20px; }
+  .login-card { max-width: 480px; --card-spacing: 24px; }
+}

@@ -1,0 +1,563 @@
+import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
+import { expect, test, type Locator, type Page } from '@playwright/test';
+import { createDemoData } from '../src/lib/demo';
+import { ADHOC_PROJECT } from '../src/lib/project-defaults';
+import type { DashboardData } from '../src/lib/types';
+
+// Session fixture cookies must never enter trace artifacts. This suite does not exercise Microsoft OAuth.
+test.use({ timezoneId: 'Asia/Kolkata', trace: 'off', screenshot: 'off', video: 'off' });
+
+async function openDemo(page: Page, section = 'dashboard') {
+  await page.goto(`/demo/${section}`);
+  await expect(page.locator('.demo-banner')).toBeVisible();
+  await expect(page.getByText('Demo workspace', { exact: true })).toBeAttached();
+}
+
+async function chooseOption(page: Page, trigger: Locator, label: string) {
+  await trigger.click();
+  await page.getByRole('option', { name: label, exact: true }).click();
+  await expect(trigger).toHaveText(label);
+}
+
+async function readDemoData(page: Page): Promise<DashboardData> {
+  return page.evaluate(() => {
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v2');
+    if (!saved) throw new Error('Demo changes did not persist.');
+    return JSON.parse(saved) as DashboardData;
+  });
+}
+
+async function saveLiveForm(page: Page, dialog: Locator, label: string) {
+  const started = Date.now();
+  const [response] = await Promise.all([
+    page.waitForResponse(response => response.url().endsWith('/api/data') && response.request().method() === 'POST', { timeout: 45_000 }),
+    dialog.getByRole('button', { name: label, exact: true }).click(),
+  ]);
+  console.log(`[live verification] ${label}: API ${response.status()} in ${Date.now() - started} ms`);
+  if (!response.ok()) {
+    const body = await response.json() as { error?: string };
+    console.log(`[live verification] Public API error: ${typeof body.error === 'string' ? body.error : 'No error message'}`);
+  }
+  expect(response.status()).toBe(200);
+  await expect(dialog).toBeHidden({ timeout: 10_000 });
+}
+
+type OfflineFixture = {
+  userId: string;
+  member: { id: string; name: string; role: string; isActive: boolean };
+  cookie: { name: string; value: string; url: string; httpOnly: boolean; secure: boolean; sameSite: 'Lax' };
+  dispose(): Promise<void>;
+};
+
+/** Local verification only. It proves session authorization, not Microsoft OAuth login. */
+async function authenticateWithFixture(page: Page): Promise<OfflineFixture> {
+  const started = Date.now();
+  const { config } = await import('dotenv');
+  config({ path: resolve('.env.local'), quiet: true });
+  const { createOfflineSessionFixture } = await import('../src/server/verification-fixtures');
+  const fixture = await createOfflineSessionFixture({ baseURL: process.env.TEST_BASE_URL ?? 'http://localhost:3100', role: 'admin', name: 'Browser verification administrator' });
+  console.log(`[fixture verification] Offline session created in ${Date.now() - started} ms`);
+  try {
+    await page.context().addCookies([fixture.cookie]);
+    await page.goto('/dashboard');
+    await expect(page.getByRole('heading', { level: 1, name: /^(Team overview|We couldn’t load your workspace\.)/ })).toBeVisible({ timeout: 30_000 });
+    if (await page.getByRole('heading', { name: 'We couldn’t load your workspace.', exact: true }).isVisible()) {
+      throw new Error('Offline fixture GET /dashboard rendered the workspace error boundary before team data loaded.');
+    }
+    await expect(page.getByRole('heading', { level: 1, name: /^Team overview/ })).toBeVisible({ timeout: 30_000 });
+    console.log(`[fixture verification] Authenticated dashboard ready in ${Date.now() - started} ms`);
+    return fixture;
+  } catch (error) {
+    await fixture.dispose();
+    throw error;
+  }
+}
+
+test('signed-out visitors are sent to the login page for protected workspaces', async ({ page }) => {
+  await page.goto('/dashboard');
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole('heading', { name: 'Welcome back.' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Microsoft/i })).toBeVisible();
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await expect(page.getByLabel('Work email')).toHaveCount(0);
+  await expect(page.getByRole('link', { name: /Explore demo/ })).toHaveAttribute('href', '/demo/dashboard');
+});
+
+test('theme choices persist across login and demo and follow the system without hydration errors', async ({ page }) => {
+  const pageErrors: string[] = [];
+  const hydrationErrors: string[] = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
+  page.on('console', message => {
+    if (message.type() === 'error' && /hydrat|did not match|didn't match/i.test(message.text())) hydrationErrors.push(message.text());
+  });
+  await page.goto('/login');
+  const html = page.locator('html');
+  await expect(html).toHaveClass(/\blight\b/);
+  await page.getByRole('button', { name: 'Change theme', exact: true }).click();
+  await expect(page.getByRole('menuitemradio', { name: 'Light', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('menuitemradio', { name: 'Dark', exact: true }).click();
+  await expect(html).toHaveClass(/\bdark\b/);
+  await page.reload();
+  await expect(html).toHaveClass(/\bdark\b/);
+  await page.getByRole('link', { name: /Explore demo/ }).click();
+  await expect(page).toHaveURL(/\/demo\/dashboard$/);
+  await expect(html).toHaveClass(/\bdark\b/);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.getByRole('button', { name: 'Change theme', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: 'System', exact: true }).click();
+  await expect(html).toHaveClass(/\bdark\b/);
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(html).toHaveClass(/\blight\b/);
+  await page.getByRole('button', { name: 'Change theme', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: 'Light', exact: true }).click();
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(html).toHaveClass(/\blight\b/);
+  expect(pageErrors).toEqual([]);
+  expect(hydrationErrors).toEqual([]);
+});
+
+test('demo navigation keeps every page in the demo workspace', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await openDemo(page);
+  const sidebar = page.locator('[data-slot="sidebar"]');
+  const destinations = [
+    { label: /^Daily standup/, path: 'standup', heading: /^Daily standup/ },
+    { label: /^Tasks/, path: 'tasks', heading: /^Tasks/ },
+    { label: /^Bugs/, path: 'bugs', heading: /^Bugs/ },
+    { label: /^Team$/, path: 'team', heading: /^Your team/ },
+    { label: /^Projects$/, path: 'projects', heading: /^Projects/ },
+    { label: /^Settings$/, path: 'settings', heading: /^Workspace settings/ },
+    { label: /Rohan Desai/, path: 'account', heading: /^My account/ },
+    { label: /^Overview$/, path: 'dashboard', heading: /^Team overview/ },
+  ];
+  for (const destination of destinations) {
+    const link = sidebar.getByRole('link', { name: destination.label });
+    await expect(link).toHaveAttribute('href', `/demo/${destination.path}`);
+    await link.click();
+    await expect(page).toHaveURL(new RegExp(`/demo/${destination.path}$`));
+    await expect(page.getByRole('heading', { level: 1, name: destination.heading })).toBeVisible();
+    await expect(page.locator('.demo-banner')).toBeVisible();
+  }
+  await sidebar.getByRole('link', { name: /Urban Gabru/i }).click();
+  await expect(page).toHaveURL(/\/demo\/dashboard$/);
+  expect(pageErrors).toEqual([]);
+});
+
+test('task details render creation events that have no changed due-date payload', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await openDemo(page, 'tasks');
+  const title = 'Simplify the checkout address form';
+  await page.getByRole('button', { name: title, exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: title, exact: true })).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: /^Activity/ })).toBeVisible();
+  await expect(dialog.locator('.timeline')).toContainText('created this task');
+  await expect(page.getByRole('heading', { name: 'We couldn’t load your workspace.' })).toBeHidden();
+  expect(pageErrors).toEqual([]);
+});
+
+test('a task needs only a title, owner and estimate, survives reload, and appears on the board', async ({ page }) => {
+  await openDemo(page, 'tasks');
+  const title = 'Browser verification: inventory search';
+  await page.getByRole('button', { name: 'New task', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('combobox', { name: 'Project', exact: true })).toHaveText(ADHOC_PROJECT.name);
+  await expect(dialog.getByRole('combobox', { name: 'Phase', exact: true })).toBeDisabled();
+  await dialog.getByLabel('What needs to get done?').fill(title);
+  const owner = dialog.getByRole('combobox', { name: 'Owner', exact: true });
+  await owner.focus();
+  await owner.press('Enter');
+  await page.keyboard.type('Aarav');
+  await expect(page.getByRole('option', { name: 'Aarav Mehta', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(owner).toHaveText('Aarav Mehta');
+  await dialog.getByLabel(/Agreed estimate/).fill('4.5');
+  const description = 'Match stock levels by SKU and warehouse.';
+  const contextToggle = dialog.getByRole('button', { name: /^Add context/ });
+  await contextToggle.click();
+  await dialog.getByRole('textbox', { name: 'Description', exact: true }).fill(description);
+  await contextToggle.click();
+  await expect(dialog.getByRole('textbox', { name: 'Description', exact: true })).toBeHidden();
+  await dialog.getByRole('button', { name: 'Create task', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const savedDescription = await page.evaluate(title => {
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v2');
+    if (!saved) throw new Error('Demo task did not persist.');
+    return (JSON.parse(saved) as { items: { title: string; description: string }[] }).items.find(item => item.title === title)?.description;
+  }, title);
+  expect(savedDescription).toBe(description);
+  const savedTask = (await readDemoData(page)).items.find(item => item.title === title);
+  expect(savedTask?.projectId).toBe(ADHOC_PROJECT.id);
+  expect(savedTask?.phaseId).toBeNull();
+  const search = page.getByRole('textbox', { name: 'Search tasks' });
+  await search.fill(title);
+  let row = page.getByRole('row').filter({ hasText: title });
+  await expect(row).toContainText('4.5 h');
+  await expect(row).toContainText('To do');
+  await row.getByRole('button', { name: /^Start/ }).click();
+  await expect(row).toContainText('In progress');
+  await page.reload();
+  await page.getByRole('textbox', { name: 'Search tasks' }).fill(title);
+  row = page.getByRole('row').filter({ hasText: title });
+  await expect(row).toContainText('In progress');
+  await page.getByRole('radio', { name: 'Board view', exact: true }).click();
+  const card = page.locator('.task-card').filter({ hasText: title });
+  await expect(card).toBeVisible();
+  await expect(card).toContainText('4.5 h');
+  await expect(card.getByRole('button', { name: /^Review/ })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Search tasks' }).fill('a search with no possible matching work 98jds');
+  await expect(page.getByRole('heading', { name: 'No matches this time' })).toBeVisible();
+  await page.getByRole('button', { name: /^Clear filters/ }).click();
+  await expect(page.getByRole('heading', { name: 'No matches this time' })).toBeHidden();
+  await expect(page.locator('.kanban-column')).toHaveCount(5);
+});
+
+test('project members and custom phases can be created on mobile and edited after reload', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await openDemo(page, 'projects');
+  const projectName = 'Browser verification: fulfilment planning';
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
+  let dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: 'Project name', exact: true }).fill(projectName);
+  await dialog.getByRole('checkbox', { name: /Aarav Mehta/ }).check();
+  await dialog.getByRole('checkbox', { name: /Ananya Rao/ }).check();
+  for (const phase of ['Discovery', 'Delivery']) {
+    await dialog.getByRole('textbox', { name: 'Phase name', exact: true }).fill(phase);
+    await dialog.getByRole('button', { name: 'Add phase', exact: true }).click();
+    await expect(dialog).toContainText(phase);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(376);
+  await dialog.getByRole('button', { name: 'Create project', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  let data = await readDemoData(page);
+  const project = data.projects.find(project => project.name === projectName);
+  if (!project) throw new Error('The new demo project did not persist.');
+  expect(project.isAdhoc).toBe(false);
+  expect(project.memberIds.sort()).toEqual(['demo-aarav', 'demo-ananya']);
+  expect(data.phases.filter(phase => phase.projectId === project.id).sort((a, b) => a.position - b.position).map(phase => phase.name)).toEqual(['Discovery', 'Delivery']);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.reload();
+  await page.getByRole('button', { name: `Edit ${projectName}`, exact: true }).click();
+  dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('checkbox', { name: /Aarav Mehta/ })).toBeChecked();
+  await expect(dialog.getByRole('checkbox', { name: /Ananya Rao/ })).toBeChecked();
+  await dialog.getByRole('checkbox', { name: /Aarav Mehta/ }).uncheck();
+  await dialog.getByRole('checkbox', { name: /Sanya Gupta/ }).check();
+  await dialog.getByRole('textbox', { name: 'Phase name: Discovery', exact: true }).fill('Planning');
+  await dialog.getByRole('button', { name: 'Rename phase Discovery', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: 'Phase name: Planning', exact: true })).toBeVisible();
+  await dialog.getByRole('textbox', { name: 'Phase name', exact: true }).fill('Quality checks');
+  await dialog.getByRole('button', { name: 'Add phase', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: 'Phase name: Quality checks', exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await page.reload();
+  data = await readDemoData(page);
+  expect(data.projects.find(candidate => candidate.id === project.id)?.memberIds.sort()).toEqual(['demo-ananya', 'demo-sanya']);
+  expect(data.phases.filter(phase => phase.projectId === project.id).sort((a, b) => a.position - b.position).map(phase => phase.name)).toEqual(['Planning', 'Delivery', 'Quality checks']);
+  const adhoc = page.locator('.project-card').filter({ has: page.getByRole('link', { name: ADHOC_PROJECT.name, exact: true }) });
+  await expect(adhoc).toBeVisible();
+  await expect(adhoc.getByRole('button', { name: /^Edit / })).toHaveCount(0);
+  await expect(adhoc.getByRole('button', { name: /^Archive$/ })).toHaveCount(0);
+});
+
+test('project selection scopes owners and phases and linked bugs inherit those choices', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
+  await openDemo(page, 'tasks');
+  const taskTitle = 'Browser verification: project-scoped payment task';
+  await page.getByRole('button', { name: 'New task', exact: true }).click();
+  let dialog = page.getByRole('dialog');
+  const owner = dialog.getByRole('combobox', { name: 'Owner', exact: true });
+  const phase = dialog.getByRole('combobox', { name: 'Phase', exact: true });
+  await expect(dialog.getByRole('combobox', { name: 'Project', exact: true })).toHaveText(ADHOC_PROJECT.name);
+  await expect(phase).toBeDisabled();
+  await chooseOption(page, owner, 'Ananya Rao');
+  await chooseOption(page, dialog.getByRole('combobox', { name: 'Project', exact: true }), 'Commerce');
+  await expect(owner).not.toHaveText('Ananya Rao');
+  await expect(phase).toBeEnabled();
+  await expect(phase).toHaveText(/Ad\s?hoc/i);
+  await owner.click();
+  await expect(page.getByRole('option', { name: 'Ananya Rao', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('option', { name: 'Aarav Mehta', exact: true })).toBeVisible();
+  await page.getByRole('option', { name: 'Arjun Patil', exact: true }).click();
+  await phase.click();
+  await expect(page.getByRole('option', { name: 'Warehouse dispatch', exact: true })).toHaveCount(0);
+  await page.getByRole('option', { name: 'Payments reliability', exact: true }).click();
+  await dialog.getByLabel('What needs to get done?').fill(taskTitle);
+  await dialog.getByLabel(/Agreed estimate/).fill('2');
+  await dialog.getByRole('button', { name: 'Create task', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  let data = await readDemoData(page);
+  const task = data.items.find(item => item.title === taskTitle);
+  if (!task) throw new Error('The project-scoped demo task did not persist.');
+  expect(task.projectId).toBe('demo-commerce');
+  expect(task.assigneeId).toBe('demo-arjun');
+  expect(data.phases.find(phase => phase.id === task.phaseId)?.name).toBe('Payments reliability');
+  await page.getByRole('button', { name: taskTitle, exact: true }).click();
+  dialog = page.getByRole('dialog');
+  await expect(dialog.locator('.phase-tag')).toHaveText('Payments reliability');
+  await dialog.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await page.goto('/demo/bugs');
+  await page.getByRole('button', { name: 'Log bug', exact: true }).click();
+  dialog = page.getByRole('dialog');
+  const bugTitle = 'Browser verification: linked project-phase bug';
+  await dialog.getByLabel('What went wrong?').fill(bugTitle);
+  await chooseOption(page, dialog.getByRole('combobox', { name: /^Linked task/ }), `${task.key} · ${taskTitle}`);
+  await expect(dialog.getByRole('combobox', { name: 'Project', exact: true })).toHaveText('Commerce');
+  await expect(dialog.getByRole('combobox', { name: 'Project', exact: true })).toBeDisabled();
+  await expect(dialog.getByRole('combobox', { name: 'Phase', exact: true })).toHaveText('Payments reliability');
+  await expect(dialog.getByRole('combobox', { name: 'Phase', exact: true })).toBeDisabled();
+  await expect(dialog.getByRole('combobox', { name: 'Owner', exact: true })).toHaveText('Arjun Patil');
+  await dialog.getByRole('button', { name: 'Log bug', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  data = await readDemoData(page);
+  const bug = data.items.find(item => item.title === bugTitle);
+  expect(bug).toMatchObject({ projectId: task.projectId, phaseId: task.phaseId, assigneeId: task.assigneeId, taskId: task.id });
+  expect(pageErrors).toEqual([]);
+});
+
+test('standup quick entry supports Enter and retains the developer for the next task', async ({ page }) => {
+  await openDemo(page, 'standup');
+  const form = page.locator('.standup-quick-form');
+  const developer = form.getByRole('combobox', { name: 'Owner', exact: true });
+  await chooseOption(page, developer, 'Ananya Rao');
+  await chooseOption(page, form.getByRole('combobox', { name: 'Project', exact: true }), 'Inventory management');
+  await form.getByRole('spinbutton', { name: 'Hours', exact: true }).fill('2');
+  const title = form.getByRole('textbox', { name: 'What are we building?' });
+  await title.fill('Browser verification: stock count');
+  await title.press('Enter');
+  await expect(page.getByRole('button', { name: 'Browser verification: stock count', exact: true })).toBeVisible();
+  await expect(title).toHaveValue('');
+  await expect(title).toBeFocused();
+  await expect(developer).toHaveText('Ananya Rao');
+});
+
+test('logging a linked bug fills its owner and project, then supports fix and verification', async ({ page }) => {
+  await openDemo(page, 'bugs');
+  const overdueRow = page.getByRole('row').filter({ hasText: 'Dispatch export drops one warehouse column' });
+  await expect(overdueRow).toContainText('overdue');
+  const title = 'Browser verification: SKU import duplicate';
+  await page.getByRole('button', { name: 'Log bug', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('What went wrong?').fill(title);
+  await chooseOption(page, dialog.getByRole('combobox', { name: /^Linked task/ }), 'UG-005 · Reconcile stock counts with the dispatch export');
+  await expect(dialog.getByRole('combobox', { name: 'Owner', exact: true })).toHaveText('Ananya Rao');
+  await expect(dialog.getByRole('combobox', { name: 'Project', exact: true })).toHaveText('Inventory management');
+  await expect(dialog.getByRole('combobox', { name: 'Phase', exact: true })).toHaveText('Warehouse dispatch');
+  await dialog.getByRole('radio', { name: 'Critical', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Log bug', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await page.getByRole('textbox', { name: 'Search bugs' }).fill(title);
+  const row = page.getByRole('row').filter({ hasText: title });
+  await expect(row).toContainText('Ananya');
+  await expect(row).toContainText('Critical');
+  await row.getByRole('button', { name: /^Mark fixed/ }).click();
+  await expect(row).toContainText('Fixed');
+  await row.getByRole('button', { name: /^Verify/ }).click();
+  await expect(row).toContainText('Verified');
+  const standaloneTitle = 'Browser verification: an issue without a source task';
+  await page.getByRole('button', { name: 'Log bug', exact: true }).click();
+  await dialog.getByLabel('What went wrong?').fill(standaloneTitle);
+  const linkedTask = dialog.getByRole('combobox', { name: /^Linked task/ });
+  await chooseOption(page, linkedTask, 'UG-005 · Reconcile stock counts with the dispatch export');
+  await chooseOption(page, linkedTask, 'No linked task');
+  await dialog.getByRole('button', { name: 'Log bug', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await page.getByRole('textbox', { name: 'Search bugs' }).fill(standaloneTitle);
+  await expect(page.getByRole('row').filter({ hasText: standaloneTitle })).toBeVisible();
+  const storedTaskId = await page.evaluate(title => {
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v2');
+    if (!saved) throw new Error('Demo bug did not persist.');
+    return (JSON.parse(saved) as { items: { title: string; taskId: string | null }[] }).items.find(item => item.title === title)?.taskId;
+  }, standaloneTitle);
+  expect(storedTaskId).toBeNull();
+});
+
+test('working-day buttons save ISO weekdays including Sunday as seven in the demo', async ({ page }) => {
+  await openDemo(page, 'settings');
+  for (const name of ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']) {
+    await expect(page.getByRole('button', { name, exact: true })).toHaveAttribute('data-state', 'on');
+  }
+  const sunday = page.getByRole('button', { name: 'Sun', exact: true });
+  await expect(sunday).toHaveAttribute('data-state', 'off');
+  await sunday.click();
+  await page.getByRole('button', { name: /^Save settings/ }).click();
+  const workingDays = await page.evaluate(() => {
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v2');
+    if (!saved) throw new Error('Demo settings did not persist.');
+    return (JSON.parse(saved) as { settings: { workingDays: number[] } }).settings.workingDays;
+  });
+  expect(workingDays.sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 7]);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Sun', exact: true })).toHaveAttribute('data-state', 'on');
+});
+
+test('mobile navigation and dialogs work at 375 pixels with keyboard focus', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await openDemo(page);
+  await page.getByRole('button', { name: 'Open navigation', exact: true }).click();
+  const navigation = page.getByRole('dialog', { name: 'Sidebar', exact: true });
+  await expect(navigation).toBeVisible();
+  await navigation.getByRole('link', { name: /^Tasks/ }).click();
+  await expect(page).toHaveURL(/\/demo\/tasks$/);
+  await expect(navigation).toBeHidden();
+  const width = await page.evaluate(() => document.documentElement.scrollWidth);
+  expect(width).toBeLessThanOrEqual(376);
+  const trigger = page.getByRole('button', { name: 'New task', exact: true });
+  await trigger.click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel('What needs to get done?')).toBeFocused();
+  await expect(dialog.getByRole('combobox', { name: 'Project', exact: true })).toHaveText(ADHOC_PROJECT.name);
+  await expect(dialog.getByRole('combobox', { name: 'Phase', exact: true })).toBeDisabled();
+  for (let i = 0; i < 18; i++) {
+    await page.keyboard.press('Tab');
+    expect(await dialog.evaluate((root) => root.contains(document.activeElement))).toBe(true);
+  }
+  await page.screenshot({ path: testInfo.outputPath('mobile-task-entry.png'), fullPage: true });
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
+test.describe('date-only labels in other browser timezones', () => {
+  test.use({ timezoneId: 'America/Los_Angeles' });
+  test('a task due date stays on the India calendar date in a Los Angeles browser', async ({ page }) => {
+    const title = 'Simplify the checkout address form';
+    const dueDate = createDemoData().items.find((item) => item.title === title)?.dueDate;
+    if (!dueDate) throw new Error('The known demo task needs a due date.');
+    const expected = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })
+      .format(new Date(`${dueDate}T12:00:00Z`));
+    await openDemo(page, 'tasks');
+    const row = page.getByRole('row').filter({ hasText: title });
+    await expect(row.locator('.due-date')).toHaveText(expected);
+  });
+});
+
+test.describe('local fixture authentication — Microsoft OAuth is not exercised', () => {
+  test('an offline admin session has private workspace access and can sign out', async ({ page }) => {
+    const fixture = await authenticateWithFixture(page);
+    try {
+    const response = await page.request.get('/api/data');
+    expect(response.status()).toBe(200);
+    const identity = (await response.json() as { currentUser: { id: string; role: string; isActive: boolean } }).currentUser;
+    await expect(page.getByRole('heading', { level: 1, name: /^Team overview/ })).toBeVisible();
+    await expect(page.getByText('Live workspace', { exact: true })).toBeVisible();
+    await expect(page.locator('.demo-banner')).toBeHidden();
+    expect(identity.role).toBe('admin');
+    expect(identity.isActive).toBe(true);
+    expect(identity.id).toBe(fixture.userId);
+    await expect(page.locator('[data-slot="sidebar"]').getByRole('link', { name: /^Team$/ })).toBeVisible();
+    await page.getByRole('link', { name: 'Open my account' }).click();
+    await page.getByRole('button', { name: /^Sign out/ }).click();
+    await expect(page).toHaveURL(/\/login$/);
+    expect((await page.request.get('/api/data')).status()).toBe(401);
+    } finally { await fixture.dispose(); }
+  });
+
+  test('live task and linked bug entry pass through the API to Neon and render after reload', async ({ page }) => {
+    test.setTimeout(120_000);
+    const started = Date.now();
+    const prefix = `Browser verification ${randomUUID()}`;
+    const taskTitle = `${prefix} task`;
+    const bugTitle = `${prefix} bug`;
+    const createdIds = new Set<string>();
+    let actorId: string | undefined;
+    let fixture: OfflineFixture | undefined;
+    type Item = { id: string; key: string; title: string; type: string; estimateHours: number; projectId: string; phaseId: string | null; assigneeId: string; taskId: string | null };
+    const readItems = async () => {
+      const response = await page.request.get('/api/data');
+      expect(response.status()).toBe(200);
+      return (await response.json() as { items: Item[] }).items;
+    };
+    try {
+      fixture = await authenticateWithFixture(page);
+      actorId = fixture.userId;
+      page.setDefaultTimeout(15_000);
+      page.setDefaultNavigationTimeout(45_000);
+      await page.goto('/tasks');
+      await expect(page.getByRole('heading', { level: 1, name: /^Tasks/ })).toBeVisible({ timeout: 10_000 });
+      await page.getByRole('button', { name: 'New task', exact: true }).click();
+      let dialog = page.getByRole('dialog');
+      await expect(dialog.getByRole('combobox', { name: 'Project', exact: true })).toHaveText(ADHOC_PROJECT.name);
+      await expect(dialog.getByRole('combobox', { name: 'Phase', exact: true })).toBeDisabled();
+      await dialog.getByLabel('What needs to get done?').fill(taskTitle);
+      await chooseOption(page, dialog.getByRole('combobox', { name: 'Owner', exact: true }), fixture.member.name);
+      const projectLabel = await dialog.getByRole('combobox', { name: 'Project', exact: true }).innerText();
+      await dialog.getByLabel(/Agreed estimate/).fill('2');
+      await saveLiveForm(page, dialog, 'Create task');
+      const task = (await readItems()).find((item) => item.title === taskTitle);
+      if (!task) throw new Error('The created task did not persist in Neon.');
+      createdIds.add(task.id);
+      expect(task.estimateHours).toBe(2);
+      expect(task.assigneeId).toBe(actorId);
+      expect(task.projectId).toBe(ADHOC_PROJECT.id);
+      expect(task.phaseId).toBeNull();
+      await page.reload();
+      await expect(page.getByRole('heading', { level: 1, name: /^Tasks/ })).toBeVisible({ timeout: 10_000 });
+      await page.getByRole('textbox', { name: 'Search tasks' }).fill(taskTitle);
+      const row = page.getByRole('row').filter({ hasText: taskTitle });
+      await expect(row).toContainText('2 h');
+      await row.getByRole('button', { name: taskTitle, exact: true }).click();
+      await page.getByRole('button', { name: 'Revise', exact: true }).click();
+      dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Revise estimate', exact: true }) });
+      await dialog.getByLabel(/New estimate/).fill('3');
+      await dialog.getByRole('textbox', { name: 'Reason', exact: true }).fill('Additional scope agreed during browser verification');
+      await saveLiveForm(page, dialog, 'Revise estimate');
+      expect((await readItems()).find((item) => item.id === task.id)?.estimateHours).toBe(3);
+      await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+      await page.goto('/bugs');
+      await expect(page.getByRole('heading', { level: 1, name: /^Bugs/ })).toBeVisible({ timeout: 10_000 });
+      await page.getByRole('button', { name: 'Log bug', exact: true }).click();
+      dialog = page.getByRole('dialog');
+      await dialog.getByLabel('What went wrong?').fill(bugTitle);
+      await chooseOption(page, dialog.getByRole('combobox', { name: /^Linked task/ }), `${task.key} · ${taskTitle}`);
+      await expect(dialog.getByRole('combobox', { name: 'Owner', exact: true })).toHaveText(fixture.member.name);
+      await expect(dialog.getByRole('combobox', { name: 'Project', exact: true })).toHaveText(projectLabel.trim());
+      await saveLiveForm(page, dialog, 'Log bug');
+      const bug = (await readItems()).find((item) => item.title === bugTitle);
+      if (!bug) throw new Error('The created bug did not persist in Neon.');
+      createdIds.add(bug.id);
+      expect(bug.type).toBe('bug');
+      expect(bug.taskId).toBe(task.id);
+      expect(bug.projectId).toBe(task.projectId);
+      expect(bug.phaseId).toBeNull();
+      await page.getByRole('textbox', { name: 'Search bugs' }).fill(bugTitle);
+      await expect(page.getByRole('row').filter({ hasText: bugTitle })).toBeVisible();
+    } catch (error) {
+      console.log(`[live verification] Failed before cleanup at ${Date.now() - started} ms: ${error instanceof Error ? error.message.split('\n')[0] : 'Unknown error'}`);
+      throw error;
+    } finally {
+      try {
+      if (actorId) {
+        const { config } = await import('dotenv');
+        config({ path: resolve('.env.local'), quiet: true });
+        const { Pool } = await import('pg');
+        const cleanup = new Pool({ connectionString: process.env.DATABASE_URL, max: 1, connectionTimeoutMillis: 15_000, query_timeout: 15_000 });
+        try {
+          await cleanup.query('BEGIN');
+          // Recover IDs if a UI failure happened after the server committed its response.
+          const owned = await cleanup.query<{ id: string }>('SELECT id FROM tech_kpi_work_item WHERE created_by_id = $1 AND title = ANY($2::text[])', [actorId, [taskTitle, bugTitle]]);
+          owned.rows.forEach((item) => createdIds.add(item.id));
+          if (createdIds.size) {
+            const ids = [...createdIds];
+            await cleanup.query('DELETE FROM tech_kpi_attachment WHERE item_id = ANY($1::uuid[])', [ids]);
+            await cleanup.query('DELETE FROM tech_kpi_activity WHERE entity_id = ANY($1::text[])', [ids]);
+            await cleanup.query('DELETE FROM tech_kpi_work_item WHERE id = ANY($1::uuid[])', [ids]);
+          }
+          await cleanup.query('COMMIT');
+          console.log('[live verification] Temporary item cleanup committed');
+        } catch (error) {
+          await cleanup.query('ROLLBACK');
+          throw error;
+        } finally { await cleanup.end(); }
+      }
+      } finally { await fixture?.dispose(); console.log('[live verification] Temporary identity cleanup completed'); }
+    }
+  });
+});
