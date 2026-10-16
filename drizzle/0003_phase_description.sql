@@ -1,0 +1,1 @@
+ALTER TABLE "tech_kpi_project_phase" ADD COLUMN "description" text DEFAULT '' NOT NULL;

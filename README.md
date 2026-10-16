@@ -1,6 +1,6 @@
 # Urban Gabru tech workspace
 
-A practical dashboard for daily standups, tasks, bugs, and weekly delivery. Built with Next.js, TypeScript, Better Auth, Drizzle, and Neon Postgres.
+A practical dashboard for daily standups, tickets, bugs, and weekly delivery. Built with Next.js, TypeScript, Better Auth, Drizzle, and Neon Postgres.
 
 ## Open the app
 
@@ -33,33 +33,36 @@ Use the appearance menu in the header to choose Light, Dark, or System. The pref
 
 ## Daily workflow
 
-1. The admin creates a project, selects its developers, and adds any phases, such as Build, Testing, and Release. Project members and phase names can be updated later. A developer with unfinished work must keep their project assignment until that work is completed or reassigned.
-2. The admin adds a task with its title, owner, and agreed estimate. Project and phase start at **Ad hoc**. Select a project to choose one of its phases and assigned members. The estimate includes development, testing, and bug fixes.
-3. Developers start their work, record blockers, and submit it for review. The admin approves completion or sends it back with a reason.
-4. Log a bug from the same quick entry form. Linking a task fills its owner, project, and phase. Developers mark fixes ready; the admin verifies them.
-5. Use the overview to find pending reviews, overdue work, and blockers. The team table shows each developer’s workload and score. Use Daily standup to review each person and add their next task.
-6. Estimates and due dates require a reason when changed. Task and bug timelines keep the record. Attach screenshots, PDFs, text logs, CSV, or JSON files, up to 10 MB each.
+1. The admin creates a project with a title, an optional description, its members, and any phases, such as Build, Testing, and Release. Each phase has a title and an optional description. Members and phases can be changed later. A member with unfinished work stays on the project until that work is finished or reassigned.
+2. The admin or a developer adds a **ticket** with a title, project, phase, estimate, and optional due date. Developers add tickets only for themselves, in Ad hoc or a project they belong to. The estimate covers building, testing, and fixes. It is the number of hours the ticket earns when the admin approves it.
+3. The owner starts the ticket, marks blockers, and submits it for review. The admin approves it or sends it back with a reason.
+4. If a ticket needs more time, its owner or the admin extends the due date with a reason. The ticket shows an **Extended** badge and the timeline keeps every extension and reason. Only the admin changes an estimate, owner, or project, because these change the score.
+5. The admin logs **bugs**, optionally linked to a ticket. Each bug gets a fix-by time from its severity. Developers mark fixes; the admin verifies them.
+6. The admin records **leave** on the Team page: a full day, a half day, or a range of days. Leave appears per person, on their member panel, and in one list. Weekends and holidays inside a range are skipped.
+7. Use the overview and the bell menu to find reviews, blocked tickets, late work, and late bugs. Use Daily standup to go through each person and add tickets as you talk.
 
-There are two roles: **Admin** and **Developer**. Admins manage projects, phases, team assignments, and work. Developers see their assigned projects and their own work. Tasks have **To do**, **In progress**, **Blocked**, **In review**, and **Done** states. Bugs have **Open**, **In progress**, **Fixed**, and **Verified** states. The server checks sessions, roles, project membership, and record ownership on every request.
+There are two roles: **Admin** and **Developer**. Admins manage projects, phases, people, leave, and all work. Developers see their assigned projects and their own tickets and bugs, add tickets for themselves, and edit the title, details, priority, and due date of their own tickets. Tickets have **To do**, **In progress**, **Blocked**, **In review**, and **Done** states. Bugs have **Open**, **In progress**, **Fixed**, and **Verified** states. The server checks sessions, roles, project membership, and record ownership on every request.
 
-**Ad hoc** is the built-in project for unplanned work and is available to everyone. Within any project, the **Ad hoc** phase means the work has no named phase yet. The built-in project cannot be renamed or archived. Existing tasks keep their current project and begin with the Ad hoc phase; their owners become project members during migration.
+The database still calls a ticket a `task` (for example `type = 'task'`). Only the words people read changed. Old `/tasks` links redirect to `/tickets`.
 
-For an existing installation, apply the versioned project and phase migration once:
+**Ad hoc** is the built-in project for unplanned work and is available to everyone. Within any project, the **Ad hoc** phase means the work has no named phase yet. The built-in project cannot be renamed or archived.
+
+For an existing installation, apply the versioned app migrations:
 
 ```sh
-npm run db:migrate:projects
+npm run db:migrate
 ```
 
-The migration runner uses a direct connection, applies changes in one transaction, and records a checksum so a second run is safe. It preserves `.env.local`. `KPI_MIGRATION_ENV` can point at a separate environment file when testing a Neon branch. For a new empty database, use `npx drizzle-kit migrate` to apply the full migration history, including the built-in Ad hoc project and membership backfill.
+This applies `0002_project_members_and_phases` and `0003_phase_description` (it adds the phase description column). Run it before deploying this version: the app reads phase descriptions on every page. `npm run db:migrate:projects` is the same command under its old name. The migration runner uses a direct connection, applies changes in one transaction, and records a checksum per migration so a second run is safe. It preserves `.env.local`. `KPI_MIGRATION_ENV` can point at a separate environment file when testing a Neon branch. For a new empty database, use `npx drizzle-kit migrate` to apply the full migration history, including the built-in Ad hoc project and membership backfill.
 
 ## KPI rules
 
-- Developer efficiency: delivery × 80% + bug resolution × 20%. Both weights are configurable.
-- Delivery uses the estimates of tasks completed in the selected week. The score caps at 100%; the dashboard also shows the actual delivery ratio.
-- Default developer capacity is 33 hours/week. The lead has 10 hours/week for their own tasks. Leave, holidays, and join dates reduce available capacity.
-- Bug clocks count working hours, default Monday–Friday, 10:00–19:00 in Asia/Kolkata. Critical targets are 4 working hours; normal targets are 18. A fix within the target earns 100; within twice the target earns 50; later earns 0.
-- Lead efficiency uses 70% team efficiency and 30% own delivery. The team average excludes developers with no capacity.
-- The current week updates live. The weekly cron locks the previous week’s results. Locked scores retain their original capacity, weights, and membership. A bug already counted in a locked week cannot count again after reopening or reassignment.
+- **Efficiency** = ticket hours × 80% + bug points × 20%. Both weights are configurable in Settings.
+- **Ticket hours** = estimates of tickets the admin approved this week ÷ hours at work. This part caps at 100%; the dashboard also shows the uncapped ratio.
+- **Hours at work** = weekly hours (default 33 for developers, 10 for the admin’s own tickets) minus leave, holidays, and days before a person joined. During the current week, only days up to and including today count, so scores are fair mid-week. Time off lowers hours at work, never the score.
+- **Bug points**: each bug has a fix-by time, counted in working hours (default Monday–Friday, 10:00–19:00, Asia/Kolkata). Critical bugs get 4 working hours; normal bugs get 18. Fixed on time earns 100, within twice the target earns 50, later earns 0. Bug points are the average for bugs scored that week. A week with no scored bugs keeps the full 100. Bugs add no ticket hours.
+- **Admin score** = 70% team efficiency + 30% their own ticket hours. The team average excludes developers with no hours at work.
+- The weekly cron locks the previous week’s results. Locked scores keep their original hours, weights, and membership. A bug already counted in a locked week cannot count again after reopening or reassignment.
 
 ## Database and services
 
@@ -68,7 +71,7 @@ The existing Neon project is `misty-band-92860743`, branch `production`, organis
 `.env.local` is stored in the main project directory, has owner-only file access, and is ignored by Git. No separate worktree was created. Keep this file when switching branches. `.env.example` lists the keys without credentials.
 
 ```sh
-npm run db:migrate:projects
+npm run db:migrate
 npm run neon:deploy
 ```
 
@@ -197,3 +200,21 @@ npm run test:e2e    14 passed (1.1m), production build on port 3100
 The browser suite includes mobile project creation, member selection, phase creation and renaming after reload, project-scoped owner and phase options, Ad hoc defaults, linked bug inheritance, task phase visibility, standup entry with Enter, keyboard focus, themes, and India date labels. Backend checks cover developer read-only access, assigned projects with no tasks, membership rules, inactive member preservation, reserved Ad hoc protections, and invalid phase associations. These checks use temporary local authentication fixtures; the real Microsoft OAuth verification remains recorded above.
 
 An independent production query confirmed zero temporary browser-test users and work items after cleanup. The temporary Neon test branch and its private local connection file were removed. The production build remains running on port 3100.
+
+## Tickets, leave, and scoring update — 16 October 2026
+
+This version renames tasks to tickets in the interface, lets developers add their own tickets and extend due dates with a reason, adds phase descriptions, adds leave ranges to team management, and makes current-week scores use hours at work so far. The interface code moved from one file into `src/components/workspace/`.
+
+```text
+npm run typecheck   exit 0
+npm run lint        exit 0
+npm test            47 passed
+npm run build       compiled successfully
+npx playwright test --grep-invert "local fixture" (dev server on port 3200)
+  14 passed: every demo flow, including a developer adding and extending a ticket,
+  and an admin adding and removing a three-day leave range.
+```
+
+Not yet verified in this version: `npm run verify:backend`, `npm run verify:services`, and the live Playwright tests. They need the Neon database, and migration `0003_phase_description` has not been applied to any database yet. The backend checks were updated for the new rules (developer tickets, due date extensions, leave ranges, phase descriptions).
+
+Use **View as** in the demo banner to see the workspace as any developer.

@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "db:push": "drizzle-kit push",
+    "db:migrate": "tsx scripts/migrate-projects.ts",
     "db:migrate:projects": "tsx scripts/migrate-projects.ts",
     "test:e2e": "playwright test",
     "setup:admin": "tsx src/db/setup-admin.ts",

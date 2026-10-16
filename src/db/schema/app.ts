@@ -25,7 +25,8 @@ export const projectMembers = pgTable("tech_kpi_project_member", {
 export const projectPhases = pgTable("tech_kpi_project_phase", {
   id: uuid("id").defaultRandom().primaryKey(),
   projectId: uuid("project_id").notNull().references(() => projects.id),
-  name: text("name").notNull(), position: integer("position").notNull().default(0),
+  name: text("name").notNull(), description: text("description").notNull().default(""),
+  position: integer("position").notNull().default(0),
 }, (t) => [
   uniqueIndex("tech_kpi_project_phase_project_id_idx").on(t.projectId, t.id),
   uniqueIndex("tech_kpi_project_phase_name_idx").on(t.projectId, sql`lower(${t.name})`),

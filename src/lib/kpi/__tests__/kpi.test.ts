@@ -113,6 +113,26 @@ describe('weekly delivery and capacity', () => {
     expect(calculateMemberKpi(developer, fixture, week, now)).toMatchObject({ creditedHours: 5, pendingHours: 20, openTasks: 2 });
   });
 
+  it('counts hours at work only up to today during the current week', () => {
+    const wednesday = instant('2026-10-14T11:00:00');
+    const score = calculateMemberKpi(developer, data([task(12, '2026-10-13T18:00:00')]), week, wednesday);
+    // Monday to Wednesday is 3 of 5 days: 19.8 of 33 hours.
+    expect(score).toMatchObject({ capacityHours: 19.8, weekCapacityHours: 33, creditedHours: 12, deliveryScore: 60.61 });
+  });
+
+  it('subtracts leave already taken from hours at work so far', () => {
+    const fixture = data();
+    fixture.leaves.push({ id: 'leave', userId: developer.id, date: '2026-10-13', type: 'full_day', note: '' });
+    fixture.leaves.push({ id: 'later', userId: developer.id, date: '2026-10-16', type: 'full_day', note: '' });
+    const score = calculateMemberKpi(developer, fixture, week, instant('2026-10-14T11:00:00'));
+    expect(score).toMatchObject({ capacityHours: 13.2, weekCapacityHours: 19.8 });
+  });
+
+  it('has no hours at work yet for a future week', () => {
+    const score = calculateMemberKpi(developer, data(), '2026-10-19', instant('2026-10-14T11:00:00'));
+    expect(score).toMatchObject({ capacityHours: 0, weekCapacityHours: 33, efficiency: null, band: 'on_leave' });
+  });
+
   it('handles duplicate leave rows without negative capacity', () => {
     const fixture = data();
     fixture.leaves = [1, 2].map((id) => ({ id: `${id}`, userId: developer.id, date: '2026-10-13', type: 'full_day', note: '' }));

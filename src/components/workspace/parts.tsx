@@ -1,0 +1,132 @@
+"use client";
+
+import type { ReactNode } from 'react';
+import clsx from 'clsx';
+import { AlertTriangle, ArrowRight, CalendarClock, CalendarDays, Check, CheckCheck, Clock3, Eye } from 'lucide-react';
+import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'recharts';
+import type { DashboardData, WorkItem } from '@/lib/types';
+import { getBugKpi, type MemberKpi, type getTeamTrend } from '@/lib/kpi';
+import { Avatar, PriorityBadge } from '@/components/ui';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
+import { bands, displayDate, displayDateTime, extensions, findMember, findProject, hours, isDone, percent, phaseName, today, type OnAction } from './lib';
+
+export function ProjectTag({ data, id }: { data: DashboardData; id: string }) {
+  const project = findProject(data, id);
+  return <Badge variant="outline" className="project-tag"><i style={{ background: project?.color ?? '#87958a' }} />{project?.name ?? 'Unknown project'}</Badge>;
+}
+export function PhaseTag({ data, id }: { data: DashboardData; id: string | null }) {
+  const description = id ? data.phases.find(phase => phase.id === id)?.description : '';
+  return <Badge variant="secondary" className="phase-tag" title={description || undefined}>{phaseName(data, id)}</Badge>;
+}
+export function ScoreBadge({ score, band }: { score: number | null; band: keyof typeof bands }) {
+  const variant = band === 'on_target' ? 'success' : band === 'below_target' ? 'warning' : band === 'needs_attention' ? 'destructive' : 'secondary';
+  return <Badge variant={variant} className="score-badge">{score === null ? 'No hours at work' : percent(score)}{score !== null && <span>{bands[band]}</span>}</Badge>;
+}
+export function SeverityBadge({ item }: { item: WorkItem }) {
+  const critical = item.severity === 'critical';
+  return <Badge variant={critical ? 'destructive' : 'outline'} className={clsx('severity-badge', critical && 'severity-critical')}>{critical ? 'Critical' : 'Normal'}</Badge>;
+}
+export function MetricCard({ label, value, detail, icon, primary, children }: { label: string; value: ReactNode; detail: ReactNode; icon: ReactNode; primary?: boolean; children?: ReactNode }) {
+  return <Card className={clsx('metric-card', primary && 'metric-primary')}>
+    <CardHeader><CardDescription className="metric-label">{label}<span className="metric-icon">{icon}</span></CardDescription><CardTitle className="metric-number">{value}</CardTitle></CardHeader>
+    <CardContent><div className="metric-detail">{detail}</div>{children}</CardContent>
+  </Card>;
+}
+
+/** The one button that moves an item to its next state. Approvals and verification belong to the admin. */
+export function ItemActions({ item, admin, onAction, busy, compact = false }: { item: WorkItem; admin: boolean; onAction: OnAction; busy: boolean; compact?: boolean }) {
+  let status: WorkItem['status'] | null = null;
+  let label = '';
+  let Icon = ArrowRight;
+  if (item.type === 'task') {
+    if (item.status === 'todo') { status = 'in_progress'; label = 'Start'; }
+    else if (item.status === 'in_progress') { status = 'in_review'; label = compact ? 'Submit' : 'Submit for review'; Icon = Eye; }
+    else if (item.status === 'blocked') { status = 'in_progress'; label = 'Resume'; }
+    else if (item.status === 'in_review' && admin) { status = 'done'; label = 'Approve'; Icon = Check; }
+  } else {
+    if (item.status === 'open' || item.status === 'in_progress') { status = 'fixed'; label = 'Mark fixed'; Icon = Check; }
+    else if (item.status === 'fixed' && admin) { status = 'verified'; label = 'Verify'; Icon = CheckCheck; }
+  }
+  if (!status) {
+    const waiting = item.status === 'in_review' ? 'Waiting for review' : item.status === 'fixed' ? 'Waiting for verification' : 'Completed';
+    return <span className="cell-muted">{waiting}</span>;
+  }
+  const next = status;
+  return <Button variant={next === 'done' || next === 'verified' ? 'secondary' : 'outline'} size="sm" type="button" disabled={busy} onClick={() => onAction(item, next)}>{label}<Icon data-icon="inline-end" size={13} /></Button>;
+}
+
+export function ExtensionBadge({ data, item }: { data: DashboardData; item: WorkItem }) {
+  const count = extensions(data, item.id).length;
+  if (!count) return null;
+  return <Badge variant="warning" className="extension-badge" title="The due date was moved. Each change has a reason in the timeline."><CalendarClock />Extended{count > 1 ? ` ×${count}` : ''}</Badge>;
+}
+export function DueDate({ item, data }: { item: WorkItem; data: DashboardData }) {
+  const overdue = !!item.dueDate && item.dueDate < today(data.settings.timezone) && !isDone(item);
+  return <span className="due-cell"><span className={clsx('due-date', overdue && 'due-overdue')}><CalendarDays size={12} />{item.dueDate ? displayDate(item.dueDate) : 'No due date'}</span>{overdue && <span className="sr-only">Overdue</span>}<ExtensionBadge data={data} item={item} /></span>;
+}
+
+/** A bug earns full points when fixed by its fix-by time, half within twice the target, none after that. */
+export function FixBy({ item, data }: { item: WorkItem; data: DashboardData }) {
+  const kpi = getBugKpi(item, data);
+  const closed = item.status === 'fixed' || item.status === 'verified';
+  if (closed) {
+    const label = kpi.score === 100 ? 'On time' : kpi.score === 50 ? 'Late' : 'Very late';
+    return <span className="fix-by"><Badge variant={kpi.score === 100 ? 'success' : kpi.score === 50 ? 'warning' : 'destructive'}>{label} · {kpi.score ?? 0} pts</Badge><small>{hours(kpi.resolutionWorkingHours)} working h to fix</small></span>;
+  }
+  const late = kpi.overdueHours > 0;
+  return <span className={clsx('fix-by', late && 'fix-by-late')}><span className="bug-clock"><Clock3 size={12} />Fix by {displayDateTime(kpi.deadline1)}</span><small>{late ? `${hours(kpi.overdueHours)} working h late` : `${hours(kpi.hoursRemaining)} working h left`}</small></span>;
+}
+
+export function TicketCard({ item, data, onOpen, onAction, busy }: { item: WorkItem; data: DashboardData; onOpen: (id: string) => void; onAction: OnAction; busy: boolean }) {
+  return <Card className="task-card" size="sm">
+    <CardHeader>
+      <div className="task-card-top"><span className="item-key">{item.key}</span><PriorityBadge priority={item.priority} /></div>
+      <CardTitle><Button variant="ghost" className="task-card-title h-auto w-full justify-start whitespace-normal p-0 text-left" onClick={() => onOpen(item.id)}>{item.title}</Button></CardTitle>
+      <CardDescription className="project-phase-cell"><ProjectTag data={data} id={item.projectId} /><PhaseTag data={data} id={item.phaseId} /></CardDescription>
+    </CardHeader>
+    <CardContent>
+      <div className="task-card-meta">{item.type === 'task'
+        ? <><span className="estimate-cell"><Clock3 size={12} />{item.estimateHours} h</span><DueDate item={item} data={data} /></>
+        : <><SeverityBadge item={item} /><FixBy item={item} data={data} /></>}</div>
+      {item.status === 'blocked' && item.blocker && <Alert className="blocker-note"><AlertTriangle size={12} /><AlertDescription>{item.blocker}</AlertDescription></Alert>}
+    </CardContent>
+    <CardFooter className="task-card-bottom"><Avatar member={findMember(data, item.assigneeId)} size="small" /><ItemActions item={item} admin={data.currentUser.role === 'admin'} onAction={onAction} busy={busy} compact /></CardFooter>
+  </Card>;
+}
+
+export function TrendChart({ trend, target }: { trend: ReturnType<typeof getTeamTrend>; target: number }) {
+  return <>
+    <ChartContainer className="trend-chart h-60 w-full aspect-auto" config={{ efficiency: { label: 'Efficiency', color: 'var(--primary)' } }}>
+      <AreaChart accessibilityLayer data={trend} margin={{ top: 12, right: 12, bottom: 0, left: 0 }}>
+        <CartesianGrid vertical={false} strokeDasharray="3 3" />
+        <XAxis dataKey="weekStart" tickFormatter={value => displayDate(String(value))} tickLine={false} axisLine={false} tickMargin={12} minTickGap={18} />
+        <YAxis domain={[0, 100]} tickFormatter={value => `${value}%`} ticks={[0, 50, 100]} tickLine={false} axisLine={false} width={42} />
+        <ChartTooltip content={<ChartTooltipContent labelFormatter={value => `Week of ${displayDate(String(value))}`} formatter={value => <span>{value === null ? 'No data' : `${Math.round(Number(value))}% efficiency`}</span>} />} />
+        <ReferenceLine y={target} stroke="var(--muted-foreground)" strokeDasharray="4 4" />
+        <Area dataKey="efficiency" type="monotone" connectNulls={false} stroke="var(--color-efficiency)" strokeWidth={2.5} fill="var(--color-efficiency)" fillOpacity={0.12} dot={{ r: 3, fill: 'var(--color-efficiency)' }} activeDot={{ r: 5 }} isAnimationActive={false} />
+      </AreaChart>
+    </ChartContainer>
+    <p className="sr-only">Weekly efficiency: {trend.map(point => `${displayDate(point.weekStart)} ${point.efficiency === null ? 'No data' : percent(point.efficiency)}`).join(', ')}. Target: {target}%.</p>
+  </>;
+}
+
+/** Shows the score formula with this person's own numbers, so nobody has to guess how it works. */
+export function ScoreExplainer({ kpi, data, current }: { kpi: MemberKpi; data: DashboardData; current: boolean }) {
+  const { deliveryWeight, bugWeight, normalTargetHours, criticalTargetHours } = data.settings;
+  return <div className="score-explainer-body">
+    <div className="formula-display">
+      <div><strong>{percent(kpi.deliveryScore)}</strong><span>Ticket hours × {deliveryWeight}%</span></div><span>+</span>
+      <div><strong>{percent(kpi.bugScore)}</strong><span>Bug points × {bugWeight}%</span></div><span>=</span>
+      <div className="formula-total"><strong>{percent(kpi.efficiency)}</strong><span>Efficiency</span></div>
+    </div>
+    <ul className="score-rules">
+      <li><strong>Ticket hours.</strong> {hours(kpi.creditedHours)} h of approved tickets ÷ {hours(kpi.capacityHours)} h at work{current ? ' so far this week' : ''}. A ticket earns its estimate when the admin approves it. This part caps at 100%.</li>
+      <li><strong>Bug points.</strong> Fixed by the fix-by time: 100. Up to twice the target: 50. Later: 0. Targets are {normalTargetHours} working hours, or {criticalTargetHours} for critical bugs. {kpi.bugsScored ? `${kpi.bugsScored} bug${kpi.bugsScored === 1 ? '' : 's'} scored this week.` : 'No bugs scored this week, so you keep full bug points.'}</li>
+      <li><strong>Hours at work.</strong> Weekly hours minus leave and holidays. Time off lowers the hours, never the score.</li>
+    </ul>
+  </div>;
+}
