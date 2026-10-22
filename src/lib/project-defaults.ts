@@ -10,6 +10,7 @@ export const ADHOC_PROJECT: Project = {
   description: "Work outside a planned project.",
   isArchived: false,
   memberIds: [],
+  primaryMemberId: null,
   isAdhoc: true,
   startDate: null,
   targetDate: null,

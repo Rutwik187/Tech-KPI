@@ -84,7 +84,10 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
   }));
   return {
     currentUser: members.find((member) => member.id === currentUser.id) ?? currentUser, members,
-    projects: visibleProjects.map((project) => ({ ...project, memberIds: membershipRows.filter((row) => row.projectId === project.id).map((row) => row.userId) })),
+    projects: visibleProjects.map((project) => {
+      const rows = membershipRows.filter((row) => row.projectId === project.id);
+      return { ...project, memberIds: rows.map((row) => row.userId), primaryMemberId: rows.find((row) => row.isPrimary)?.userId ?? null };
+    }),
     phases: phaseRows.filter((phase) => visibleProjectIds.has(phase.projectId)),
     items: itemRows.map(serializeItem), activities: activityRows.map((activity) => ({ ...activity, createdAt: activity.createdAt.toISOString() })),
     leaves: leaveRows, holidays: holidayRows, settings: appSettings, mode: "live", snapshots: snapshotRows,

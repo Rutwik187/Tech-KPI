@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { projectTimeline } from '@/lib/timeline';
 import { ExtendedBadge, HealthBadge, plural, TimelineStrip } from './timeline';
-import { findMember, hours, isAdhocProject, isDone, projectPhases, routeFor, today, type MutationFn } from './lib';
+import { firstName, hours, isAdhocProject, isDone, projectPhases, projectTeam, routeFor, today, type MutationFn } from './lib';
 
 type ProjectActions = { onEdit: (project: Project) => void; onOpen: (id: string) => void; onExtend: (project: Project) => void; mutate: MutationFn };
 
@@ -39,7 +39,8 @@ function ProjectCard({ data, project, isAdmin, onEdit, onOpen, onExtend, mutate 
   const openBugs = items.filter(item => item.type === 'bug' && !isDone(item)).length;
   const totalHours = tickets.reduce((sum, item) => sum + item.estimateHours, 0);
   const doneHours = completed.reduce((sum, item) => sum + item.estimateHours, 0);
-  const members = adhoc ? data.members.filter(m => m.isActive) : project.memberIds.flatMap(id => { const found = findMember(data, id); return found ? [found] : []; });
+  const members = adhoc ? data.members.filter(m => m.isActive) : projectTeam(data, project);
+  const primary = adhoc ? undefined : members.find(m => m.id === project.primaryMemberId);
   // The Ad hoc phase is listed only when it holds work, so empty rows do not repeat on every card.
   const phases = [{ id: null, name: 'Ad hoc', description: 'Work without a named phase.' }, ...projectPhases(data, project.id)]
     .filter(phase => phase.id !== null || tickets.some(item => item.phaseId === null));
@@ -77,7 +78,7 @@ function ProjectCard({ data, project, isAdmin, onEdit, onOpen, onExtend, mutate 
       })}</div>}
     </CardContent>
     <CardFooter className="project-card-footer">
-      <div className="project-members-summary"><div className="avatar-stack">{members.slice(0, 4).map(m => <Avatar key={m.id} member={m} size="small" />)}</div><span>{adhoc ? 'Everyone' : `${project.memberIds.length} member${project.memberIds.length === 1 ? '' : 's'}`}</span></div>
+      <div className="project-members-summary"><div className="avatar-stack">{members.slice(0, 4).map(m => <Avatar key={m.id} member={m} size="small" />)}</div><span>{adhoc ? 'Everyone' : primary ? <>Led by <strong>{firstName(primary)}</strong>{members.length > 1 && ` +${members.length - 1}`}</> : plural(members.length, 'member')}</span></div>
       <div className="project-card-links"><Button variant="link" size="sm" asChild><Link href={routeFor(data, `tickets?project=${project.id}`)}>Tickets<ArrowRight data-icon="inline-end" /></Link></Button>
         {isAdmin && !adhoc && <Button variant="link" size="sm" className="text-muted-foreground" onClick={() => void mutate({ action: 'updateProject', id: project.id, patch: { isArchived: !project.isArchived } }, project.isArchived ? 'Project restored' : 'Project archived')}>{project.isArchived ? 'Restore' : 'Archive'}</Button>}</div>
     </CardFooter>

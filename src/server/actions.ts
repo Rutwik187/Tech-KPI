@@ -16,6 +16,10 @@ type ItemRow = typeof workItems.$inferSelect;
 function audit(tx: Tx, actor: Member, entityId: string, action: string, payload: Record<string, unknown>, reason?: string) {
   return tx.insert(activities).values({ actorId: actor.id, entityId, action, payload, reason: reason || null });
 }
+async function assertEmailFree(tx: Tx, email: string) {
+  const [taken] = await tx.select({ id: user.id }).from(user).where(eq(user.email, email));
+  if (taken) throw new AppError("A team member with this email already exists.", 409);
+}
 function requireReason(reason?: string) {
   if (!reason || reason.trim().length < 3) throw new AppError("Add a short reason for this change.");
 }
@@ -74,7 +78,11 @@ async function assertProjectMembers(tx: Tx, ids: string[]) {
     .leftJoin(memberProfiles, eq(memberProfiles.userId, user.id)).where(inArray(user.id, ids));
   if (members.length !== ids.length || members.some((member) => member.banned || member.isActive === false)) throw new AppError("Choose active team members for this project.");
 }
-async function replaceProjectMembers(tx: Tx, projectId: string, ids: string[]) {
+function assertPrimaryMember(ids: string[], primaryId: string | null) {
+  if (primaryId && !ids.includes(primaryId)) throw new AppError("The primary developer must be a member of this project.");
+}
+async function replaceProjectMembers(tx: Tx, projectId: string, ids: string[], primaryId: string | null) {
+  assertPrimaryMember(ids, primaryId);
   const existingMembers = await tx.select({ userId: projectMembers.userId }).from(projectMembers)
     .where(eq(projectMembers.projectId, projectId));
   const existingIds = new Set(existingMembers.map((member) => member.userId));
@@ -86,7 +94,7 @@ async function replaceProjectMembers(tx: Tx, projectId: string, ids: string[]) {
   )).limit(1);
   if (removedOwners.length) throw new AppError("Finish or reassign a member's unfinished work before removing them from this project.");
   await tx.delete(projectMembers).where(eq(projectMembers.projectId, projectId));
-  if (ids.length) await tx.insert(projectMembers).values(ids.map((userId) => ({ projectId, userId })));
+  if (ids.length) await tx.insert(projectMembers).values(ids.map((userId) => ({ projectId, userId, isPrimary: userId === primaryId })));
 }
 function statusChange(item: ItemRow, next: string, actor: Member, reason?: string): Partial<typeof workItems.$inferInsert> {
   if (next === item.status) return {};
@@ -252,11 +260,13 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
       case "createMember": {
         const [saved] = await tx.select().from(settings).where(eq(settings.id, 1));
         const defaults = saved?.value ?? DEFAULT_SETTINGS;
-        const id = randomUUID(); const memberRole = action.role ?? "developer";
-        await tx.insert(user).values({ id, name: action.name, email: action.email.toLowerCase(), emailVerified: false, role: memberRole === "admin" ? "admin" : "user" });
-        await linkMicrosoftAccount(tx, id, action.microsoftObjectId);
+        const id = randomUUID(); const memberRole = action.role ?? "developer"; const email = action.email.toLowerCase();
+        await assertEmailFree(tx, email);
+        await tx.insert(user).values({ id, name: action.name, email, emailVerified: false, role: memberRole === "admin" ? "admin" : "user" });
+        // Without an Object ID, the member links their Microsoft account on first sign-in with this work email.
+        if (action.microsoftObjectId) await linkMicrosoftAccount(tx, id, action.microsoftObjectId);
         await tx.insert(memberProfiles).values({ userId: id, capacity: action.capacity ?? (memberRole === "admin" ? defaults.defaultLeadCapacityHours : defaults.defaultDevCapacityHours) });
-        await audit(tx, actor, id, "member.created", { name: action.name, role: memberRole, microsoftObjectId: action.microsoftObjectId.toLowerCase() });
+        await audit(tx, actor, id, "member.created", { name: action.name, role: memberRole, microsoftObjectId: action.microsoftObjectId?.toLowerCase() ?? null });
         break;
       }
       case "updateMember": {
@@ -266,7 +276,14 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         if (action.id === actor.id && (action.patch.isActive === false || action.patch.role === "developer")) throw new AppError("You cannot disable or remove your own admin access.");
         const patch = action.patch;
         const databaseRole = patch.role ? patch.role === "admin" ? "admin" : "user" : undefined;
-        await tx.update(user).set({ ...(patch.name ? { name: patch.name } : {}), ...(databaseRole ? { role: databaseRole } : {}), ...(patch.isActive !== undefined ? { banned: !patch.isActive } : {}), updatedAt: new Date() }).where(eq(user.id, action.id));
+        const email = patch.email?.toLowerCase();
+        if (email && email !== member.email) {
+          // The email is how a member is first matched at sign-in. After that, the Microsoft account is the identity.
+          const [microsoft] = await tx.select({ id: account.id }).from(account).where(and(eq(account.userId, action.id), eq(account.providerId, "microsoft")));
+          if (microsoft) throw new AppError("This member has signed in already. Their email can change only before their first sign-in.");
+          await assertEmailFree(tx, email);
+        }
+        await tx.update(user).set({ ...(patch.name ? { name: patch.name } : {}), ...(email ? { email } : {}), ...(databaseRole ? { role: databaseRole } : {}), ...(patch.isActive !== undefined ? { banned: !patch.isActive } : {}), updatedAt: new Date() }).where(eq(user.id, action.id));
         const [existingProfile] = await tx.select().from(memberProfiles).where(eq(memberProfiles.userId, action.id));
         if (!existingProfile || patch.capacity !== undefined || patch.isActive !== undefined) {
           const capacity = patch.capacity ?? existingProfile?.capacity ?? (member.role === "admin" ? 10 : 33);
@@ -283,18 +300,20 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
       case "createProject": {
         assertProjectName(action.name);
         await assertProjectMembers(tx, action.memberIds);
+        const primaryMemberId = action.primaryMemberId ?? null;
+        assertPrimaryMember(action.memberIds, primaryMemberId);
         const targetDate = action.targetDate ?? null;
         const [project] = await tx.insert(projects).values({ name: action.name, description: action.description ?? "", color: action.color ?? "#2563eb", startDate: action.startDate ?? null, targetDate, originalTargetDate: targetDate }).returning();
-        if (action.memberIds.length) await tx.insert(projectMembers).values(action.memberIds.map((userId) => ({ projectId: project.id, userId })));
+        if (action.memberIds.length) await tx.insert(projectMembers).values(action.memberIds.map((userId) => ({ projectId: project.id, userId, isPrimary: userId === primaryMemberId })));
         if (action.phases.length) await tx.insert(projectPhases).values(action.phases.map((phase, position) => ({ projectId: project.id, name: phase.name, description: phase.description ?? "", position })));
-        await audit(tx, actor, project.id, "project.created", { name: project.name, memberIds: action.memberIds, phaseNames: action.phases.map((phase) => phase.name), startDate: project.startDate, targetDate }); break;
+        await audit(tx, actor, project.id, "project.created", { name: project.name, memberIds: action.memberIds, primaryMemberId, phaseNames: action.phases.map((phase) => phase.name), startDate: project.startDate, targetDate }); break;
       }
       case "updateProject": {
         const [project] = await tx.select().from(projects).where(eq(projects.id, action.id)).for("update");
         if (!project) throw new AppError("This project was not found.", 404);
         protectAdhoc(project);
         if (action.patch.name) assertProjectName(action.patch.name);
-        const { memberIds, targetDate, ...details } = action.patch;
+        const { memberIds, primaryMemberId, targetDate, ...details } = action.patch;
         const targetChanged = targetDate !== undefined && targetDate !== project.targetDate;
         const startChanged = details.startDate !== undefined && details.startDate !== project.startDate;
         if ((targetChanged || startChanged) && project.isArchived && details.isArchived !== false) throw new AppError("Restore this project before changing its timeline.");
@@ -303,10 +322,24 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         const nextStart = details.startDate === undefined ? project.startDate : details.startDate;
         const nextTarget = targetDate ?? project.targetDate;
         if (nextStart && nextTarget && nextTarget < nextStart) throw new AppError("The target date must be on or after the start date.");
-        if (memberIds !== undefined) await replaceProjectMembers(tx, project.id, memberIds);
+        let primaryChanged = false;
+        if (memberIds !== undefined || primaryMemberId !== undefined) {
+          const current = await tx.select().from(projectMembers).where(eq(projectMembers.projectId, project.id));
+          const currentPrimary = current.find((row) => row.isPrimary)?.userId ?? null;
+          const nextIds = memberIds ?? current.map((row) => row.userId);
+          // Keep the current primary unless it is changed or that person leaves the project.
+          const nextPrimary = primaryMemberId !== undefined ? primaryMemberId : currentPrimary && nextIds.includes(currentPrimary) ? currentPrimary : null;
+          primaryChanged = nextPrimary !== currentPrimary;
+          if (memberIds !== undefined) await replaceProjectMembers(tx, project.id, nextIds, nextPrimary);
+          else if (primaryChanged) {
+            assertPrimaryMember(nextIds, nextPrimary);
+            await tx.update(projectMembers).set({ isPrimary: false }).where(eq(projectMembers.projectId, project.id));
+            if (nextPrimary) await tx.update(projectMembers).set({ isPrimary: true }).where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, nextPrimary)));
+          }
+        }
         const timeline = targetChanged ? { targetDate, ...(project.originalTargetDate ? {} : { originalTargetDate: targetDate }) } : {};
         if (Object.keys(details).length || targetChanged) await tx.update(projects).set({ ...details, ...timeline }).where(eq(projects.id, project.id));
-        const otherChanges = { ...details, ...(memberIds !== undefined ? { memberIds } : {}) };
+        const otherChanges = { ...details, ...(memberIds !== undefined ? { memberIds } : {}), ...(primaryChanged ? { primaryMemberId: primaryMemberId ?? null } : {}) };
         if (Object.keys(otherChanges).length) await audit(tx, actor, action.id, "project.updated", { changes: otherChanges });
         if (targetChanged) await audit(tx, actor, action.id, "project.target_changed", { from: project.targetDate, to: targetDate, ...(project.targetDate ? { reasonCategory: action.reasonCategory ?? "other" } : {}) }, project.targetDate ? action.reason : undefined);
         break;

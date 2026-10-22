@@ -1,8 +1,9 @@
 "use client";
 
 import { useId, useState, type FormEvent, type KeyboardEvent } from 'react';
+import clsx from 'clsx';
 import { toast } from 'sonner';
-import { Activity as ActivityIcon, Bug, CalendarClock, CalendarPlus, Check, ChevronDown, CircleHelp, Clock3, FileText, ListTodo, LoaderCircle, Plus, ShieldCheck, X } from 'lucide-react';
+import { Activity as ActivityIcon, Bug, CalendarClock, CalendarPlus, Check, ChevronDown, CircleHelp, Clock3, FileText, ListTodo, LoaderCircle, Plus, ShieldCheck, Star, X } from 'lucide-react';
 import type { DashboardData, Leave, Member, Phase, Project, WorkItem } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
 import { addWorkingHours, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
@@ -15,7 +16,7 @@ import { FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { displayDate, displayDateTime, findProject, hours, isAdhocProject, isDone, leaveDays, projectMembers, projectPhases, selectableProjects, today, type MutationFn, type PhaseDraft, type QuickAction, type WorkClassification } from './lib';
+import { displayDate, displayDateTime, findProject, hours, isAdhocProject, isDone, leaveDays, ownerChoices, ownerHomeProject, projectMembers, projectPhases, selectableProjects, today, withOwner, withProject, type MutationFn, type PickedByHand, type PhaseDraft, type QuickAction, type WorkClassification } from './lib';
 
 export function FormChoice({ name, value, defaultValue, onValueChange, options, disabled, id, 'aria-labelledby': labelledBy, 'aria-describedby': describedBy }: { name?: string; value?: string; defaultValue?: string; onValueChange?: (value: string) => void; options: { value: string; label: string }[]; disabled?: boolean; id?: string; 'aria-labelledby'?: string; 'aria-describedby'?: string }) {
   const [localValue, setLocalValue] = useState(defaultValue ?? options[0]?.value ?? '');
@@ -36,16 +37,26 @@ export function FormFooter({ busy, disabled = false, onClose, label }: { busy: b
 }
 
 /** Project, phase, and owner. A developer always owns the tickets they add, so the owner is fixed for them. */
-export function ClassificationFields({ data, value, onChange, lockProjectPhase = false, retained }: { data: DashboardData; value: WorkClassification; onChange: (value: WorkClassification) => void; lockProjectPhase?: boolean; retained?: WorkItem }) {
+export function ClassificationFields({ data, value, onChange, lockProjectPhase = false, retained, ownerPicked = false }: { data: DashboardData; value: WorkClassification; onChange: (value: WorkClassification) => void; lockProjectPhase?: boolean; retained?: WorkItem; ownerPicked?: boolean }) {
   const admin = data.currentUser.role === 'admin';
+  // An existing ticket already has both values, so they count as picked by hand.
+  const [picked, setPicked] = useState<PickedByHand>({ project: !!retained, owner: !!retained || ownerPicked });
+  const projectPicked = picked.project || lockProjectPhase;
   const currentProject = findProject(data, value.projectId);
   const retainedOwner = retained?.projectId === value.projectId ? retained.assigneeId : undefined;
-  const owners = projectMembers(data, value.projectId, retainedOwner);
+  const owners = ownerChoices(data, value.projectId, projectPicked, retainedOwner);
   const phases = projectPhases(data, value.projectId);
   const phase = phases.find(p => p.id === value.phaseId);
+  const ownerIsPrimary = !!value.assigneeId && currentProject?.primaryMemberId === value.assigneeId;
   function chooseProject(projectId: string) {
-    const eligible = projectMembers(data, projectId);
-    onChange({ projectId, phaseId: null, assigneeId: admin ? eligible.some(m => m.id === value.assigneeId) ? value.assigneeId : eligible[0]?.id ?? '' : data.currentUser.id });
+    const next = { ...picked, project: true };
+    setPicked(next);
+    onChange(admin ? withProject(data, value, projectId, next) : { projectId, phaseId: null, assigneeId: data.currentUser.id });
+  }
+  function chooseOwner(assigneeId: string) {
+    const next = { ...picked, owner: true };
+    setPicked(next);
+    onChange(withOwner(data, value, assigneeId, { ...next, project: projectPicked }));
   }
   return <FieldGroup className="form-grid classification-fields">
     <FormField>Project<FormSelect required value={value.projectId} disabled={lockProjectPhase} onValueChange={chooseProject}>{selectableProjects(data, retained?.projectId).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect>
@@ -53,8 +64,8 @@ export function ClassificationFields({ data, value, onChange, lockProjectPhase =
     <FormField>Phase<FormSelect value={value.phaseId ?? ''} disabled={lockProjectPhase || isAdhocProject(currentProject)} onValueChange={phaseId => onChange({ ...value, phaseId: phaseId || null })}><option value="">Ad hoc</option>{phases.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect>
       <span className="field-help">{phase?.description || (isAdhocProject(currentProject) ? 'Ad hoc work has no phases.' : 'Use Ad hoc for work outside a named phase.')}</span></FormField>
     {admin
-      ? <FormField className="classification-owner">Owner<FormSelect required value={value.assigneeId} onValueChange={assigneeId => onChange({ ...value, assigneeId })}><option value="" disabled>Choose an owner</option>{owners.map(m => <option key={m.id} value={m.id}>{m.name}{!m.isActive ? ' · Inactive' : ''}</option>)}</FormSelect>
-          <span className="field-help">{isAdhocProject(currentProject) ? 'Anyone active can own Ad hoc work.' : owners.length ? 'Only this project’s members can own its work.' : 'This project has no members yet. Add members, or choose Ad hoc.'}</span></FormField>
+      ? <FormField className="classification-owner">Owner<FormSelect required value={value.assigneeId} onValueChange={chooseOwner}><option value="" disabled>Choose an owner</option>{owners.map(m => <option key={m.id} value={m.id}>{m.name}{!m.isActive ? ' · Inactive' : ''}</option>)}</FormSelect>
+          <span className="field-help">{ownerIsPrimary ? `Primary developer on ${currentProject!.name}.` : !projectPicked ? 'Pick anyone. Their main project is filled in until you choose one.' : isAdhocProject(currentProject) ? 'Anyone active can own Ad hoc work.' : owners.length ? 'Only this project’s members can own its work.' : 'This project has no members yet. Add members, or choose Ad hoc.'}</span></FormField>
       : <div className="classification-owner fixed-owner"><span className="fixed-owner-label">Owner</span><span className="fixed-owner-value"><Avatar member={data.currentUser} size="small" />You</span></div>}
   </FieldGroup>;
 }
@@ -63,7 +74,9 @@ export function ItemForm({ data, kind: initialKind, assigneeId, mutate, onClose,
   const admin = data.currentUser.role === 'admin';
   const [kind, setKind] = useState<'task' | 'bug'>(admin ? initialKind : 'task');
   const defaultOwner = admin ? assigneeId ?? data.members.find(m => m.role === 'developer' && m.isActive)?.id ?? data.currentUser.id : data.currentUser.id;
-  const [classification, setClassification] = useState<WorkClassification>({ projectId: ADHOC_PROJECT_ID, phaseId: null, assigneeId: defaultOwner });
+  // A known owner (a developer adding their own ticket, or "Add ticket" on someone's card) starts in their main project.
+  const ownerKnown = !admin || !!assigneeId;
+  const [classification, setClassification] = useState<WorkClassification>({ projectId: ownerKnown ? ownerHomeProject(data, defaultOwner) : ADHOC_PROJECT_ID, phaseId: null, assigneeId: defaultOwner });
   const [taskId, setTaskId] = useState('');
   const [severity, setSeverity] = useState<WorkItem['severity']>('normal');
   const target = severity === 'critical' ? data.settings.criticalTargetHours : data.settings.normalTargetHours;
@@ -95,7 +108,7 @@ export function ItemForm({ data, kind: initialKind, assigneeId, mutate, onClose,
       <FieldGroup className="modal-form-body">
         <FormField className="title-label">{kind === 'task' ? 'Title' : 'What went wrong?'}<Input className="task-title-input" name="title" placeholder={kind === 'task' ? 'e.g. Add inventory search to the dashboard' : 'e.g. Checkout shows the wrong total'} required minLength={3} maxLength={200} autoComplete="off" /></FormField>
         {kind === 'bug' && <FormField>Linked ticket <span className="optional">optional</span><FormSelect value={taskId} onValueChange={linkTask}><option value="">No linked ticket</option>{tickets.map(item => <option key={item.id} value={item.id}>{item.key} · {item.title}</option>)}</FormSelect><span className="field-help">A linked bug takes its ticket’s project, phase, and owner.</span></FormField>}
-        <ClassificationFields data={data} value={classification} onChange={setClassification} lockProjectPhase={kind === 'bug' && !!taskId} />
+        <ClassificationFields data={data} value={classification} onChange={setClassification} lockProjectPhase={kind === 'bug' && !!taskId} ownerPicked={ownerKnown} />
         <FieldGroup className="form-grid">
           {kind === 'task'
             ? <><FormField>Estimate <span className="optional">hours</span><Input type="number" name="estimateHours" min={.5} max={80} step={.5} defaultValue={4} required /><span className="field-help">The hours this ticket earns when approved. Include testing and fixes.</span></FormField>
@@ -118,23 +131,27 @@ export function MemberForm({ data, editing, mutate, onClose, onLeave, busy }: { 
   const [role, setRole] = useState<Member['role']>(editing?.role ?? 'developer');
   const [capacity, setCapacity] = useState(editing?.capacity ?? data.settings.defaultDevCapacityHours);
   const own = editing?.id === data.currentUser.id;
+  // A live member without a linked Microsoft account has not signed in yet. Until then, the email can be corrected.
+  const pending = !!editing && data.mode === 'live' && !editing.microsoftObjectId;
   const upcomingLeave = editing ? data.leaves.filter(l => l.userId === editing.id && l.date >= today(data.settings.timezone)) : [];
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const f = new FormData(event.currentTarget);
     const microsoftObjectId = String(f.get('microsoftObjectId') ?? '').trim();
+    const email = String(f.get('email') ?? '').trim().toLowerCase();
     const ok = editing
-      ? await mutate({ action: 'updateMember', id: editing.id, patch: { name: String(f.get('name')), role, capacity, isActive: own ? true : f.get('isActive') === 'on', ...(!editing.microsoftObjectId && microsoftObjectId ? { microsoftObjectId } : {}) } }, 'Team member updated')
-      : await mutate({ action: 'createMember', name: String(f.get('name')).trim(), email: String(f.get('email')).trim(), microsoftObjectId, role, capacity }, 'Team member added. They can now sign in with Microsoft.');
+      ? await mutate({ action: 'updateMember', id: editing.id, patch: { name: String(f.get('name')), role, capacity, isActive: own ? true : f.get('isActive') === 'on', ...(pending && email && email !== editing.email ? { email } : {}), ...(!editing.microsoftObjectId && microsoftObjectId ? { microsoftObjectId } : {}) } }, 'Team member updated')
+      : await mutate({ action: 'createMember', name: String(f.get('name')).trim(), email, ...(microsoftObjectId ? { microsoftObjectId } : {}), role, capacity }, 'Team member added. They can sign in with Microsoft using this work email.');
     if (ok) onClose();
   }
-  return <Modal title={editing ? 'Edit team member' : 'Add a team member'} subtitle={editing ? 'Change their role, weekly hours, leave, or access.' : 'Link their Microsoft work account and set their weekly hours.'} onClose={onClose}>
+  return <Modal title={editing ? 'Edit team member' : 'Add a team member'} subtitle={editing ? 'Change their role, weekly hours, leave, or access.' : 'Add their work email. Only people on the team can sign in.'} onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
         <FormField>Full name<Input name="name" required defaultValue={editing?.name} placeholder="e.g. Aarav Sharma" /></FormField>
-        <FormField>Work email<Input name="email" type="email" required disabled={!!editing} defaultValue={editing?.email} placeholder="name@urbangabru.in" /></FormField>
-        <FormField>Microsoft user ID <span className="optional">Object ID</span><Input className="microsoft-id-input" name="microsoftObjectId" defaultValue={editing?.microsoftObjectId} readOnly={!!editing?.microsoftObjectId} required={!editing} pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" placeholder="00000000-0000-0000-0000-000000000000" title="Use the Object ID from this person’s Microsoft Entra profile." autoComplete="off" spellCheck={false} />
-          <span className="field-help">{editing?.microsoftObjectId ? 'Linked to their Microsoft company account.' : 'Find it in Microsoft Entra ID → Users → the person → Overview.'}</span></FormField>
+        <FormField>Work email<Input name="email" type="email" required disabled={!!editing && !pending} defaultValue={editing?.email} placeholder="firstname.lastname@urbangabru.in" />
+          <span className="field-help">{pending ? 'Not signed in yet. You can correct the email until they do.' : editing ? 'Their Microsoft work account is linked.' : 'They sign in with the Microsoft account for this email.'}</span></FormField>
+        <FormField>Microsoft user ID <span className="optional">{editing?.microsoftObjectId ? 'Object ID' : 'Optional'}</span><Input className="microsoft-id-input" name="microsoftObjectId" defaultValue={editing?.microsoftObjectId} readOnly={!!editing?.microsoftObjectId} pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" placeholder="00000000-0000-0000-0000-000000000000" title="Use the Object ID from this person’s Microsoft Entra profile." autoComplete="off" spellCheck={false} />
+          <span className="field-help">{editing?.microsoftObjectId ? 'Linked to their Microsoft company account.' : 'Only needed if their Microsoft sign-in name differs from their work email. Find it in Microsoft Entra ID → Users → the person → Overview.'}</span></FormField>
         <FieldGroup className="form-grid">
           <FormField>Role<FormChoice value={role} disabled={own} onValueChange={next => { const value = next as Member['role']; setRole(value); if (!editing) setCapacity(value === 'admin' ? data.settings.defaultLeadCapacityHours : data.settings.defaultDevCapacityHours); }} options={[{ value: 'developer', label: 'Developer' }, { value: 'admin', label: 'Admin' }]} /></FormField>
           <FormField>Hours per week<Input type="number" min={.5} max={168} step={.5} required value={capacity} onChange={event => setCapacity(Number(event.target.value))} /><span className="field-help">Leave and holidays lower this for that week.</span></FormField>
@@ -173,6 +190,14 @@ export function ProjectForm({ data, editing, mutate, onClose, onExtend, busy }: 
   // Once a target exists, moving it is an extension. That needs a reason, so it has its own dialog.
   const targetLocked = !!editing?.targetDate;
   const [memberIds, setMemberIds] = useState<string[]>(editing?.memberIds ?? []);
+  const [primaryId, setPrimaryId] = useState<string | null>(editing?.primaryMemberId ?? null);
+  // The first person picked leads the project. If the lead leaves the list, the next member takes over.
+  function toggleMember(id: string, checked: boolean) {
+    const next = checked ? [...memberIds, id] : memberIds.filter(existing => existing !== id);
+    setMemberIds(next);
+    if (checked && !primaryId) setPrimaryId(id);
+    if (!checked && primaryId === id) setPrimaryId(next[0] ?? null);
+  }
   const [drafts, setDrafts] = useState<PhaseDraft[]>([]);
   const [draft, setDraft] = useState<PhaseDraft>({ name: '', description: '' });
   const membersLabelId = useId();
@@ -195,7 +220,7 @@ export function ProjectForm({ data, editing, mutate, onClose, onExtend, busy }: 
     if (pending && editing) { toast.error('Select Add phase to save the new phase, or clear its name.'); return; }
     if (pending && nameTaken(pending)) { toast.error('This phase already exists. Choose another name or clear it.'); return; }
     if (startDate && targetDate && targetDate < startDate) { toast.error('The target date must be on or after the start date.'); return; }
-    const details = { name: String(fields.get('name')).trim(), description: String(fields.get('description')), color, memberIds, startDate: startDate || null };
+    const details = { name: String(fields.get('name')).trim(), description: String(fields.get('description')), color, memberIds, primaryMemberId: primaryId, startDate: startDate || null };
     const ok = await mutate(editing
       ? { action: 'updateProject', id: editing.id, patch: { ...details, ...(!targetLocked && targetDate ? { targetDate } : {}) } }
       : { action: 'createProject', ...details, targetDate: targetDate || null, phases: pending ? [...drafts, { name: pending, description: draft.description.trim() }] : drafts }, editing ? 'Project saved' : 'Project created');
@@ -217,14 +242,17 @@ export function ProjectForm({ data, editing, mutate, onClose, onExtend, busy }: 
           <ToggleGroup type="single" variant="outline" value={color} onValueChange={value => { if (value) setColor(value); }} aria-label="Project colour presets">{['#448768', '#617eb7', '#9571b6', '#c18c47', '#b86878'].map(preset => <ToggleGroupItem key={preset} value={preset} aria-label={`Select ${preset}`}><span className="size-4 rounded-full" style={{ background: preset }} /></ToggleGroupItem>)}</ToggleGroup></div></FormField>
         <section className="project-form-section">
           <div className="project-section-heading"><h3 id={membersLabelId}>Members</h3><Badge variant="secondary">{memberIds.length} selected</Badge></div>
-          <p>Only members can own this project’s tickets. Members can also add their own tickets here.</p>
+          <p>Only members can own this project’s tickets. The primary developer leads the project. Everyone else is a secondary developer.</p>
           <FieldGroup role="group" aria-labelledby={membersLabelId} className="project-member-list">{data.members.filter(m => m.isActive || memberIds.includes(m.id)).map(m => {
             const openCount = editing ? data.items.filter(item => item.projectId === editing.id && item.assigneeId === m.id && !isDone(item)).length : 0;
             const selected = memberIds.includes(m.id);
-            return <FormField key={m.id} className="project-member-choice"><FormCheckbox checked={selected} disabled={busy || (selected && openCount > 0)} onCheckedChange={checked => setMemberIds(previous => checked ? [...previous, m.id] : previous.filter(id => id !== m.id))} />
+            const primary = selected && primaryId === m.id;
+            return <div key={m.id} className={clsx('project-member-row', primary && 'is-primary')}><FormField className="project-member-choice"><FormCheckbox checked={selected} disabled={busy || (selected && openCount > 0)} onCheckedChange={checked => toggleMember(m.id, checked)} />
               <span className="project-member-name"><span aria-hidden="true"><Avatar member={m} size="small" /></span>{m.name}<Badge variant="outline">{m.role === 'admin' ? 'Admin' : 'Developer'}</Badge></span>
               {openCount > 0 && <span className="field-help">{openCount} open item{openCount === 1 ? '' : 's'} here. Finish or reassign them before removing this person.</span>}
-              {!m.isActive && <span className="field-help">Inactive team member</span>}</FormField>;
+              {!m.isActive && <span className="field-help">Inactive team member</span>}</FormField>
+              {primary ? <Badge className="primary-badge"><Star data-icon="inline-start" />Primary</Badge>
+                : selected && <Button type="button" variant="ghost" size="xs" disabled={busy} onClick={() => setPrimaryId(m.id)} aria-label={`Make ${m.name} the primary developer`}>Make primary</Button>}</div>;
           })}</FieldGroup>
         </section>
         <section className="project-form-section">

@@ -352,6 +352,8 @@
 .access-tag { display:flex; align-items:center; gap:5px; color:var(--success-foreground); font-size:12px; }
 .access-inactive { color:var(--muted-foreground); }
 .access-inactive>i { background:var(--muted-foreground); }
+.access-invited { color:var(--warning-foreground); }
+.access-invited>i { background:var(--warning-foreground); }
 .inactive-row { opacity:.65; }
 .inline-empty { display:flex; align-items:center; gap:12px; padding:0 24px 24px; font-size:13px; color:var(--muted-foreground); }
 .inline-empty strong { color:var(--foreground); font-weight:500; }
@@ -616,8 +618,11 @@
 .project-section-heading h3 { font-size:14px; font-weight:600; }
 .project-form-section>p { color:var(--muted-foreground); font-size:12px; line-height:1.8; margin-top:8px; }
 .project-member-list { gap:0; margin:12px 0; max-height:260px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius); }
-.project-member-choice { padding:12px; align-items:center; }
-.project-member-choice:not(:last-child) { border-bottom:1px solid var(--border); }
+.project-member-row { display:flex; align-items:center; gap:8px; padding-right:12px; transition:background .15s; }
+.project-member-row:not(:last-child) { border-bottom:1px solid var(--border); }
+.project-member-row.is-primary { background:color-mix(in oklab, var(--primary) 6%, transparent); }
+.project-member-row .primary-badge { flex-shrink:0; }
+.project-member-choice { padding:12px; align-items:center; flex:1; min-width:0; }
 .project-member-choice [data-slot="field-content"] { min-width:0; }
 .project-member-choice [data-slot="field-label"] { width:100%; }
 .project-member-name { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:13px; }
@@ -761,6 +766,9 @@
 .project-drawer .project-phase-summary { margin-top:0; padding-top:0; border-top:0; }
 .project-member-chips { display:flex; flex-wrap:wrap; gap:8px; }
 .project-member-chips>span:not(.form-help) { display:flex; align-items:center; gap:6px; padding:3px 10px 3px 3px; border:1px solid var(--border); border-radius:999px; font-size:12px; }
+.project-member-chips>span small { color:var(--muted-foreground); font-size:10px; }
+.project-member-chips>span.is-primary { border-color:color-mix(in oklab, var(--primary) 40%, var(--border)); background:color-mix(in oklab, var(--primary) 6%, transparent); }
+.project-member-chips>span.is-primary small { color:var(--primary); font-weight:600; }
 .project-card-links { display:flex; align-items:center; gap:4px; }
 button.project-title { background:none; border:0; color:inherit; text-align:left; }
 button.project-title:hover { color:var(--primary); }

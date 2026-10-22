@@ -33,10 +33,44 @@ export function firstName(member?: Member) { return member?.name.split(' ')[0] ?
 export function findMember(data: DashboardData, id: string) { return data.members.find(m => m.id === id); }
 export function findProject(data: DashboardData, id: string) { return data.projects.find(p => p.id === id); }
 export function isAdhocProject(project?: Project) { return project?.isAdhoc === true || project?.id === ADHOC_PROJECT_ID; }
+/** A project's members, with the primary developer first. */
+export function projectTeam(data: DashboardData, project: Project) {
+  const ids = project.primaryMemberId ? [project.primaryMemberId, ...project.memberIds.filter(id => id !== project.primaryMemberId)] : project.memberIds;
+  return ids.flatMap(id => { const found = findMember(data, id); return found ? [found] : []; });
+}
 /** Active people who may own new work in a project. A retained owner keeps existing work valid. */
 export function projectMembers(data: DashboardData, projectId: string, retainedId?: string) {
   const selected = findProject(data, projectId);
   return data.members.filter(m => (m.isActive && (isAdhocProject(selected) || selected?.memberIds.includes(m.id))) || m.id === retainedId);
+}
+/**
+ * Which ticket fields the person has picked by hand. An auto-fill never overwrites a hand pick,
+ * and only a hand pick triggers an auto-fill, so the project and owner cannot keep changing each other.
+ */
+export type PickedByHand = { project: boolean; owner: boolean };
+/** The project an owner usually works in: the first one they lead, then the first one they belong to, then Ad hoc. */
+export function ownerHomeProject(data: DashboardData, ownerId: string) {
+  const choices = selectableProjects(data).filter(p => !isAdhocProject(p));
+  return (choices.find(p => p.primaryMemberId === ownerId) ?? choices.find(p => p.memberIds.includes(ownerId)))?.id ?? ADHOC_PROJECT_ID;
+}
+/** Owners to offer. Until a project is picked by hand, anyone active can be picked and the project follows them. */
+export function ownerChoices(data: DashboardData, projectId: string, projectPicked: boolean, retainedId?: string) {
+  return projectPicked ? projectMembers(data, projectId, retainedId) : data.members.filter(m => m.isActive);
+}
+/** A project was picked by hand. Its primary developer becomes the owner, unless a hand-picked owner is on the project. */
+export function withProject(data: DashboardData, value: WorkClassification, projectId: string, picked: PickedByHand): WorkClassification {
+  const eligible = projectMembers(data, projectId);
+  const fits = (id?: string | null) => !!id && eligible.some(m => m.id === id);
+  const primary = findProject(data, projectId)?.primaryMemberId;
+  const assigneeId = picked.owner && fits(value.assigneeId) ? value.assigneeId
+    : fits(primary) ? primary! : fits(value.assigneeId) ? value.assigneeId : eligible[0]?.id ?? '';
+  return { projectId, phaseId: null, assigneeId };
+}
+/** An owner was picked by hand. Until a project is picked by hand, the project moves to the owner's main project. */
+export function withOwner(data: DashboardData, value: WorkClassification, assigneeId: string, picked: PickedByHand): WorkClassification {
+  if (picked.project) return { ...value, assigneeId };
+  const projectId = ownerHomeProject(data, assigneeId);
+  return projectId === value.projectId ? { ...value, assigneeId } : { projectId, phaseId: null, assigneeId };
 }
 export function projectPhases(data: DashboardData, projectId: string) { return data.phases.filter(phase => phase.projectId === projectId).sort((a, b) => a.position - b.position); }
 export function phaseName(data: DashboardData, phaseId: string | null) { return phaseId ? data.phases.find(phase => phase.id === phaseId)?.name ?? 'Unknown phase' : 'Ad hoc'; }
@@ -132,9 +166,9 @@ export type PhaseDraft = { name: string; description: string };
 export type Mutation =
   | ({ action: 'createItem' } & ItemInput)
   | { action: 'updateItem'; id: string; patch: Partial<WorkItem>; reason?: string; reasonCategory?: string }
-  | { action: 'createMember'; name: string; email: string; microsoftObjectId: string; role: Member['role']; capacity: number }
+  | { action: 'createMember'; name: string; email: string; microsoftObjectId?: string; role: Member['role']; capacity: number }
   | { action: 'updateMember'; id: string; patch: Partial<Member> }
-  | { action: 'createProject'; name: string; color: string; description: string; memberIds: string[]; phases: PhaseDraft[]; startDate: string | null; targetDate: string | null }
+  | { action: 'createProject'; name: string; color: string; description: string; memberIds: string[]; primaryMemberId: string | null; phases: PhaseDraft[]; startDate: string | null; targetDate: string | null }
   | { action: 'updateProject'; id: string; patch: Partial<Project>; reason?: string; reasonCategory?: string }
   | { action: 'createPhase'; projectId: string; name: string; description: string }
   | { action: 'updatePhase'; id: string; name?: string; description?: string }
@@ -206,7 +240,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       break;
     }
     case 'createMember':
-      next.members.push({ id, name: mutation.name, email: mutation.email, role: mutation.role, capacity: mutation.capacity, isActive: true, image: null, microsoftObjectId: mutation.microsoftObjectId });
+      next.members.push({ id, name: mutation.name, email: mutation.email.toLowerCase(), role: mutation.role, capacity: mutation.capacity, isActive: true, image: null, ...(mutation.microsoftObjectId ? { microsoftObjectId: mutation.microsoftObjectId } : {}) });
       break;
     case 'updateMember': {
       const found = next.members.find(m => m.id === mutation.id);
@@ -214,7 +248,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       break;
     }
     case 'createProject':
-      next.projects.push({ id, name: mutation.name, color: mutation.color, description: mutation.description, isArchived: false, memberIds: mutation.memberIds, isAdhoc: false, startDate: mutation.startDate, targetDate: mutation.targetDate, originalTargetDate: mutation.targetDate });
+      next.projects.push({ id, name: mutation.name, color: mutation.color, description: mutation.description, isArchived: false, memberIds: mutation.memberIds, primaryMemberId: mutation.primaryMemberId, isAdhoc: false, startDate: mutation.startDate, targetDate: mutation.targetDate, originalTargetDate: mutation.targetDate });
       mutation.phases.forEach((phase, position) => next.phases.push({ id: crypto.randomUUID(), projectId: id, name: phase.name, description: phase.description, position }));
       log(id, 'project.created', { name: mutation.name, startDate: mutation.startDate, targetDate: mutation.targetDate });
       break;
@@ -223,6 +257,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       if (!found) break;
       const before = { ...found };
       Object.assign(found, mutation.patch);
+      if (found.primaryMemberId && !found.memberIds.includes(found.primaryMemberId)) found.primaryMemberId = null;
       const { targetDate } = mutation.patch;
       if (targetDate !== undefined && targetDate !== before.targetDate) {
         if (before.targetDate && (mutation.reason ?? '').trim().length < 3) throw new Error('Add a short reason for this change.');
@@ -296,7 +331,7 @@ export function demoSnapshot(initialData: DashboardData) {
   }
   const valid = demoCacheData?.mode === 'demo' && demoCacheData.currentUser.id === initialData.currentUser.id
     && Array.isArray(demoCacheData.phases) && demoCacheData.phases.every(phase => typeof phase.description === 'string')
-    && demoCacheData.projects.every(p => Array.isArray(p.memberIds) && typeof p.isAdhoc === 'boolean' && p.targetDate !== undefined);
+    && demoCacheData.projects.every(p => Array.isArray(p.memberIds) && typeof p.isAdhoc === 'boolean' && p.targetDate !== undefined && p.primaryMemberId !== undefined);
   return valid ? demoCacheData! : initialData;
 }
 export function saveDemo(data: DashboardData) {

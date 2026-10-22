@@ -16,10 +16,10 @@ export function createDemoData(now = new Date()): DashboardData {
   const day = (offset: number) => shiftDate(week, offset, timezone);
   // Each project shows a different timeline story: extended once, on track, extended twice and behind, and long-running.
   const projects: Project[] = [
-    { id: 'demo-commerce', name: 'Commerce', color: '#ea6e3d', description: 'Storefront, checkout, payments and the order experience.', isArchived: false, isAdhoc: false, memberIds: [developers[0].id, developers[4].id], startDate: day(-49), targetDate: day(11), originalTargetDate: day(4) },
-    { id: 'demo-inventory', name: 'Inventory management', color: '#618f7a', description: 'Stock accuracy, warehouse operations and dispatch.', isArchived: false, isAdhoc: false, memberIds: [developers[1].id, developers[5].id, lead.id], startDate: day(-49), targetDate: day(9), originalTargetDate: day(9) },
-    { id: 'demo-creators', name: 'Creator marketplace', color: '#8b79af', description: 'Creator onboarding, campaigns and payouts.', isArchived: false, isAdhoc: false, memberIds: [developers[2].id, developers[6].id], startDate: day(-42), targetDate: day(4), originalTargetDate: day(-10) },
-    { id: 'demo-internal', name: 'Internal tools', color: '#6a91b6', description: 'PnL reporting, content operations and team tools.', isArchived: false, isAdhoc: false, memberIds: [developers[3].id, lead.id], startDate: day(-35), targetDate: day(39), originalTargetDate: day(39) },
+    { id: 'demo-commerce', name: 'Commerce', color: '#ea6e3d', description: 'Storefront, checkout, payments and the order experience.', isArchived: false, isAdhoc: false, primaryMemberId: developers[0].id, memberIds: [developers[0].id, developers[4].id], startDate: day(-49), targetDate: day(11), originalTargetDate: day(4) },
+    { id: 'demo-inventory', name: 'Inventory management', color: '#618f7a', description: 'Stock accuracy, warehouse operations and dispatch.', isArchived: false, isAdhoc: false, primaryMemberId: developers[1].id, memberIds: [developers[1].id, developers[5].id, lead.id], startDate: day(-49), targetDate: day(9), originalTargetDate: day(9) },
+    { id: 'demo-creators', name: 'Creator marketplace', color: '#8b79af', description: 'Creator onboarding, campaigns and payouts.', isArchived: false, isAdhoc: false, primaryMemberId: developers[2].id, memberIds: [developers[2].id, developers[6].id], startDate: day(-42), targetDate: day(4), originalTargetDate: day(-10) },
+    { id: 'demo-internal', name: 'Internal tools', color: '#6a91b6', description: 'PnL reporting, content operations and team tools.', isArchived: false, isAdhoc: false, primaryMemberId: developers[3].id, memberIds: [developers[3].id, lead.id], startDate: day(-35), targetDate: day(39), originalTargetDate: day(39) },
     { ...ADHOC_PROJECT, memberIds: [] },
   ];
   const phaseNames = [

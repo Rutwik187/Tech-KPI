@@ -7,7 +7,7 @@ import { burnUp, projectTimeline } from '@/lib/timeline';
 import { Avatar, Modal, StatusBadge } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { displayDate, findMember, hours, isAdhocProject, isDone, projectPhases, routeFor, today } from './lib';
+import { displayDate, hours, isAdhocProject, isDone, projectPhases, projectTeam, routeFor, today } from './lib';
 import { BurnUpChart } from './charts';
 import { ExtendedBadge, ExtensionHistory, HealthBadge, TimelineStrip, daysLeftText, plural } from './timeline';
 
@@ -19,7 +19,7 @@ export function ProjectDrawer({ data, project, onClose, onEdit, onExtend, onOpen
   const tickets = data.items.filter(item => item.projectId === project.id && item.type === 'task');
   const lateTickets = project.targetDate ? tickets.filter(item => !isDone(item) && item.dueDate && item.dueDate > project.targetDate!) : [];
   const phases = [{ id: null, name: 'Ad hoc' }, ...projectPhases(data, project.id)];
-  const members = project.memberIds.flatMap(id => { const member = findMember(data, id); return member ? [member] : []; });
+  const members = projectTeam(data, project);
   return <Modal title={project.name} subtitle={project.description || 'Project'} onClose={onClose} drawer>
     <div className="item-drawer-body project-drawer">
       <div className="detail-title-row">
@@ -68,7 +68,7 @@ export function ProjectDrawer({ data, project, onClose, onEdit, onExtend, onOpen
 
       <section className="drawer-section">
         <h3 className="detail-section-heading">Members <span>{members.length}</span></h3>
-        <div className="project-member-chips">{isAdhocProject(project) ? <span className="form-help">Everyone can own Ad hoc work.</span> : members.length ? members.map(member => <span key={member.id}><Avatar member={member} size="small" />{member.name}</span>) : <span className="form-help">No members yet.</span>}</div>
+        <div className="project-member-chips">{isAdhocProject(project) ? <span className="form-help">Everyone can own Ad hoc work.</span> : members.length ? members.map(member => <span key={member.id} className={member.id === project.primaryMemberId ? 'is-primary' : undefined}><Avatar member={member} size="small" />{member.name}<small>{member.id === project.primaryMemberId ? 'Primary' : 'Secondary'}</small></span>) : <span className="form-help">No members yet.</span>}</div>
       </section>
     </div>
     <div className="drawer-footer">

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { config } from "dotenv";
-import { eq, inArray, like } from "drizzle-orm";
+import { and, eq, inArray, like } from "drizzle-orm";
 import { ADHOC_PROJECT_ID } from "../lib/project-defaults";
 import type { DashboardData } from "../lib/types";
 
@@ -56,11 +56,45 @@ async function main() {
     assert.equal(duplicate.length, 0); checks++;
     const developerCookie = (await createOfflineSessionForUser(member.id, baseURL)).cookieHeader;
     assert.equal(member.role, "developer"); checks++;
+    // A member added by work email links their Microsoft account on first sign-in. Nobody else gets in.
+    const { claimMicrosoftInvitation } = await import("./microsoft-accounts");
+    const tenant = randomUUID();
+    const invitedEmail = `${trace}-invited@example.invalid`;
+    data = await mutate(adminCookie, { action: "createMember", name: `${trace}-invited`, email: invitedEmail.toUpperCase(), capacity: 33 });
+    const invited = data.members.find((row) => row.email === invitedEmail)!;
+    assert(invited); assert.equal(invited.microsoftObjectId, undefined); checks += 2;
+    ids.add(invited.id); memberIds.add(invited.id);
+    await mutate(adminCookie, { action: "createMember", name: `${trace}-copy`, email: invitedEmail }, 409);
+    await mutate(adminCookie, { action: "updateMember", id: invited.id, patch: { email: `${trace}@example.invalid` } }, 409);
+    data = await mutate(adminCookie, { action: "updateMember", id: invited.id, patch: { email: `${trace}-typo@example.invalid` } });
+    assert.equal(data.members.find((row) => row.id === invited.id)?.email, `${trace}-typo@example.invalid`); checks++;
+    await mutate(adminCookie, { action: "updateMember", id: invited.id, patch: { email: invitedEmail } });
+    const invitedOid = randomUUID();
+    assert.equal(await claimMicrosoftInvitation({ oid: invitedOid, tid: randomUUID(), preferred_username: invitedEmail }, tenant), null);
+    assert.equal(await claimMicrosoftInvitation({ oid: invitedOid, tid: tenant, preferred_username: `${trace}-stranger@example.invalid` }, tenant), null);
+    assert.equal(await claimMicrosoftInvitation({ oid: invitedOid, tid: tenant, preferred_username: `${trace}@example.invalid` }, tenant), null);
+    assert.equal(await claimMicrosoftInvitation({ oid: invitedOid, tid: tenant }, tenant), null); checks += 4;
+    await mutate(adminCookie, { action: "updateMember", id: invited.id, patch: { isActive: false } });
+    assert.equal(await claimMicrosoftInvitation({ oid: invitedOid, tid: tenant, preferred_username: invitedEmail }, tenant), null); checks++;
+    await mutate(adminCookie, { action: "updateMember", id: invited.id, patch: { isActive: true } });
+    assert.deepEqual(await claimMicrosoftInvitation({ oid: invitedOid.toUpperCase(), tid: tenant.toUpperCase(), preferred_username: ` ${invitedEmail.toUpperCase()} ` }, tenant), { email: invitedEmail, name: `${trace}-invited` }); checks++;
+    data = await (await call("/api/data", adminCookie)).json();
+    assert.equal(data.members.find((row) => row.id === invited.id)?.microsoftObjectId, invitedOid); checks++;
+    assert(data.activities.some((event) => event.entityId === invited.id && event.action === "member.microsoft_linked")); checks++;
+    assert.equal(await claimMicrosoftInvitation({ oid: randomUUID(), tid: tenant, preferred_username: invitedEmail }, tenant), null); checks++;
+    await mutate(adminCookie, { action: "updateMember", id: invited.id, patch: { email: `${trace}-late@example.invalid` } }, 400);
     await mutate(developerCookie, { action: "createProject", name: `${trace}-forbidden`, memberIds: [member.id] }, 403);
     await mutate(developerCookie, { action: "createPhase", projectId: project.id, name: "Forbidden" }, 403);
     await mutate(developerCookie, { action: "updateProject", id: project.id, patch: { memberIds: [member.id] } }, 403);
     await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-unassigned`, projectId: project.id, assigneeId: member.id, estimateHours: 1 }, 400);
-    data = await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { memberIds: [fixture.userId, member.id] } });
+    await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { memberIds: [fixture.userId], primaryMemberId: member.id } }, 400);
+    data = await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { memberIds: [fixture.userId, member.id], primaryMemberId: member.id } });
+    assert.equal(data.projects.find(row => row.id === project.id)?.primaryMemberId, member.id); checks++;
+    data = await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { description: "Primary stays when other fields change" } });
+    assert.equal(data.projects.find(row => row.id === project.id)?.primaryMemberId, member.id); checks++;
+    data = await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { primaryMemberId: fixture.userId } });
+    assert.equal(data.projects.find(row => row.id === project.id)?.primaryMemberId, fixture.userId); checks++;
+    await assert.rejects(db.update(schema.projectMembers).set({ isPrimary: true }).where(and(eq(schema.projectMembers.projectId, project.id), eq(schema.projectMembers.userId, member.id)))); checks++;
     const assignedBeforeWork: DashboardData = await (await call("/api/data", developerCookie)).json();
     assert(assignedBeforeWork.projects.some(row => row.id === project.id));
     assert(assignedBeforeWork.phases.some(row => row.id === buildPhase.id));
@@ -182,12 +216,12 @@ async function main() {
       const cron = await fetch(`${baseURL}/api/cron/weekly-snapshot`, { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } });
       assert.equal(cron.status, 200); checks++;
     }
-    console.log(`PASS: ${checks} backend checks (projects, project timelines and extensions, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable). Local session fixtures used; real Microsoft OAuth is not exercised.`);
+    console.log(`PASS: ${checks} backend checks (projects, primary developers, project timelines and extensions, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable, sign-in by invited work email). Local session fixtures used; real Microsoft OAuth is not exercised.`);
   } finally {
     await db.transaction(async (tx) => {
       const testItems = await tx.select({ id: schema.workItems.id }).from(schema.workItems).where(like(schema.workItems.title, `${trace}%`));
       testItems.forEach((item) => ids.add(item.id));
-      const testMembers = await tx.select({ id: schema.user.id }).from(schema.user).where(eq(schema.user.email, `${trace}@example.invalid`));
+      const testMembers = await tx.select({ id: schema.user.id }).from(schema.user).where(like(schema.user.email, `${trace}%@example.invalid`));
       testMembers.forEach((member) => { ids.add(member.id); memberIds.add(member.id); });
       if (ids.size) await tx.delete(schema.activities).where(inArray(schema.activities.entityId, [...ids]));
       if (auditIds.size) await tx.delete(schema.activities).where(inArray(schema.activities.id, [...auditIds]));
