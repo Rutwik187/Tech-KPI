@@ -11,4 +11,7 @@ export const ADHOC_PROJECT: Project = {
   isArchived: false,
   memberIds: [],
   isAdhoc: true,
+  startDate: null,
+  targetDate: null,
+  originalTargetDate: null,
 };

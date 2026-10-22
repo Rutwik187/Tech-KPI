@@ -2,17 +2,16 @@
 
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
-import { AlertTriangle, ArrowRight, CalendarClock, CalendarDays, Check, CheckCheck, Clock3, Eye } from 'lucide-react';
-import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'recharts';
+import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCheck, Clock3, Eye } from 'lucide-react';
 import type { DashboardData, WorkItem } from '@/lib/types';
-import { getBugKpi, type MemberKpi, type getTeamTrend } from '@/lib/kpi';
+import { getBugKpi, type MemberKpi } from '@/lib/kpi';
 import { Avatar, PriorityBadge } from '@/components/ui';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
-import { bands, displayDate, displayDateTime, extensions, findMember, findProject, hours, isDone, percent, phaseName, today, type OnAction } from './lib';
+import { bands, displayDate, displayDateTime, findMember, findProject, hours, isDone, percent, phaseName, today, type OnAction } from './lib';
+import { TicketExtendedBadge } from './timeline';
 
 export function ProjectTag({ data, id }: { data: DashboardData; id: string }) {
   const project = findProject(data, id);
@@ -59,14 +58,9 @@ export function ItemActions({ item, admin, onAction, busy, compact = false }: { 
   return <Button variant={next === 'done' || next === 'verified' ? 'secondary' : 'outline'} size="sm" type="button" disabled={busy} onClick={() => onAction(item, next)}>{label}<Icon data-icon="inline-end" size={13} /></Button>;
 }
 
-export function ExtensionBadge({ data, item }: { data: DashboardData; item: WorkItem }) {
-  const count = extensions(data, item.id).length;
-  if (!count) return null;
-  return <Badge variant="warning" className="extension-badge" title="The due date was moved. Each change has a reason in the timeline."><CalendarClock />Extended{count > 1 ? ` ×${count}` : ''}</Badge>;
-}
 export function DueDate({ item, data }: { item: WorkItem; data: DashboardData }) {
   const overdue = !!item.dueDate && item.dueDate < today(data.settings.timezone) && !isDone(item);
-  return <span className="due-cell"><span className={clsx('due-date', overdue && 'due-overdue')}><CalendarDays size={12} />{item.dueDate ? displayDate(item.dueDate) : 'No due date'}</span>{overdue && <span className="sr-only">Overdue</span>}<ExtensionBadge data={data} item={item} /></span>;
+  return <span className="due-cell"><span className={clsx('due-date', overdue && 'due-overdue')}><CalendarDays size={12} />{item.dueDate ? displayDate(item.dueDate) : 'No due date'}</span>{overdue && <span className="sr-only">Overdue</span>}<TicketExtendedBadge data={data} item={item} /></span>;
 }
 
 /** A bug earns full points when fixed by its fix-by time, half within twice the target, none after that. */
@@ -96,22 +90,6 @@ export function TicketCard({ item, data, onOpen, onAction, busy }: { item: WorkI
     </CardContent>
     <CardFooter className="task-card-bottom"><Avatar member={findMember(data, item.assigneeId)} size="small" /><ItemActions item={item} admin={data.currentUser.role === 'admin'} onAction={onAction} busy={busy} compact /></CardFooter>
   </Card>;
-}
-
-export function TrendChart({ trend, target }: { trend: ReturnType<typeof getTeamTrend>; target: number }) {
-  return <>
-    <ChartContainer className="trend-chart h-60 w-full aspect-auto" config={{ efficiency: { label: 'Efficiency', color: 'var(--primary)' } }}>
-      <AreaChart accessibilityLayer data={trend} margin={{ top: 12, right: 12, bottom: 0, left: 0 }}>
-        <CartesianGrid vertical={false} strokeDasharray="3 3" />
-        <XAxis dataKey="weekStart" tickFormatter={value => displayDate(String(value))} tickLine={false} axisLine={false} tickMargin={12} minTickGap={18} />
-        <YAxis domain={[0, 100]} tickFormatter={value => `${value}%`} ticks={[0, 50, 100]} tickLine={false} axisLine={false} width={42} />
-        <ChartTooltip content={<ChartTooltipContent labelFormatter={value => `Week of ${displayDate(String(value))}`} formatter={value => <span>{value === null ? 'No data' : `${Math.round(Number(value))}% efficiency`}</span>} />} />
-        <ReferenceLine y={target} stroke="var(--muted-foreground)" strokeDasharray="4 4" />
-        <Area dataKey="efficiency" type="monotone" connectNulls={false} stroke="var(--color-efficiency)" strokeWidth={2.5} fill="var(--color-efficiency)" fillOpacity={0.12} dot={{ r: 3, fill: 'var(--color-efficiency)' }} activeDot={{ r: 5 }} isAnimationActive={false} />
-      </AreaChart>
-    </ChartContainer>
-    <p className="sr-only">Weekly efficiency: {trend.map(point => `${displayDate(point.weekStart)} ${point.efficiency === null ? 'No data' : percent(point.efficiency)}`).join(', ')}. Target: {target}%.</p>
-  </>;
 }
 
 /** Shows the score formula with this person's own numbers, so nobody has to guess how it works. */

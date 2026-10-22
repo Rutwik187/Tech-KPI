@@ -1,0 +1,5 @@
+ALTER TABLE "tech_kpi_project" ADD COLUMN "start_date" date;--> statement-breakpoint
+ALTER TABLE "tech_kpi_project" ADD COLUMN "target_date" date;--> statement-breakpoint
+ALTER TABLE "tech_kpi_project" ADD COLUMN "original_target_date" date;--> statement-breakpoint
+ALTER TABLE "tech_kpi_project" ADD CONSTRAINT "tech_kpi_project_adhoc_no_timeline" CHECK ("tech_kpi_project"."id" <> '00000000-0000-4000-8000-000000000001'::uuid OR ("tech_kpi_project"."start_date" IS NULL AND "tech_kpi_project"."target_date" IS NULL AND "tech_kpi_project"."original_target_date" IS NULL));--> statement-breakpoint
+ALTER TABLE "tech_kpi_project" ADD CONSTRAINT "tech_kpi_project_timeline_order" CHECK ("tech_kpi_project"."start_date" IS NULL OR "tech_kpi_project"."target_date" IS NULL OR "tech_kpi_project"."target_date" >= "tech_kpi_project"."start_date");
