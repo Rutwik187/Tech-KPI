@@ -21,13 +21,13 @@ export function createDemoData(now = new Date()): DashboardData {
     { ...ADHOC_PROJECT, memberIds: [] },
   ];
   const phaseNames = [
-    ['Checkout experience', 'Payments reliability', 'Storefront performance'],
-    ['Stock accuracy', 'Imports & mapping', 'Warehouse dispatch'],
-    ['Discovery & onboarding', 'Campaign workflows', 'Payout reconciliation'],
-    ['Reporting foundations', 'Content operations', 'Team workflows'],
+    [['Checkout experience', 'Address, cart, and order review screens.'], ['Payments reliability', 'Payment callbacks, retries, and refunds.'], ['Storefront performance', '']],
+    [['Stock accuracy', 'Counts that match the warehouse.'], ['Imports & mapping', 'Supplier files and SKU mapping.'], ['Warehouse dispatch', '']],
+    [['Discovery & onboarding', 'Finding creators and signing them up.'], ['Campaign workflows', ''], ['Payout reconciliation', 'Match payouts to approved work.']],
+    [['Reporting foundations', 'PnL and margin reports.'], ['Content operations', ''], ['Team workflows', 'Tools the team uses every day.']],
   ];
-  const projectPhases: Phase[][] = phaseNames.map((names, projectIndex) => names.map((name, position) => ({
-    id: `${projects[projectIndex].id}-phase-${position + 1}`, projectId: projects[projectIndex].id, name, position,
+  const projectPhases: Phase[][] = phaseNames.map((names, projectIndex) => names.map(([name, description], position) => ({
+    id: `${projects[projectIndex].id}-phase-${position + 1}`, projectId: projects[projectIndex].id, name, description, position,
   })));
   const phases = projectPhases.flat();
   function phaseForTitle(projectIndex: number, title: string): string {
@@ -116,6 +116,14 @@ export function createDemoData(now = new Date()): DashboardData {
     if (item.fixedAt) entries.push({ id: `${item.id}-fixed`, entityId: item.id, actorId: item.assigneeId, action: 'bug.fixed', reason: null, payload: {}, createdAt: item.fixedAt });
     if (item.blocker) entries.push({ id: `${item.id}-blocked`, entityId: item.id, actorId: item.assigneeId, action: item.type === 'bug' ? 'bug.reopened' : 'task.status_changed', reason: item.blocker, payload: { from: 'in_progress', to: 'blocked' }, createdAt: item.updatedAt });
     return entries;
+  });
+
+  // One sample extension, so the demo shows how a moved due date looks.
+  const extended = items.find(item => item.title === 'Add retry handling for failed payment callbacks');
+  if (extended?.dueDate) activities.push({
+    id: `${extended.id}-extended`, entityId: extended.id, actorId: extended.assigneeId, action: 'task.due_changed',
+    reason: 'The payment provider sandbox was down for a day.', payload: { from: shiftDate(extended.dueDate, -2, timezone), to: extended.dueDate, reasonCategory: 'blocked_dependency' },
+    createdAt: new Date(Math.min(Date.parse(dateAt(1, '15:00')), now.getTime())).toISOString(),
   });
 
   return {

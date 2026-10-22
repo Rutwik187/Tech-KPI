@@ -193,7 +193,7 @@
 .metric-number { font-size:34px; font-weight:650; letter-spacing:-1.5px; font-variant-numeric:tabular-nums; line-height:1.2; margin:8px 0; }
 .metric-primary .metric-number { color:var(--primary); }
 .metric-detail { color:var(--muted-foreground); font-size:12px; }
-.metric-unit { display:none; }
+.metric-unit { font-size:18px; font-weight:500; letter-spacing:-.3px; color:var(--muted-foreground); }
 .metric-band { display:flex; align-items:center; gap:5px; }
 .metric-band>i { width:5px; height:5px; border-radius:50%; background:currentColor; }
 .metric-band-on_target { color:var(--success-foreground); }
@@ -636,3 +636,62 @@
 .standup-quick-form.standup-with-phases { display:grid; grid-template-columns:minmax(120px,1.1fr) minmax(180px,2fr) minmax(140px,1.2fr) minmax(130px,1fr) 72px minmax(130px,1fr) auto; }
 @media(max-width:1400px) { .standup-quick-form.standup-with-phases { grid-template-columns:repeat(3,minmax(0,1fr)); } .standup-with-phases>.standup-title-field { grid-column:1/-1; grid-row:1; } }
 @media(max-width:767px) { .standup-quick-form.standup-with-phases { grid-template-columns:repeat(2,minmax(0,1fr)); } .project-toolbar { align-items:flex-start; gap:12px; flex-wrap:wrap; } .project-phase-add { align-items:stretch; } .project-member-name { font-size:12px; } .project-member-choice { padding:10px; } }
+
+/* Tickets, leave, phases, and score explanations */
+.person-text { display:flex; flex-direction:column; align-items:flex-start; gap:2px; min-width:0; text-align:left; }
+.person-text>strong { font-weight:500; font-size:13px; }
+.person-text>span { font-size:12px; font-weight:400; color:var(--muted-foreground); overflow:hidden; text-overflow:ellipsis; max-width:240px; }
+.row-actions { display:flex; align-items:center; justify-content:flex-end; gap:2px; }
+.due-cell { display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px; }
+.extension-badge { gap:4px; }
+.fix-by { display:inline-flex; flex-direction:column; align-items:flex-start; gap:3px; }
+.fix-by>small { font-size:11px; color:var(--muted-foreground); white-space:nowrap; }
+.fix-by-late .bug-clock,.fix-by-late>small { color:var(--destructive); }
+.task-card-meta .fix-by { flex-direction:row; align-items:center; gap:8px; }
+.score-explainer-body { padding:0 0 8px; }
+.score-rules { display:flex; flex-direction:column; gap:10px; padding:0 24px 20px; margin:0; list-style:none; color:var(--muted-foreground); font-size:13px; line-height:1.6; }
+.score-rules strong { color:var(--foreground); font-weight:600; }
+.panel-intro { padding:0 24px 8px; color:var(--muted-foreground); font-size:13px; line-height:1.6; }
+.leave-dates { font-size:12px; color:var(--muted-foreground); white-space:nowrap; font-variant-numeric:tabular-nums; }
+.leave-past { padding:4px 24px 16px; border-top:1px solid var(--border); }
+.leave-past>[data-slot="field"] { padding:12px 0 4px; }
+.leave-past .availability-list { padding:0; }
+.leave-group-label { font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--muted-foreground); margin:4px 0; }
+.member-detail-body .availability-list { padding:0 0 12px; }
+.member-detail-body .detail-section-heading { margin-top:24px; }
+.confirm-inline { display:inline-flex; align-items:center; gap:4px; }
+.phase-note { margin:-4px 0 16px; font-size:13px; color:var(--muted-foreground); line-height:1.6; }
+.phase-note strong { color:var(--foreground); font-weight:500; }
+.phase-summary-row { height:auto; }
+.phase-summary-name { display:flex; flex-direction:column; align-items:flex-start; gap:2px; min-width:0; text-align:left; white-space:normal; }
+.phase-summary-name>small { font-size:11px; font-weight:400; color:var(--muted-foreground); line-height:1.4; }
+.phase-editor-list { display:flex; flex-direction:column; gap:8px; margin:12px 0; }
+.phase-editor-row,.phase-add-row { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(0,1.5fr) auto; align-items:center; gap:8px; }
+.phase-add-row { margin-top:12px; }
+.phase-draft { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 8px 8px 12px; border:1px solid var(--border); border-radius:var(--radius); }
+.phase-draft>div { display:flex; flex-direction:column; gap:2px; min-width:0; font-size:13px; }
+.phase-draft strong { font-weight:500; }
+.phase-draft span { font-size:12px; color:var(--muted-foreground); }
+.fixed-owner { display:flex; flex-direction:column; gap:8px; }
+.fixed-owner-label { font-size:14px; font-weight:500; }
+.fixed-owner-value { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted-foreground); }
+.member-leave-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px; border:1px solid var(--border); border-radius:var(--radius); }
+.member-leave-row>div { display:flex; flex-direction:column; gap:2px; font-size:13px; }
+.member-leave-row strong { font-weight:500; }
+.member-leave-row span { font-size:12px; color:var(--muted-foreground); }
+.attention-menu { width:360px; max-width:calc(100vw - 24px); }
+.attention-menu-item { display:grid; grid-template-columns:auto minmax(0,1fr); gap:2px 8px; align-items:baseline; }
+.attention-menu-title { font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.attention-menu-reason { grid-column:2; font-size:12px; color:var(--muted-foreground); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.attention-menu-empty { padding:12px 8px; font-size:13px; color:var(--muted-foreground); }
+.demo-banner .demo-viewer { display:flex; align-items:center; gap:8px; margin-left:auto; white-space:nowrap; }
+.demo-banner .demo-viewer .form-select { display:block; min-width:210px; }
+@media (max-width:767px) {
+  .phase-editor-row,.phase-add-row { grid-template-columns:minmax(0,1fr); }
+  .demo-banner .demo-viewer { margin-left:0; width:100%; }
+  .demo-banner .demo-viewer .form-select { flex:1; min-width:0; }
+  .person-text>span { max-width:160px; }
+}
+.team-overview-strip strong { white-space:nowrap; }
+.role-cell { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+.work-table td:first-child { min-width:240px; }

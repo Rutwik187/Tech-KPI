@@ -28,7 +28,10 @@ export type EfficiencyBand = 'on_target' | 'below_target' | 'needs_attention' | 
 export interface MemberKpi {
   memberId: string;
   member: Member;
+  /** Hours at work so far: the full week once it ends, the days up to today during the current week. */
   capacityHours: number;
+  /** Hours at work across the whole week, after leave and holidays. Used for planning. */
+  weekCapacityHours: number;
   creditedHours: number;
   /** Percentage before the score cap; 40 hours / 33 hours is 121.21%. */
   deliveryRaw: number;
@@ -52,6 +55,7 @@ export interface TeamKpi {
   teamEfficiency: number | null;
   leadEfficiency: number | null;
   capacityHours: number;
+  weekCapacityHours: number;
   creditedHours: number;
   pendingHours: number;
   openTasks: number;
@@ -94,7 +98,8 @@ export function getWorkCalendar(data: DashboardData, assigneeId?: string): WorkC
   };
 }
 
-export function calculateCapacity(member: Member & { joinedOn?: string }, data: DashboardData, weekStart: string): number {
+/** Weekly hours minus leave and holidays. With `upTo`, only days on or before that date count. */
+export function calculateCapacity(member: Member & { joinedOn?: string }, data: DashboardData, weekStart: string, upTo?: string): number {
   const calendar = getWorkCalendar(data);
   const standardDays = new Set(data.settings.workingDays).size;
   if (standardDays === 0 || member.capacity <= 0) return 0;
@@ -110,7 +115,7 @@ export function calculateCapacity(member: Member & { joinedOn?: string }, data: 
   let availableDays = 0;
   for (let day = 0; day < 7; day++) {
     const date = shiftDate(monday, day, calendar.timezone);
-    if (date >= firstDay && isWorkingDay(date, calendar)) availableDays += 1 - (leaveByDate.get(date) || 0);
+    if (date >= firstDay && (!upTo || date <= upTo) && isWorkingDay(date, calendar)) availableDays += 1 - (leaveByDate.get(date) || 0);
   }
   return roundHours(member.capacity * availableDays / standardDays);
 }
@@ -171,6 +176,7 @@ function frozenMemberKpi(value: Record<string, unknown>): MemberKpi | null {
   return {
     memberId: value.memberId, member: { ...value.member, role: value.member.role === 'admin' ? 'admin' : 'developer' },
     capacityHours: value.capacityHours as number, creditedHours: value.creditedHours as number,
+    weekCapacityHours: typeof value.weekCapacityHours === 'number' && Number.isFinite(value.weekCapacityHours) ? value.weekCapacityHours : value.capacityHours as number,
     deliveryRaw: value.deliveryRaw as number, deliveryScore: value.deliveryScore as number,
     bugScore: value.bugScore as number, bugsScored: value.bugsScored as number,
     efficiency: value.efficiency, band: value.band,
@@ -211,7 +217,9 @@ function baseMemberKpi(member: Member, data: DashboardData, weekStart: string, n
   const range = getWeekRange(weekStart, data.settings.timezone);
   const monday = getWeekStart(weekStart, data.settings.timezone);
   const assigned = data.items.filter((item) => item.assigneeId === member.id);
-  const capacityHours = calculateCapacity(member, data, weekStart);
+  // A score during the week compares work done so far with the hours worked so far, including today.
+  const capacityHours = calculateCapacity(member, data, weekStart, dateKey(now, data.settings.timezone));
+  const weekCapacityHours = calculateCapacity(member, data, weekStart);
   const creditedRaw = assigned.filter((item) => item.type === 'task' && item.status === 'done'
     && item.completedAt && new Date(item.completedAt) <= now && inRange(new Date(item.completedAt), range))
     .reduce((sum, item) => sum + item.estimateHours, 0);
@@ -229,6 +237,7 @@ function baseMemberKpi(member: Member, data: DashboardData, weekStart: string, n
     memberId: member.id,
     member,
     capacityHours,
+    weekCapacityHours,
     creditedHours,
     deliveryRaw: roundHours(deliveryRaw),
     deliveryScore: roundHours(deliveryScore),
@@ -282,6 +291,7 @@ export function calculateTeamKpi(data: DashboardData, weekStart: string, now = n
     teamEfficiency,
     leadEfficiency: lead?.efficiency ?? null,
     capacityHours,
+    weekCapacityHours: roundHours(developers.reduce((sum, kpi) => sum + kpi.weekCapacityHours, 0)),
     creditedHours,
     pendingHours: roundHours(developers.reduce((sum, kpi) => sum + kpi.pendingHours, 0)),
     openTasks: developers.reduce((sum, kpi) => sum + kpi.openTasks, 0),

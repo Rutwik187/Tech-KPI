@@ -1,0 +1,306 @@
+import type { Activity, BugStatus, DashboardData, Holiday, Leave, Member, Project, Settings, TaskStatus, WorkItem } from '@/lib/types';
+import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
+import { getBugKpi, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
+
+/** The database calls a ticket a "task". Everything a person reads says "ticket". */
+export const kindLabels = { task: 'Ticket', bug: 'Bug' } as const;
+export const statusLabels: Record<WorkItem['status'], string> = { todo: 'To do', in_progress: 'In progress', blocked: 'Blocked', in_review: 'In review', done: 'Done', open: 'Open', fixed: 'Fixed', verified: 'Verified' };
+export const bands = { on_target: 'On target', below_target: 'Below target', needs_attention: 'Needs attention', on_leave: 'No hours at work' };
+export const ticketStatuses: TaskStatus[] = ['todo', 'in_progress', 'blocked', 'in_review', 'done'];
+export const bugStatuses: BugStatus[] = ['open', 'in_progress', 'fixed', 'verified'];
+export const priorities: WorkItem['priority'][] = ['low', 'medium', 'high', 'urgent'];
+export const adminOnlyPages = ['standup', 'team', 'settings'];
+const TIMEZONE = 'Asia/Kolkata';
+
+export function isDone(item: WorkItem) { return item.type === 'task' ? item.status === 'done' : item.status === 'verified'; }
+export function today(tz = TIMEZONE) { return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); }
+export function displayDate(date: string | Date | null, options?: Intl.DateTimeFormatOptions) {
+  if (!date) return 'No due date';
+  const parsed = typeof date === 'string' ? new Date(date.length === 10 ? `${date}T12:00:00+05:30` : date) : date;
+  if (Number.isNaN(parsed.getTime())) return 'Date unavailable';
+  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: TIMEZONE, ...options }).format(parsed);
+}
+export function displayDateTime(date: string | Date) {
+  return displayDate(date, { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+export function displayRange(start: string, end: string) {
+  return start === end ? displayDate(start, { weekday: 'short' }) : `${displayDate(start)} – ${displayDate(end)}`;
+}
+export function percent(n: number | null) { return n === null ? '—' : `${Math.round(n)}%`; }
+export function hours(n: number) { return Number(n.toFixed(1)); }
+export function firstName(member?: Member) { return member?.name.split(' ')[0] ?? 'Unassigned'; }
+
+export function findMember(data: DashboardData, id: string) { return data.members.find(m => m.id === id); }
+export function findProject(data: DashboardData, id: string) { return data.projects.find(p => p.id === id); }
+export function isAdhocProject(project?: Project) { return project?.isAdhoc === true || project?.id === ADHOC_PROJECT_ID; }
+/** Active people who may own new work in a project. A retained owner keeps existing work valid. */
+export function projectMembers(data: DashboardData, projectId: string, retainedId?: string) {
+  const selected = findProject(data, projectId);
+  return data.members.filter(m => (m.isActive && (isAdhocProject(selected) || selected?.memberIds.includes(m.id))) || m.id === retainedId);
+}
+export function projectPhases(data: DashboardData, projectId: string) { return data.phases.filter(phase => phase.projectId === projectId).sort((a, b) => a.position - b.position); }
+export function phaseName(data: DashboardData, phaseId: string | null) { return phaseId ? data.phases.find(phase => phase.id === phaseId)?.name ?? 'Unknown phase' : 'Ad hoc'; }
+/** Ad hoc first, then active projects by name. A developer sees only projects they belong to. */
+export function selectableProjects(data: DashboardData, retainedProjectId?: string) {
+  const admin = data.currentUser.role === 'admin';
+  return data.projects
+    .filter(p => p.id === retainedProjectId || (!p.isArchived && (admin || isAdhocProject(p) || p.memberIds.includes(data.currentUser.id))))
+    .sort((a, b) => Number(isAdhocProject(b)) - Number(isAdhocProject(a)) || a.name.localeCompare(b.name));
+}
+export function routeFor(data: DashboardData, section: string) { return `${data.mode === 'demo' ? '/demo' : ''}/${section}`; }
+
+export function downloadCsv(rows: (string | number | null)[][], name: string) {
+  const csv = rows.map(row => row.map(value => `"${String(value ?? '').replaceAll('"', '""')}"`).join(',')).join('\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+  const link = document.createElement('a');
+  link.href = url; link.download = name; link.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Due date moves after the first one was set. Each move needed a reason. */
+export function extensions(data: DashboardData, itemId: string): Activity[] {
+  return data.activities.filter(a => a.entityId === itemId && a.action.endsWith('.due_changed') && typeof a.payload.from === 'string');
+}
+function sentBack(item: WorkItem, data: DashboardData) {
+  if (item.status !== 'in_progress') return null;
+  const latest = data.activities.filter(a => a.entityId === item.id && a.action.endsWith('status_changed')).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  return latest?.payload.from === 'in_review' && latest.payload.to === 'in_progress' ? latest : null;
+}
+
+/** Why an item needs someone's attention now, or null. Admins act on reviews; developers act on their own work. */
+export function attentionReason(item: WorkItem, data: DashboardData, day = today()): string | null {
+  if (isDone(item)) return null;
+  const admin = data.currentUser.role === 'admin';
+  if (item.status === 'in_review') return admin ? 'Ready for your review' : null;
+  if (item.status === 'fixed') return admin ? 'Fixed · ready to verify' : null;
+  if (item.status === 'blocked') return item.blocker ? `Blocked: ${item.blocker}` : 'Blocked';
+  if (item.type === 'bug') {
+    const kpi = getBugKpi(item, data);
+    if (kpi.overdueHours > 0) return `Past its fix-by time by ${hours(kpi.overdueHours)} working h`;
+    if (item.severity === 'critical') return `Critical · fix by ${displayDateTime(kpi.deadline1)}`;
+    return null;
+  }
+  if (item.dueDate && item.dueDate < day) return `Overdue · was due ${displayDate(item.dueDate)}`;
+  const returned = sentBack(item, data);
+  if (returned && !admin) return returned.reason ? `Sent back: ${returned.reason}` : 'Sent back for changes';
+  if (!admin && item.dueDate === day) return 'Due today';
+  return null;
+}
+export function attentionItems(data: DashboardData) {
+  const day = today(data.settings.timezone);
+  const rank = (item: WorkItem) => item.type === 'bug' && item.severity === 'critical' ? 0 : item.status === 'blocked' ? 1 : item.status === 'in_review' || item.status === 'fixed' ? 3 : 2;
+  return data.items
+    .map(item => ({ item, reason: attentionReason(item, data, day) }))
+    .filter((entry): entry is { item: WorkItem; reason: string } => entry.reason !== null)
+    .sort((a, b) => rank(a.item) - rank(b.item));
+}
+
+export type LeaveGroup = { ids: string[]; userId: string; start: string; end: string; type: Leave['type']; note: string; days: number };
+/** Shows consecutive full days of leave as one range. Weekends and holidays inside the range do not break it. */
+export function groupLeaves(data: DashboardData, leaves: Leave[]): LeaveGroup[] {
+  const calendar = getWorkCalendar(data);
+  const tz = data.settings.timezone;
+  const onlyDaysOffBetween = (from: string, to: string) => {
+    let date = shiftDate(from, 1, tz);
+    for (let guard = 0; date < to && guard < 10; guard++) {
+      if (isWorkingDay(date, calendar)) return false;
+      date = shiftDate(date, 1, tz);
+    }
+    return date === to;
+  };
+  const groups: LeaveGroup[] = [];
+  for (const leave of [...leaves].sort((a, b) => a.userId.localeCompare(b.userId) || a.date.localeCompare(b.date))) {
+    const last = groups.at(-1);
+    if (last && last.userId === leave.userId && last.type === 'full_day' && leave.type === 'full_day' && last.note === leave.note && onlyDaysOffBetween(last.end, leave.date)) {
+      last.ids.push(leave.id); last.end = leave.date; last.days += 1;
+    } else {
+      groups.push({ ids: [leave.id], userId: leave.userId, start: leave.date, end: leave.date, type: leave.type, note: leave.note, days: leave.type === 'half_day' ? 0.5 : 1 });
+    }
+  }
+  return groups;
+}
+/** The working days a leave request covers. Mirrors the server, which skips weekends and holidays in a range. */
+export function leaveDays(data: DashboardData, start: string, end: string) {
+  if (!start || !end || end < start) return [];
+  const calendar = getWorkCalendar(data);
+  const days: string[] = [];
+  for (let date = start, guard = 0; date <= end && guard < 62; date = shiftDate(date, 1, data.settings.timezone), guard++) {
+    if (start === end || isWorkingDay(date, calendar)) days.push(date);
+  }
+  return days;
+}
+
+export type WorkClassification = { projectId: string; phaseId: string | null; assigneeId: string };
+type ItemInput = Pick<WorkItem, 'type' | 'title' | 'description' | 'projectId' | 'assigneeId' | 'priority' | 'severity' | 'estimateHours' | 'dueDate' | 'taskId' | 'phaseId'>;
+export type PhaseDraft = { name: string; description: string };
+export type Mutation =
+  | ({ action: 'createItem' } & ItemInput)
+  | { action: 'updateItem'; id: string; patch: Partial<WorkItem>; reason?: string; reasonCategory?: string }
+  | { action: 'createMember'; name: string; email: string; microsoftObjectId: string; role: Member['role']; capacity: number }
+  | { action: 'updateMember'; id: string; patch: Partial<Member> }
+  | { action: 'createProject'; name: string; color: string; description: string; memberIds: string[]; phases: PhaseDraft[] }
+  | { action: 'updateProject'; id: string; patch: Partial<Project> }
+  | { action: 'createPhase'; projectId: string; name: string; description: string }
+  | { action: 'updatePhase'; id: string; name?: string; description?: string }
+  | { action: 'saveSettings'; settings: Settings }
+  | ({ action: 'addLeave'; endDate?: string } & Omit<Leave, 'id'>)
+  | ({ action: 'addHoliday' } & Omit<Holiday, 'id'>)
+  | { action: 'deleteLeave'; ids: string[] }
+  | { action: 'deleteHoliday'; id: string };
+export type MutationFn = (mutation: Mutation, message?: string) => Promise<boolean>;
+export type OnAction = (item: WorkItem, status: WorkItem['status']) => void;
+export type QuickAction = { item: WorkItem; patch: Partial<WorkItem>; requireReason: boolean; label: string };
+export type ModalState =
+  | { type: 'item'; kind: 'task' | 'bug'; assigneeId?: string }
+  | { type: 'member'; member?: Member }
+  | { type: 'project'; project?: Project }
+  | { type: 'leave'; userId?: string }
+  | { type: 'holiday' }
+  | null;
+
+/** Applies a change to demo data in the browser. It follows the server's rules closely enough to try every flow. */
+export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Member): DashboardData {
+  const next = structuredClone(data);
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  const log = (entityId: string, action: string, payload: Record<string, unknown> = {}, reason: string | null = null) =>
+    next.activities.unshift({ id: crypto.randomUUID(), entityId, actorId: actor.id, action, reason, payload, createdAt: now });
+  switch (mutation.action) {
+    case 'createItem': {
+      const sequence = Math.max(0, ...data.items.map(i => Number(i.key.split('-').pop()) || 0)) + 1;
+      next.items.unshift({
+        id, key: `${mutation.type === 'bug' ? 'BUG' : 'UG'}-${String(sequence).padStart(3, '0')}`, type: mutation.type, title: mutation.title, description: mutation.description,
+        projectId: mutation.projectId, phaseId: mutation.phaseId, assigneeId: mutation.assigneeId, status: mutation.type === 'task' ? 'todo' : 'open',
+        priority: mutation.priority, severity: mutation.severity, estimateHours: mutation.type === 'task' ? mutation.estimateHours : 0, dueDate: mutation.dueDate,
+        createdAt: now, updatedAt: now, startedAt: null, completedAt: null, fixedAt: null, reportedAt: now, blocker: null, taskId: mutation.taskId, reopenCount: 0,
+      });
+      log(id, mutation.type === 'task' ? 'task.created' : 'bug.reported', { estimateHours: mutation.estimateHours, dueDate: mutation.dueDate });
+      break;
+    }
+    case 'updateItem': {
+      const item = next.items.find(i => i.id === mutation.id);
+      if (!item) break;
+      const before = { ...item };
+      const patch = mutation.patch;
+      const reason = mutation.reason ?? null;
+      Object.assign(item, patch, { updatedAt: now });
+      if (patch.status && patch.status !== before.status) {
+        if (patch.status === 'in_progress' && !item.startedAt) item.startedAt = now;
+        if (patch.status === 'done') item.completedAt = now;
+        if (before.status === 'done') { item.completedAt = null; item.reopenCount++; }
+        if (patch.status === 'fixed') item.fixedAt = now;
+        if (patch.status === 'open' && ['fixed', 'verified'].includes(before.status)) { item.fixedAt = null; item.reopenCount++; }
+        if (before.status === 'blocked' && patch.status !== 'blocked') item.blocker = null;
+        const event = item.type === 'task' && patch.status === 'done' ? 'task.completed'
+          : item.type === 'bug' && patch.status === 'fixed' ? 'bug.fixed'
+          : item.type === 'bug' && patch.status === 'verified' ? 'bug.verified'
+          : item.type === 'bug' && patch.status === 'open' ? 'bug.reopened' : `${item.type}.status_changed`;
+        log(item.id, event, { from: before.status, to: patch.status }, reason);
+      }
+      if (patch.dueDate !== undefined && patch.dueDate !== before.dueDate) log(item.id, `${item.type}.due_changed`, { from: before.dueDate, to: patch.dueDate, reasonCategory: mutation.reasonCategory }, reason);
+      if (patch.estimateHours !== undefined && patch.estimateHours !== before.estimateHours) log(item.id, 'task.estimate_revised', { from: before.estimateHours, to: patch.estimateHours }, reason);
+      const changed = (Object.keys(patch) as (keyof WorkItem)[]).filter(key => !['status', 'dueDate', 'estimateHours', 'blocker'].includes(key) && patch[key] !== before[key]);
+      if (changed.length) log(item.id, `${item.type}.updated`, { changes: changed }, reason);
+      break;
+    }
+    case 'createMember':
+      next.members.push({ id, name: mutation.name, email: mutation.email, role: mutation.role, capacity: mutation.capacity, isActive: true, image: null, microsoftObjectId: mutation.microsoftObjectId });
+      break;
+    case 'updateMember': {
+      const found = next.members.find(m => m.id === mutation.id);
+      if (found) Object.assign(found, mutation.patch);
+      break;
+    }
+    case 'createProject':
+      next.projects.push({ id, name: mutation.name, color: mutation.color, description: mutation.description, isArchived: false, memberIds: mutation.memberIds, isAdhoc: false });
+      mutation.phases.forEach((phase, position) => next.phases.push({ id: crypto.randomUUID(), projectId: id, name: phase.name, description: phase.description, position }));
+      break;
+    case 'updateProject': {
+      const found = next.projects.find(p => p.id === mutation.id);
+      if (found) Object.assign(found, mutation.patch);
+      break;
+    }
+    case 'createPhase':
+      next.phases.push({ id, projectId: mutation.projectId, name: mutation.name, description: mutation.description, position: next.phases.filter(phase => phase.projectId === mutation.projectId).length });
+      break;
+    case 'updatePhase': {
+      const phase = next.phases.find(p => p.id === mutation.id);
+      if (phase && mutation.name !== undefined) phase.name = mutation.name;
+      if (phase && mutation.description !== undefined) phase.description = mutation.description;
+      break;
+    }
+    case 'saveSettings':
+      next.settings = mutation.settings;
+      break;
+    case 'addLeave': {
+      const taken = new Set(next.leaves.filter(l => l.userId === mutation.userId).map(l => l.date));
+      const days = leaveDays(next, mutation.date, mutation.endDate ?? mutation.date).filter(date => !taken.has(date));
+      if (!days.length) throw new Error('Leave is already recorded for these days.');
+      days.forEach(date => next.leaves.push({ id: crypto.randomUUID(), userId: mutation.userId, date, type: mutation.type, note: mutation.note }));
+      break;
+    }
+    case 'addHoliday':
+      next.holidays.push({ id, date: mutation.date, name: mutation.name });
+      break;
+    case 'deleteLeave':
+      next.leaves = next.leaves.filter(l => !mutation.ids.includes(l.id));
+      break;
+    case 'deleteHoliday':
+      next.holidays = next.holidays.filter(h => h.id !== mutation.id);
+      break;
+  }
+  return next;
+}
+
+/** The demo shows what one developer would see, using the same filters as the server. */
+export function viewAs(data: DashboardData, viewerId: string | null): DashboardData {
+  const viewer = viewerId ? data.members.find(m => m.id === viewerId && m.isActive) : undefined;
+  if (!viewer || viewer.id === data.currentUser.id) return data;
+  if (viewer.role === 'admin') return { ...data, currentUser: viewer };
+  const items = data.items.filter(item => item.assigneeId === viewer.id);
+  const itemIds = new Set(items.map(item => item.id));
+  const history = new Set(items.map(item => item.projectId));
+  const projects = data.projects.filter(p => isAdhocProject(p) || p.memberIds.includes(viewer.id) || history.has(p.id));
+  const projectIds = new Set(projects.map(p => p.id));
+  return {
+    ...data, currentUser: viewer, members: [viewer], items, projects,
+    phases: data.phases.filter(phase => projectIds.has(phase.projectId)),
+    activities: data.activities.filter(a => itemIds.has(a.entityId)),
+    leaves: data.leaves.filter(l => l.userId === viewer.id),
+  };
+}
+
+export const DEMO_DATA_KEY = 'urban-gabru-kpi-demo-v3';
+const DEMO_VIEWER_KEY = 'urban-gabru-kpi-demo-viewer';
+let demoCacheText: string | null = null;
+let demoCacheData: DashboardData | null = null;
+export function demoSnapshot(initialData: DashboardData) {
+  if (initialData.mode !== 'demo') return initialData;
+  let value: string | null = null;
+  try { value = localStorage.getItem(DEMO_DATA_KEY); } catch { return initialData; }
+  if (!value) return initialData;
+  if (value !== demoCacheText) {
+    demoCacheText = value;
+    try { demoCacheData = JSON.parse(value) as DashboardData; } catch { demoCacheData = null; }
+  }
+  const valid = demoCacheData?.mode === 'demo' && demoCacheData.currentUser.id === initialData.currentUser.id
+    && Array.isArray(demoCacheData.phases) && demoCacheData.phases.every(phase => typeof phase.description === 'string')
+    && demoCacheData.projects.every(p => Array.isArray(p.memberIds) && typeof p.isAdhoc === 'boolean');
+  return valid ? demoCacheData! : initialData;
+}
+export function saveDemo(data: DashboardData) {
+  localStorage.setItem(DEMO_DATA_KEY, JSON.stringify(data));
+  window.dispatchEvent(new Event('ug-demo-change'));
+}
+export function demoViewer(): string | null {
+  try { return localStorage.getItem(DEMO_VIEWER_KEY); } catch { return null; }
+}
+export function setDemoViewer(id: string | null) {
+  try { if (id) localStorage.setItem(DEMO_VIEWER_KEY, id); else localStorage.removeItem(DEMO_VIEWER_KEY); } catch { /* The demo still works without storage. */ }
+  window.dispatchEvent(new Event('ug-demo-change'));
+}
+export function subscribeDemo(callback: () => void) {
+  window.addEventListener('storage', callback);
+  window.addEventListener('ug-demo-change', callback);
+  return () => { window.removeEventListener('storage', callback); window.removeEventListener('ug-demo-change', callback); };
+}

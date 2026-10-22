@@ -15,7 +15,9 @@ const description = z.string().trim().max(20_000);
 const memberIds = z.array(z.string().min(1).max(200)).max(250).refine((ids) => new Set(ids).size === ids.length, "Project members must be unique.");
 const phaseName = z.string().trim().min(1, "Enter a phase name.").max(100)
   .refine((name) => name.replace(/\s+/g, " ").toLowerCase() !== "ad hoc", "Ad hoc is the built-in option for work without a phase.");
-const phaseNames = z.array(phaseName).max(50).refine((names) => new Set(names.map((name) => name.toLowerCase())).size === names.length, "Phase names must be unique within a project.");
+const phaseDescription = z.string().trim().max(2000);
+const phases = z.array(z.object({ name: phaseName, description: phaseDescription.optional() }).strict()).max(50)
+  .refine((list) => new Set(list.map((phase) => phase.name.toLowerCase())).size === list.length, "Phase names must be unique within a project.");
 const itemFields = {
   title: shortText, description: description.optional(), projectId: uuid.optional(), phaseId: uuid.nullable().optional(), assigneeId: z.string().min(1),
   priority: priority.optional(), severity: severity.optional(), estimateHours: z.number().min(0).max(80).multipleOf(0.01).optional(),
@@ -43,14 +45,16 @@ export const actionSchema = z.discriminatedUnion("action", [
   }).partial().strict(), reason: z.string().trim().max(2000).optional(), reasonCategory: z.enum(["scope_change", "blocked_dependency", "underestimated", "other"]).optional() }).strict(),
   z.object({ action: z.literal("createMember"), name: shortText, email: z.email(), microsoftObjectId: uuid, role: role.optional(), capacity: capacity.optional() }).strict(),
   z.object({ action: z.literal("updateMember"), id: z.string().min(1), patch: z.object({ name: shortText.optional(), capacity: capacity.optional(), isActive: z.boolean().optional(), role: role.optional(), microsoftObjectId: uuid.optional() }).strict() }).strict(),
-  z.object({ action: z.literal("createProject"), name: shortText, color: color.optional(), description: description.optional(), memberIds: memberIds.default([]), phaseNames: phaseNames.default([]) }).strict(),
+  z.object({ action: z.literal("createProject"), name: shortText, color: color.optional(), description: description.optional(), memberIds: memberIds.default([]), phases: phases.default([]) }).strict(),
   z.object({ action: z.literal("updateProject"), id: uuid, patch: z.object({ name: shortText.optional(), color: color.optional(), description: description.optional(), isArchived: z.boolean().optional(), memberIds: memberIds.optional() }).strict() }).strict(),
-  z.object({ action: z.literal("createPhase"), projectId: uuid, name: phaseName }).strict(),
-  z.object({ action: z.literal("updatePhase"), id: uuid, name: phaseName }).strict(),
+  z.object({ action: z.literal("createPhase"), projectId: uuid, name: phaseName, description: phaseDescription.optional() }).strict(),
+  z.object({ action: z.literal("updatePhase"), id: uuid, name: phaseName.optional(), description: phaseDescription.optional() }).strict(),
   z.object({ action: z.literal("saveSettings"), settings: settingsSchema }).strict(),
-  z.object({ action: z.literal("addLeave"), userId: z.string().min(1), date, type: z.enum(["full_day", "half_day"]), note: z.string().trim().max(2000).optional() }).strict(),
+  z.object({ action: z.literal("addLeave"), userId: z.string().min(1), date, endDate: date.optional(), type: z.enum(["full_day", "half_day"]), note: z.string().trim().max(2000).optional() }).strict()
+    .refine((leave) => !leave.endDate || leave.endDate >= leave.date, "The last day of leave must be on or after the first day.")
+    .refine((leave) => !leave.endDate || leave.endDate === leave.date || leave.type === "full_day", "A half day covers one date only."),
   z.object({ action: z.literal("addHoliday"), date, name: shortText }).strict(),
-  z.object({ action: z.literal("deleteLeave"), id: uuid }).strict(),
+  z.object({ action: z.literal("deleteLeave"), ids: z.array(uuid).min(1).max(62) }).strict(),
   z.object({ action: z.literal("deleteHoliday"), id: uuid }).strict(),
 ]);
 export type DataAction = z.infer<typeof actionSchema>;

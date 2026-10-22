@@ -7,7 +7,7 @@ import { requireAdmin } from "./authz";
 import { AppError } from "./errors";
 import type { DataAction } from "./validation";
 import { DEFAULT_SETTINGS } from "./default-settings";
-import { workingHoursBetween } from "@/lib/kpi/calendar";
+import { isWorkingDay, shiftDate, workingHoursBetween } from "@/lib/kpi/calendar";
 import { linkMicrosoftAccount } from "./microsoft-accounts";
 import { ADHOC_PROJECT_ID } from "@/lib/project-defaults";
 
@@ -18,6 +18,20 @@ function audit(tx: Tx, actor: Member, entityId: string, action: string, payload:
 }
 function requireReason(reason?: string) {
   if (!reason || reason.trim().length < 3) throw new AppError("Add a short reason for this change.");
+}
+/** One leave row per working day. Weekends and holidays are skipped because they already cost no hours. */
+async function leaveDates(tx: Tx, first: string, last: string) {
+  const [saved] = await tx.select().from(settings).where(eq(settings.id, 1));
+  const config = saved?.value ?? DEFAULT_SETTINGS;
+  const holidayRows = await tx.select({ date: holidays.date }).from(holidays);
+  const calendar = { timezone: config.timezone, workingDays: config.workingDays, workdayStart: config.workdayStart, workdayEnd: config.workdayEnd, holidays: new Set(holidayRows.map((row) => row.date)) };
+  const dates: string[] = [];
+  for (let date = first, days = 0; date <= last; date = shiftDate(date, 1, config.timezone), days++) {
+    if (days >= 62) throw new AppError("Record up to two months of leave at a time.");
+    if (first === last || isWorkingDay(date, calendar)) dates.push(date);
+  }
+  if (!dates.length) throw new AppError("These dates are weekends or holidays. No leave is needed.");
+  return dates;
 }
 async function assertAssignee(tx: Tx, id: string) {
   const [member] = await tx.select({ id: user.id, banned: user.banned, isActive: memberProfiles.isActive }).from(user)
@@ -110,8 +124,13 @@ function statusChange(item: ItemRow, next: string, actor: Member, reason?: strin
   };
 }
 
+/** Fields a ticket's owner may change. Estimates, owners, and projects stay with the admin because they change the score. */
+const OWNER_FIELDS = new Set(["status", "blocker", "dueDate", "title", "description", "priority"]);
+
 export async function executeAction(actor: Member, action: DataAction): Promise<void> {
-  if (action.action !== "updateItem") requireAdmin(actor);
+  const developerTicket = action.action === "createItem" && action.type === "task";
+  if (action.action !== "updateItem" && !developerTicket) requireAdmin(actor);
+  if (action.action === "createItem" && actor.role !== "admin" && action.assigneeId !== actor.id) throw new AppError("Developers can add tickets for themselves only.", 403);
   await db.transaction(async (tx) => {
     switch (action.action) {
       case "createItem": {
@@ -143,7 +162,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         const [item] = await tx.select().from(workItems).where(eq(workItems.id, action.id)).for("update");
         if (!item || actor.role !== "admin" && item.assigneeId !== actor.id) throw new AppError("This item was not found.", 404);
         const patch = { ...action.patch };
-        if (actor.role !== "admin" && Object.keys(patch).some((key) => key !== "status" && key !== "blocker")) requireAdmin(actor);
+        if (actor.role !== "admin" && Object.keys(patch).some((key) => !OWNER_FIELDS.has(key))) requireAdmin(actor);
         if (item.type === "task" && patch.taskId) throw new AppError("Only a bug can link to a task.");
         const projectId = patch.projectId ?? item.projectId;
         const assigneeId = patch.assigneeId ?? item.assigneeId;
@@ -177,7 +196,12 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
           requireReason(action.reason);
           if (action.reasonCategory && action.reasonCategory !== "scope_change") throw new AppError("Estimate revisions need a scope change reason.");
         }
-        if (patch.dueDate !== undefined && patch.dueDate !== item.dueDate) requireReason(action.reason);
+        if (patch.dueDate !== undefined && patch.dueDate !== item.dueDate) {
+          if (item.type === "bug") throw new AppError("Bugs use their fix-by time instead of a due date.");
+          if (item.status === "done") throw new AppError("Reopen this ticket before changing its due date.");
+          // Setting the first due date is planning. Moving an existing one is an extension and needs a reason.
+          if (item.dueDate) requireReason(action.reason);
+        }
         if (item.status === "done" && patch.status !== "in_progress" && Object.keys(patch).some((key) => ["estimateHours", "assigneeId", "projectId", "phaseId"].includes(key))) throw new AppError("Reopen this task before changing its estimate, owner, project, or phase.");
         const transition = patch.status ? statusChange(item, patch.status, actor, action.reason) : {};
         const nextStatus = patch.status ?? item.status;
@@ -259,8 +283,8 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         await assertProjectMembers(tx, action.memberIds);
         const [project] = await tx.insert(projects).values({ name: action.name, description: action.description ?? "", color: action.color ?? "#2563eb" }).returning();
         if (action.memberIds.length) await tx.insert(projectMembers).values(action.memberIds.map((userId) => ({ projectId: project.id, userId })));
-        if (action.phaseNames.length) await tx.insert(projectPhases).values(action.phaseNames.map((name, position) => ({ projectId: project.id, name, position })));
-        await audit(tx, actor, project.id, "project.created", { name: project.name, memberIds: action.memberIds, phaseNames: action.phaseNames }); break;
+        if (action.phases.length) await tx.insert(projectPhases).values(action.phases.map((phase, position) => ({ projectId: project.id, name: phase.name, description: phase.description ?? "", position })));
+        await audit(tx, actor, project.id, "project.created", { name: project.name, memberIds: action.memberIds, phaseNames: action.phases.map((phase) => phase.name) }); break;
       }
       case "updateProject": {
         const [project] = await tx.select().from(projects).where(eq(projects.id, action.id)).for("update");
@@ -279,7 +303,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         if (project.isArchived) throw new AppError("Restore this project before adding a phase.");
         const [last] = await tx.select({ position: projectPhases.position }).from(projectPhases)
           .where(eq(projectPhases.projectId, project.id)).orderBy(sql`${projectPhases.position} DESC`).limit(1);
-        const [phase] = await tx.insert(projectPhases).values({ projectId: project.id, name: action.name, position: (last?.position ?? -1) + 1 }).returning();
+        const [phase] = await tx.insert(projectPhases).values({ projectId: project.id, name: action.name, description: action.description ?? "", position: (last?.position ?? -1) + 1 }).returning();
         await audit(tx, actor, project.id, "phase.created", { phaseId: phase.id, name: phase.name, position: phase.position }); break;
       }
       case "updatePhase": {
@@ -289,8 +313,9 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         if (!project) throw new AppError("This project was not found.", 404);
         protectAdhoc(project);
         if (project.isArchived) throw new AppError("Restore this project before changing a phase.");
-        await tx.update(projectPhases).set({ name: action.name }).where(eq(projectPhases.id, phase.id));
-        await audit(tx, actor, project.id, "phase.updated", { phaseId: phase.id, from: phase.name, to: action.name }); break;
+        if (action.name === undefined && action.description === undefined) break;
+        await tx.update(projectPhases).set({ ...(action.name !== undefined ? { name: action.name } : {}), ...(action.description !== undefined ? { description: action.description } : {}) }).where(eq(projectPhases.id, phase.id));
+        await audit(tx, actor, project.id, "phase.updated", { phaseId: phase.id, from: phase.name, to: action.name ?? phase.name, ...(action.description !== undefined ? { description: action.description } : {}) }); break;
       }
       case "saveSettings": {
         await tx.insert(settings).values({ id: 1, value: action.settings }).onConflictDoUpdate({ target: settings.id, set: { value: action.settings, updatedAt: new Date() } });
@@ -298,17 +323,22 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
       }
       case "addLeave": {
         await assertAssignee(tx, action.userId);
-        const [leave] = await tx.insert(leaves).values({ userId: action.userId, date: action.date, type: action.type, note: action.note ?? "" }).returning();
-        await audit(tx, actor, leave.id, "leave.added", { userId: action.userId, date: action.date, type: action.type }); break;
+        const dates = await leaveDates(tx, action.date, action.endDate ?? action.date);
+        const saved = await tx.insert(leaves).values(dates.map((date) => ({ userId: action.userId, date, type: action.type, note: action.note ?? "" })))
+          .onConflictDoNothing({ target: [leaves.userId, leaves.date] }).returning();
+        if (!saved.length) throw new AppError("Leave is already recorded for these days.");
+        for (const leave of saved) await audit(tx, actor, leave.id, "leave.added", { userId: action.userId, date: leave.date, type: action.type });
+        break;
       }
       case "addHoliday": {
         const [holiday] = await tx.insert(holidays).values({ date: action.date, name: action.name }).returning();
         await audit(tx, actor, holiday.id, "holiday.added", { date: action.date, name: action.name }); break;
       }
       case "deleteLeave": {
-        const [leave] = await tx.delete(leaves).where(eq(leaves.id, action.id)).returning();
-        if (!leave) throw new AppError("This leave was not found.", 404);
-        await audit(tx, actor, action.id, "leave.removed", { date: leave.date, userId: leave.userId }); break;
+        const removed = await tx.delete(leaves).where(inArray(leaves.id, action.ids)).returning();
+        if (removed.length !== new Set(action.ids).size) throw new AppError("This leave was not found.", 404);
+        for (const leave of removed) await audit(tx, actor, leave.id, "leave.removed", { date: leave.date, userId: leave.userId });
+        break;
       }
       case "deleteHoliday": {
         const [holiday] = await tx.delete(holidays).where(eq(holidays.id, action.id)).returning();
