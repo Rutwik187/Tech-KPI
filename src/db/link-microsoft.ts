@@ -15,7 +15,7 @@ async function main() {
     });
     await db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(7201201)`);
-      // The operator selects an existing local admin. OAuth never binds privileged roles by email.
+      // The operator selects an existing local admin. Sign-in links only members an admin added, by their Microsoft sign-in name.
       const [admin] = await tx.select().from(user).where(and(eq(user.email, input.email.toLowerCase()), eq(user.role, "admin"))).for("update");
       if (!admin || admin.banned) throw new Error("An active admin profile with that email is required. Run setup:admin first.");
       const linked = await linkMicrosoftAccount(tx, admin.id, input.objectId);

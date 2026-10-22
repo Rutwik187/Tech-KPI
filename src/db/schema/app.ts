@@ -17,11 +17,20 @@ export const projects = pgTable("tech_kpi_project", {
   color: text("color").notNull().default("#2563eb"), description: text("description").notNull().default(""),
   isAdhoc: boolean("is_adhoc").notNull().default(false),
   isArchived: boolean("is_archived").notNull().default(false), createdAt: stamp("created_at").defaultNow().notNull(),
-}, (t) => [check("tech_kpi_project_adhoc_reserved", sql`(${t.id} = ${adhocProjectId} AND ${t.isAdhoc} = true AND ${t.name} = 'Ad hoc' AND ${t.isArchived} = false) OR (${t.id} <> ${adhocProjectId} AND ${t.isAdhoc} = false AND lower(${t.name}) <> 'ad hoc')`)]);
+  startDate: date("start_date", { mode: "string" }), targetDate: date("target_date", { mode: "string" }),
+  originalTargetDate: date("original_target_date", { mode: "string" }),
+}, (t) => [
+  check("tech_kpi_project_adhoc_reserved", sql`(${t.id} = ${adhocProjectId} AND ${t.isAdhoc} = true AND ${t.name} = 'Ad hoc' AND ${t.isArchived} = false) OR (${t.id} <> ${adhocProjectId} AND ${t.isAdhoc} = false AND lower(${t.name}) <> 'ad hoc')`),
+  check("tech_kpi_project_adhoc_no_timeline", sql`${t.id} <> ${adhocProjectId} OR (${t.startDate} IS NULL AND ${t.targetDate} IS NULL AND ${t.originalTargetDate} IS NULL)`),
+  check("tech_kpi_project_timeline_order", sql`${t.startDate} IS NULL OR ${t.targetDate} IS NULL OR ${t.targetDate} >= ${t.startDate}`),
+]);
 export const projectMembers = pgTable("tech_kpi_project_member", {
   projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
-}, (t) => [primaryKey({ columns: [t.projectId, t.userId] }), index("tech_kpi_project_member_user_idx").on(t.userId), check("tech_kpi_project_member_not_adhoc", sql`${t.projectId} <> ${adhocProjectId}`)]);
+  // The primary developer leads the project. Every other member is a secondary developer.
+  isPrimary: boolean("is_primary").notNull().default(false),
+}, (t) => [primaryKey({ columns: [t.projectId, t.userId] }), index("tech_kpi_project_member_user_idx").on(t.userId), check("tech_kpi_project_member_not_adhoc", sql`${t.projectId} <> ${adhocProjectId}`),
+  uniqueIndex("tech_kpi_project_member_one_primary").on(t.projectId).where(sql`${t.isPrimary}`)]);
 export const projectPhases = pgTable("tech_kpi_project_phase", {
   id: uuid("id").defaultRandom().primaryKey(),
   projectId: uuid("project_id").notNull().references(() => projects.id),

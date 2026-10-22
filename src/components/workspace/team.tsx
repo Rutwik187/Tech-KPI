@@ -26,6 +26,8 @@ export function Team({ data, week, onEdit, onLeave, mutate, onOpen }: TeamProps)
   const shown = data.members.filter(m => `${m.name} ${m.email}`.toLowerCase().includes(search.trim().toLowerCase()))
     .sort((a, b) => Number(b.isActive) - Number(a.isActive) || Number(b.role === 'admin') - Number(a.role === 'admin') || a.name.localeCompare(b.name));
   const developers = data.members.filter(m => m.isActive && m.role === 'developer');
+  // Only admins receive Microsoft IDs, and the demo has none, so only a live admin can tell who has not signed in.
+  const invited = (m: Member) => data.mode === 'live' && data.currentUser.role === 'admin' && !m.microsoftObjectId;
   const awayThisWeek = new Set(data.leaves.filter(l => l.date >= week && l.date <= weekEnd).map(l => l.userId));
   const groups = groupLeaves(data, data.leaves);
   const upcoming = groups.filter(g => g.end >= day).sort((a, b) => a.start.localeCompare(b.start));
@@ -50,7 +52,7 @@ export function Team({ data, week, onEdit, onLeave, mutate, onOpen }: TeamProps)
           const leaveDays = data.leaves.filter(l => l.userId === m.id && l.date >= week && l.date <= weekEnd).reduce((sum, l) => sum + (l.type === 'half_day' ? .5 : 1), 0);
           return <TableRow key={m.id} className={m.isActive ? '' : 'inactive-row'}>
             <TableCell><Button variant="ghost" className="person-cell person-button" onClick={() => setSelectedId(m.id)}><Avatar member={m} /><span className="person-text"><strong>{m.name}</strong><span>{m.email}</span></span></Button></TableCell>
-            <TableCell><div className="role-cell"><Badge variant="outline" className={clsx('role-tag', m.role === 'admin' && 'role-admin')}>{m.role === 'admin' ? <ShieldCheck size={12} /> : <UserRound size={12} />}{m.role === 'admin' ? 'Admin' : 'Developer'}</Badge>{!m.isActive && <Badge variant="outline" className="access-tag access-inactive"><i />Inactive</Badge>}</div></TableCell>
+            <TableCell><div className="role-cell"><Badge variant="outline" className={clsx('role-tag', m.role === 'admin' && 'role-admin')}>{m.role === 'admin' ? <ShieldCheck size={12} /> : <UserRound size={12} />}{m.role === 'admin' ? 'Admin' : 'Developer'}</Badge>{!m.isActive && <Badge variant="outline" className="access-tag access-inactive"><i />Inactive</Badge>}{m.isActive && invited(m) && <Badge variant="outline" className="access-tag access-invited" title="Added by email. Their Microsoft account links on first sign-in."><i />Not signed in yet</Badge>}</div></TableCell>
             <TableCell><strong className="number-cell">{hours(score.weekCapacityHours)} of {m.capacity} h</strong><span className="cell-subtext">{leaveDays ? `${leaveDays} day${leaveDays === 1 ? '' : 's'} leave this week` : 'No leave this week'}</span></TableCell>
             <TableCell><span className="number-cell">{score.openTasks} tickets · {score.openBugs} bugs</span></TableCell>
             <TableCell><ScoreBadge score={score.efficiency} band={score.band} /></TableCell>

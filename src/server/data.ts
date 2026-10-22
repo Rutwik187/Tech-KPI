@@ -12,7 +12,7 @@ export function serializeItem(item: typeof workItems.$inferSelect): WorkItem {
     id: item.id, key: `${item.type === "bug" ? "BUG" : "UG"}-${String(item.sequence).padStart(3, "0")}`,
     type: item.type, title: item.title, description: item.description,
     projectId: item.projectId, phaseId: item.phaseId, assigneeId: item.assigneeId, status: item.status, priority: item.priority,
-    severity: item.severity, estimateHours: item.estimateHours, dueDate: item.dueDate,
+    severity: item.severity, estimateHours: item.estimateHours, dueDate: item.dueDate, originalDueDate: item.originalDueDate,
     createdAt: item.createdAt.toISOString(), updatedAt: item.updatedAt.toISOString(),
     startedAt: item.startedAt?.toISOString() ?? null, completedAt: item.completedAt?.toISOString() ?? null,
     fixedAt: item.fixedAt?.toISOString() ?? null, reportedAt: item.reportedAt.toISOString(),
@@ -62,9 +62,17 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
       if (bugIds.length) snapshotRows.push({ userId: "allocation", weekStart: allocation.weekStart, value: { scoredBugIds: bugIds } });
     }
   }
+  const assignedProjects = new Set(membershipRows.filter((row) => row.userId === currentUser.id).map((row) => row.projectId));
+  const historicalProjects = new Set(itemRows.map((item) => item.projectId));
+  const visibleProjects = projectRows.filter((project) => isAdmin || project.id === ADHOC_PROJECT_ID || assignedProjects.has(project.id) || historicalProjects.has(project.id));
+  const visibleProjectIds = new Set(visibleProjects.map((project) => project.id));
+  // Developers see their own work's history and why their projects' targets moved, nothing else.
   const activityRows = isAdmin
     ? await db.select().from(activities).orderBy(desc(activities.createdAt))
-    : itemIds.length ? await db.select().from(activities).where(inArray(activities.entityId, itemIds)).orderBy(desc(activities.createdAt)) : [];
+    : await db.select().from(activities).where(or(
+      itemIds.length ? inArray(activities.entityId, itemIds) : undefined,
+      and(inArray(activities.entityId, [...visibleProjectIds]), eq(activities.action, "project.target_changed")),
+    )).orderBy(desc(activities.createdAt));
   const appSettings = settingRows[0]?.value ?? DEFAULT_SETTINGS;
   const members: Member[] = identities.map(({ identity, profile, microsoftObjectId }) => ({
     id: identity.id, name: identity.name, email: identity.email,
@@ -74,13 +82,12 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
     joinedOn: profile?.joinedOn,
     ...(isAdmin && microsoftObjectId ? { microsoftObjectId } : {}),
   }));
-  const assignedProjects = new Set(membershipRows.filter((row) => row.userId === currentUser.id).map((row) => row.projectId));
-  const historicalProjects = new Set(itemRows.map((item) => item.projectId));
-  const visibleProjects = projectRows.filter((project) => isAdmin || project.id === ADHOC_PROJECT_ID || assignedProjects.has(project.id) || historicalProjects.has(project.id));
-  const visibleProjectIds = new Set(visibleProjects.map((project) => project.id));
   return {
     currentUser: members.find((member) => member.id === currentUser.id) ?? currentUser, members,
-    projects: visibleProjects.map((project) => ({ ...project, memberIds: membershipRows.filter((row) => row.projectId === project.id).map((row) => row.userId) })),
+    projects: visibleProjects.map((project) => {
+      const rows = membershipRows.filter((row) => row.projectId === project.id);
+      return { ...project, memberIds: rows.map((row) => row.userId), primaryMemberId: rows.find((row) => row.isPrimary)?.userId ?? null };
+    }),
     phases: phaseRows.filter((phase) => visibleProjectIds.has(phase.projectId)),
     items: itemRows.map(serializeItem), activities: activityRows.map((activity) => ({ ...activity, createdAt: activity.createdAt.toISOString() })),
     leaves: leaveRows, holidays: holidayRows, settings: appSettings, mode: "live", snapshots: snapshotRows,

@@ -9,16 +9,23 @@ import { Avatar, FormField, FormSelect, Panel, ProgressBar, StatusBadge } from '
 import { Button } from '@/components/ui/button';
 import { FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { displayDate, hours, isDone, projectMembers, projectPhases, selectableProjects, type MutationFn, type OnAction, type WorkClassification } from './lib';
+import { displayDate, hours, isDone, ownerChoices, projectPhases, selectableProjects, withOwner, withProject, type MutationFn, type OnAction, type PickedByHand, type WorkClassification } from './lib';
 import { ItemActions, ScoreBadge } from './parts';
 
 export function Standup({ data, week, onOpen, onAction, onAdd, mutate, busy }: { data: DashboardData; week: string; onOpen: (id: string) => void; onAction: OnAction; onAdd: (kind: 'task' | 'bug', assigneeId?: string) => void; mutate: MutationFn; busy: boolean }) {
   const [title, setTitle] = useState('');
   const people = data.members.filter(m => m.isActive);
   const [classification, setClassification] = useState<WorkClassification>({ projectId: ADHOC_PROJECT_ID, phaseId: null, assigneeId: people.find(m => m.role === 'developer')?.id ?? data.currentUser.id });
+  const [picked, setPicked] = useState<PickedByHand>({ project: false, owner: false });
   function chooseProject(projectId: string) {
-    const members = projectMembers(data, projectId);
-    setClassification({ projectId, phaseId: null, assigneeId: members.some(m => m.id === classification.assigneeId) ? classification.assigneeId : members[0]?.id ?? '' });
+    const next = { ...picked, project: true };
+    setPicked(next);
+    setClassification(withProject(data, classification, projectId, next));
+  }
+  function chooseOwner(assigneeId: string) {
+    const next = { ...picked, owner: true };
+    setPicked(next);
+    setClassification(withOwner(data, classification, assigneeId, next));
   }
   async function add(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -30,7 +37,7 @@ export function Standup({ data, week, onOpen, onAction, onAdd, mutate, busy }: {
   return <>
     <Panel title="Quick add a ticket" action={<span className="keyboard-hint"><CornerDownLeft size={13} />Press Enter to add</span>}>
       <form className="standup-form" onSubmit={add}><FieldGroup className="standup-quick-form standup-with-phases">
-        <FormField>Owner<FormSelect name="assigneeId" required value={classification.assigneeId} onValueChange={assigneeId => setClassification({ ...classification, assigneeId })}><option value="" disabled>Choose an owner</option>{projectMembers(data, classification.projectId).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</FormSelect></FormField>
+        <FormField>Owner<FormSelect name="assigneeId" required value={classification.assigneeId} onValueChange={chooseOwner}><option value="" disabled>Choose an owner</option>{ownerChoices(data, classification.projectId, picked.project).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</FormSelect></FormField>
         <FormField className="standup-title-field">Ticket title<Input name="title" required minLength={3} maxLength={200} placeholder="What needs to be done?" value={title} onChange={event => setTitle(event.target.value)} autoComplete="off" /></FormField>
         <FormField>Project<FormSelect name="projectId" required value={classification.projectId} onValueChange={chooseProject}>{selectableProjects(data).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect></FormField>
         <FormField>Phase<FormSelect value={classification.phaseId ?? ''} disabled={classification.projectId === ADHOC_PROJECT_ID} onValueChange={phaseId => setClassification({ ...classification, phaseId: phaseId || null })}><option value="">Ad hoc</option>{projectPhases(data, classification.projectId).map(phase => <option key={phase.id} value={phase.id}>{phase.name}</option>)}</FormSelect></FormField>
