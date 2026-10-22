@@ -7,7 +7,7 @@ import { Activity as ActivityIcon, Bug, CalendarClock, CalendarPlus, Check, Chev
 import type { DashboardData, Leave, Member, Phase, Project, WorkItem } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
 import { addWorkingHours, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
-import { Avatar, FormCheckbox, FormField, FormSelect, Modal } from '@/components/ui';
+import { Avatar, FormCheckbox, FormDate, FormField, FormSelect, Modal } from '@/components/ui';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -59,13 +59,12 @@ export function ClassificationFields({ data, value, onChange, lockProjectPhase =
     onChange(withOwner(data, value, assigneeId, { ...next, project: projectPicked }));
   }
   return <FieldGroup className="form-grid classification-fields">
-    <FormField>Project<FormSelect required value={value.projectId} disabled={lockProjectPhase} onValueChange={chooseProject}>{selectableProjects(data, retained?.projectId).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect>
-      {currentProject && !isAdhocProject(currentProject) && currentProject.description && <span className="field-help">{currentProject.description}</span>}</FormField>
+    <FormField>Project<FormSelect required value={value.projectId} disabled={lockProjectPhase} onValueChange={chooseProject}>{selectableProjects(data, retained?.projectId).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect></FormField>
     <FormField>Phase<FormSelect value={value.phaseId ?? ''} disabled={lockProjectPhase || isAdhocProject(currentProject)} onValueChange={phaseId => onChange({ ...value, phaseId: phaseId || null })}><option value="">Ad hoc</option>{phases.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect>
-      <span className="field-help">{phase?.description || (isAdhocProject(currentProject) ? 'Ad hoc work has no phases.' : 'Use Ad hoc for work outside a named phase.')}</span></FormField>
+      {phase?.description && <span className="field-help">{phase.description}</span>}</FormField>
     {admin
       ? <FormField className="classification-owner">Owner<FormSelect required value={value.assigneeId} onValueChange={chooseOwner}><option value="" disabled>Choose an owner</option>{owners.map(m => <option key={m.id} value={m.id}>{m.name}{!m.isActive ? ' · Inactive' : ''}</option>)}</FormSelect>
-          <span className="field-help">{ownerIsPrimary ? `Primary developer on ${currentProject!.name}.` : !projectPicked ? 'Pick anyone. Their main project is filled in until you choose one.' : isAdhocProject(currentProject) ? 'Anyone active can own Ad hoc work.' : owners.length ? 'Only this project’s members can own its work.' : 'This project has no members yet. Add members, or choose Ad hoc.'}</span></FormField>
+          {ownerIsPrimary ? <span className="field-help">Primary developer on {currentProject!.name}.</span> : projectPicked && !isAdhocProject(currentProject) && !owners.length ? <span className="field-help">No members yet. Add some, or choose Ad hoc.</span> : null}</FormField>
       : <div className="classification-owner fixed-owner"><span className="fixed-owner-label">Owner</span><span className="fixed-owner-value"><Avatar member={data.currentUser} size="small" />You</span></div>}
   </FieldGroup>;
 }
@@ -111,8 +110,8 @@ export function ItemForm({ data, kind: initialKind, assigneeId, mutate, onClose,
         <ClassificationFields data={data} value={classification} onChange={setClassification} lockProjectPhase={kind === 'bug' && !!taskId} ownerPicked={ownerKnown} />
         <FieldGroup className="form-grid">
           {kind === 'task'
-            ? <><FormField>Estimate <span className="optional">hours</span><Input type="number" name="estimateHours" min={.5} max={80} step={.5} defaultValue={4} required /><span className="field-help">The hours this ticket earns when approved. Include testing and fixes.</span></FormField>
-                <FormField>Due date <span className="optional">optional</span><Input type="date" name="dueDate" min={today(data.settings.timezone)} /><span className="field-help">You can extend it later with a reason.</span></FormField></>
+            ? <><FormField>Estimate <span className="optional">hours</span><Input type="number" name="estimateHours" min={.5} max={80} step={.5} defaultValue={4} required /></FormField>
+                <FormField>Due date <span className="optional">optional</span><FormDate name="dueDate" min={today(data.settings.timezone)} placeholder="No due date" /></FormField></>
             : <><FormField>Severity<FormChoice value={severity} onValueChange={value => setSeverity(value as WorkItem['severity'])} options={[{ value: 'normal', label: 'Normal' }, { value: 'critical', label: 'Critical' }]} /><span className="field-help">Target: {target} working hours.</span></FormField>
                 <Alert className="bug-report-note"><Clock3 /><AlertTitle>Fix by {fixBy ? displayDateTime(fixBy) : '—'}</AlertTitle><AlertDescription>On time earns 100 bug points. Up to twice the target earns 50.</AlertDescription></Alert></>}
           <FormField>Priority<FormChoice name="priority" defaultValue="medium" options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }, { value: 'urgent', label: 'Urgent' }]} /></FormField>
@@ -232,11 +231,11 @@ export function ProjectForm({ data, editing, mutate, onClose, onExtend, busy }: 
         <FormField>Project title<Input name="name" required defaultValue={editing?.name} maxLength={100} placeholder="e.g. Inventory management" /></FormField>
         <FormField>Description <span className="optional">optional</span><Textarea name="description" defaultValue={editing?.description} rows={2} placeholder="What is this project for?" /></FormField>
         <FieldGroup className="form-grid">
-          <FormField>Start date <span className="optional">optional</span><Input type="date" value={startDate} max={targetDate || undefined} onChange={event => setStartDate(event.target.value)} /></FormField>
+          <FormField>Start date <span className="optional">optional</span><FormDate value={startDate} max={targetDate || undefined} onValueChange={setStartDate} placeholder="No start date" /></FormField>
           <FormField>Target date <span className="optional">optional</span>{targetLocked
             ? <div className="locked-date"><strong>{displayDate(editing!.targetDate, { weekday: 'short', year: 'numeric' })}</strong><Button type="button" variant="outline" size="sm" onClick={() => onExtend(editing!)}><CalendarClock data-icon="inline-start" />Extend</Button></div>
-            : <Input type="date" value={targetDate} min={startDate || undefined} onChange={event => setTargetDate(event.target.value)} />}
-            <span className="field-help">{targetLocked ? 'Moving the target needs a reason. It goes into the project history.' : 'When the project should be done. You can extend it later with a reason.'}</span></FormField>
+            : <FormDate value={targetDate} min={startDate || undefined} onValueChange={setTargetDate} placeholder="No target date" />}
+            {targetLocked && <span className="field-help">Moving it needs a reason.</span>}</FormField>
         </FieldGroup>
         <FormField>Colour<div className="color-picker"><Input aria-label="Custom project colour" type="color" value={color} onChange={event => setColor(event.target.value)} />
           <ToggleGroup type="single" variant="outline" value={color} onValueChange={value => { if (value) setColor(value); }} aria-label="Project colour presets">{['#448768', '#617eb7', '#9571b6', '#c18c47', '#b86878'].map(preset => <ToggleGroupItem key={preset} value={preset} aria-label={`Select ${preset}`}><span className="size-4 rounded-full" style={{ background: preset }} /></ToggleGroupItem>)}</ToggleGroup></div></FormField>
@@ -299,8 +298,8 @@ export function LeaveForm({ data, userId, mutate, onClose, busy }: { data: Dashb
         <FormField>Team member<FormSelect value={personId} onValueChange={setPersonId} required>{people.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</FormSelect></FormField>
         <FormField>Length<FormChoice value={length} onValueChange={value => setLength(value as LeaveLength)} options={[{ value: 'full_day', label: 'Full day' }, { value: 'half_day', label: 'Half day' }, { value: 'range', label: 'Several days' }]} /></FormField>
         <FieldGroup className="form-grid">
-          <FormField>{length === 'range' ? 'First day' : 'Date'}<Input type="date" required value={start} onChange={event => { setStart(event.target.value); if (event.target.value > end) setEnd(event.target.value); }} /></FormField>
-          {length === 'range' && <FormField>Last day<Input type="date" required value={end} min={start} onChange={event => setEnd(event.target.value)} /></FormField>}
+          <FormField>{length === 'range' ? 'First day' : 'Date'}<FormDate required value={start} onValueChange={next => { setStart(next); if (next > end) setEnd(next); }} /></FormField>
+          {length === 'range' && <FormField>Last day<FormDate required value={end} min={start} onValueChange={setEnd} /></FormField>}
         </FieldGroup>
         <Alert className="form-tip"><CircleHelp size={17} /><AlertDescription><p>{
           fresh.length === 0 ? days.length ? 'Leave is already recorded for these days.' : 'Choose dates to see the effect.'
@@ -324,7 +323,7 @@ export function HolidayForm({ mutate, onClose, busy }: { mutate: MutationFn; onC
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
         <FormField>Holiday name<Input name="name" required placeholder="e.g. Diwali" maxLength={100} /></FormField>
-        <FormField>Date<Input type="date" name="date" required /></FormField>
+        <FormField>Date<FormDate name="date" required /></FormField>
       </FieldGroup>
       <FormFooter busy={busy} onClose={onClose} label="Add holiday" />
     </form>
@@ -355,7 +354,7 @@ export function ReasonForm({ action, data, mutate, onClose, busy }: { action: Qu
       <FieldGroup className="modal-form-body">
         {estimate && <><Alert className="form-tip"><CircleHelp size={17} /><AlertDescription><p>Change the estimate only when the scope changes. If the same work needs more time, extend the due date instead.</p></AlertDescription></Alert>
           <FormField>New estimate <span className="optional">hours</span><Input type="number" name="estimateHours" min={.5} max={80} step={.5} defaultValue={action.item.estimateHours} required /></FormField></>}
-        {firstDue && <FormField>Due date<Input type="date" name="dueDate" required min={day} /><span className="field-help">Setting the first due date needs no reason. Moving it later does.</span></FormField>}
+        {firstDue && <FormField>Due date<FormDate name="dueDate" required min={day} /></FormField>}
         {!firstDue && <FormField>{blocked ? 'What is blocking this ticket?' : 'Reason'}<Textarea name="reason" required minLength={3} rows={3} placeholder={blocked ? 'Name the person or thing you are waiting for.' : 'A short explanation for the team.'} /></FormField>}
         {!firstDue && <div className="form-help"><ActivityIcon size={13} />This reason appears in the ticket timeline.</div>}
       </FieldGroup>

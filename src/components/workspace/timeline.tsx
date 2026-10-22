@@ -5,12 +5,11 @@ import clsx from 'clsx';
 import { AlertTriangle, CalendarClock, CalendarRange, CircleCheck, CircleHelp, Flag, Hourglass, TrendingDown } from 'lucide-react';
 import type { DashboardData } from '@/lib/types';
 import { addDays, daysBetween, extensionHistory, healthLabels, projectTimeline, reasonLabel, ticketExtendedDays, type ProjectTimeline, type TimelineHealth } from '@/lib/timeline';
-import { FormField, Modal } from '@/components/ui';
+import { FormDate, FormField, Modal } from '@/components/ui';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { FieldGroup } from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { displayDate, findMember, findProject, isAdhocProject, today, type ExtendTarget, type MutationFn } from './lib';
@@ -90,7 +89,7 @@ export function ExtendForm({ target, data, mutate, onClose, busy }: { target: Ex
           <div><span>Moved before</span><strong>{moves ? plural(moves, 'time') : 'Never'}</strong></div>
         </div>
         <div className="extend-date-row">
-          <FormField>New {ticket ? 'due date' : 'target date'}<Input type="date" name="date" required value={date} min={addDays(current, 1)} onChange={event => setDate(event.target.value)} /></FormField>
+          <FormField>New {ticket ? 'due date' : 'target date'}<FormDate name="date" required value={date} min={addDays(current, 1)} onValueChange={setDate} /></FormField>
           <div className="extend-quick" role="group" aria-label="Move the date by">{QUICK_SHIFTS.map(option => <Button key={option.days} type="button" size="sm" variant={shift === option.days ? 'secondary' : 'outline'} aria-pressed={shift === option.days} onClick={() => setDate(addDays(current, option.days))}>{option.label}</Button>)}</div>
           <p className="field-help extend-preview" aria-live="polite">{shift > 0 ? <>Moves the date by <strong>{dayCount(shift)}</strong>, from {displayDate(current)} to {displayDate(date, { weekday: 'short' })}.</> : 'Choose a date after the current one.'}</p>
         </div>

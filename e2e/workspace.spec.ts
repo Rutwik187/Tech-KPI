@@ -23,6 +23,20 @@ async function chooseOption(page: Page, trigger: Locator, label: string) {
   await expect(trigger).toHaveText(label);
 }
 
+/** Picks a calendar day (`YYYY-MM-DD`) in a shadcn date picker, moving month by month. */
+async function pickDate(page: Page, trigger: Locator, iso: string) {
+  await trigger.click();
+  const calendar = page.locator('[data-slot="popover-content"][data-state="open"] [data-slot="calendar"]');
+  for (let step = 0; step < 24; step++) {
+    const cell = calendar.locator(`td[data-day="${iso}"]:not([data-outside])`);
+    if (await cell.count()) { await cell.getByRole('button').click(); break; }
+    const shown = await calendar.locator('td[data-day]:not([data-outside])').first().getAttribute('data-day');
+    await calendar.getByRole('button', { name: (shown ?? '') < iso ? /next month/i : /previous month/i }).click();
+  }
+  await expect(trigger).toHaveAttribute('data-value', iso);
+  await expect(page.locator('[data-slot="popover-content"]')).toHaveCount(0);
+}
+
 async function readDemoData(page: Page): Promise<DashboardData> {
   return page.evaluate(() => {
     const saved = localStorage.getItem('urban-gabru-kpi-demo-v4');
@@ -175,10 +189,10 @@ test('a ticket needs only a title, owner and estimate, survives reload, and appe
   const owner = dialog.getByRole('combobox', { name: 'Owner', exact: true });
   await owner.focus();
   await owner.press('Enter');
-  // Type-ahead only works once the list is open. Typing earlier drops letters on a busy machine.
+  // Typing searches once the list is open. The search box keeps focus; the highlighted option is marked selected.
   await expect(page.getByRole('listbox')).toBeVisible();
   await page.keyboard.type('Aarav');
-  await expect(page.getByRole('option', { name: 'Aarav Mehta', exact: true })).toBeFocused();
+  await expect(page.getByRole('option', { name: 'Aarav Mehta', exact: true })).toHaveAttribute('aria-selected', 'true');
   await page.keyboard.press('Enter');
   await expect(owner).toHaveText('Aarav Mehta');
   await dialog.getByLabel(/^Estimate/).fill('4.5');
@@ -197,7 +211,8 @@ test('a ticket needs only a title, owner and estimate, survives reload, and appe
   }, title);
   expect(savedDescription).toBe(description);
   const savedTask = (await readDemoData(page)).items.find(item => item.title === title);
-  expect(savedTask?.projectId).toBe(ADHOC_PROJECT.id);
+  // Picking the owner first fills in their main project: Aarav leads Commerce.
+  expect(savedTask?.projectId).toBe('demo-commerce');
   expect(savedTask?.phaseId).toBeNull();
   const search = page.getByRole('textbox', { name: 'Search tickets' });
   await search.fill(title);
@@ -327,6 +342,41 @@ test('project selection scopes owners and phases and linked bugs inherit those c
   expect(pageErrors).toEqual([]);
 });
 
+test('optional date pickers clear values and restore their placeholder', async ({ page }) => {
+  await openDemo(page, 'standup');
+  const date = page.locator('.standup-quick-form').getByRole('button', { name: 'Due date', exact: true });
+  const day = dateKey(new Date(), 'Asia/Kolkata');
+  await pickDate(page, date, day);
+  await date.click();
+  await page.getByRole('button', { name: 'Clear date', exact: true }).click();
+  await expect(date).not.toHaveAttribute('data-value');
+  await expect(date).toHaveText('No due date');
+});
+
+test('comboboxes search short lists, recover from no matches, and support keyboard selection', async ({ page }) => {
+  await openDemo(page, 'tickets');
+  const sort = page.getByRole('combobox', { name: 'Sort tickets' });
+  await sort.click();
+  let search = page.getByRole('combobox', { name: 'Search options', exact: true });
+  await expect(search).toBeFocused();
+  await search.fill('no matching choice 932');
+  await expect(page.getByText('No matches.', { exact: true })).toBeVisible();
+  await search.fill('Priority');
+  await expect(page.getByRole('option')).toHaveCount(1);
+  await search.press('ArrowDown');
+  await search.press('Enter');
+  await expect(sort).toHaveText('Priority');
+  await expect(sort).toBeFocused();
+  await page.getByRole('link', { name: 'Bugs', exact: true }).click();
+  await page.getByRole('button', { name: 'Log bug', exact: true }).click();
+  const linked = page.getByRole('dialog').getByRole('combobox', { name: /^Linked ticket/ });
+  await linked.click();
+  search = page.getByRole('combobox', { name: 'Search options', exact: true });
+  await search.fill('UG-005');
+  await page.getByRole('option', { name: /UG-005/ }).click();
+  await expect(linked).toContainText('UG-005');
+});
+
 test('standup quick entry supports Enter and retains the developer for the next ticket', async ({ page }) => {
   await openDemo(page, 'standup');
   const form = page.locator('.standup-quick-form');
@@ -451,7 +501,7 @@ test('a developer adds their own ticket and extends its due date with a reason',
   const later = shiftDate(day, 10, 'Asia/Kolkata');
   await dialog.getByRole('textbox', { name: 'Title', exact: true }).fill(title);
   await dialog.getByLabel(/^Estimate/).fill('6');
-  await dialog.getByLabel(/^Due date/).fill(due);
+  await pickDate(page, dialog.getByRole('button', { name: /^Due date/ }), due);
   await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click();
   await expect(dialog).toBeHidden();
   let data = await readDemoData(page);
@@ -461,7 +511,7 @@ test('a developer adds their own ticket and extends its due date with a reason',
   await page.getByRole('button', { name: title, exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: /^Extend/ }).click();
   const extend = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Extend due date', exact: true }) });
-  await extend.getByLabel('New due date').fill(later);
+  await pickDate(page, extend.getByRole('button', { name: /^New due date/ }), later);
   await expect(extend).toContainText('Moves the date by 3 days');
   await extend.getByRole('radio', { name: 'Took longer', exact: true }).click();
   await extend.getByRole('textbox', { name: 'Reason', exact: true }).fill('Signature keys need a second review.');
@@ -487,7 +537,7 @@ test('an admin extends a project timeline with a reason and the history shows wh
   await card.getByRole('button', { name: 'Extend', exact: true }).click();
   const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Extend project timeline', exact: true }) });
   await dialog.getByRole('button', { name: '+2 weeks', exact: true }).click();
-  await expect(dialog.getByLabel('New target date')).toHaveValue(later);
+  await expect(dialog.getByRole('button', { name: /^New target date/ })).toHaveAttribute('data-value', later);
   await expect(dialog).toContainText('Moves the date by 14 days');
   // The reason is required, so the dialog stays open without one.
   await dialog.getByRole('button', { name: /^Extend to / }).click();
@@ -570,8 +620,8 @@ test('an admin records several days of leave from the team table and sees one ra
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('combobox', { name: 'Team member', exact: true })).toHaveText('Ananya Rao');
   await dialog.getByRole('radio', { name: 'Several days', exact: true }).click();
-  await dialog.getByLabel('First day').fill(friday);
-  await dialog.getByLabel('Last day').fill(tuesday);
+  await pickDate(page, dialog.getByRole('button', { name: /^First day/ }), friday);
+  await pickDate(page, dialog.getByRole('button', { name: /^Last day/ }), tuesday);
   // Friday to Tuesday skips the weekend: three working days.
   await expect(dialog).toContainText('3 working days');
   await dialog.getByRole('button', { name: 'Add leave', exact: true }).click();
@@ -676,7 +726,7 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
       const firstDue = shiftDate(dateKey(new Date(), 'Asia/Kolkata'), 3, 'Asia/Kolkata');
       await page.getByRole('dialog').getByRole('button', { name: /^Set date/ }).click();
       dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Set due date', exact: true }) });
-      await dialog.getByLabel('Due date').fill(firstDue);
+      await pickDate(page, dialog.getByRole('button', { name: /^Due date/ }), firstDue);
       await saveLiveForm(page, dialog, 'Set due date');
       await page.getByRole('dialog').getByRole('button', { name: /^Extend/ }).click();
       dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Extend due date', exact: true }) });

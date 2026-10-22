@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import clsx from 'clsx';
 import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCheck, Clock3, Eye } from 'lucide-react';
 import type { DashboardData, WorkItem } from '@/lib/types';
@@ -10,7 +10,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { bands, displayDate, displayDateTime, findMember, findProject, hours, isDone, percent, phaseName, today, type OnAction } from './lib';
+import { bands, displayDate, displayDateTime, findMember, findProject, firstName, hours, isDone, percent, phaseName, today, type OnAction } from './lib';
 import { TicketExtendedBadge } from './timeline';
 
 export function ProjectTag({ data, id }: { data: DashboardData; id: string }) {
@@ -75,20 +75,30 @@ export function FixBy({ item, data }: { item: WorkItem; data: DashboardData }) {
   return <span className={clsx('fix-by', late && 'fix-by-late')}><span className="bug-clock"><Clock3 size={12} />Fix by {displayDateTime(kpi.deadline1)}</span><small>{late ? `${hours(kpi.overdueHours)} working h late` : `${hours(kpi.hoursRemaining)} working h left`}</small></span>;
 }
 
+/** Shared ticket card for the board and personal work grid. */
 export function TicketCard({ item, data, onOpen, onAction, busy }: { item: WorkItem; data: DashboardData; onOpen: (id: string) => void; onAction: OnAction; busy: boolean }) {
-  return <Card className="task-card" size="sm">
-    <CardHeader>
-      <div className="task-card-top"><span className="item-key">{item.key}</span><PriorityBadge priority={item.priority} /></div>
-      <CardTitle><Button variant="ghost" className="task-card-title h-auto w-full justify-start whitespace-normal p-0 text-left" onClick={() => onOpen(item.id)}>{item.title}</Button></CardTitle>
-      <CardDescription className="project-phase-cell"><ProjectTag data={data} id={item.projectId} /><PhaseTag data={data} id={item.phaseId} /></CardDescription>
-    </CardHeader>
-    <CardContent>
-      <div className="task-card-meta">{item.type === 'task'
-        ? <><span className="estimate-cell"><Clock3 size={12} />{item.estimateHours} h</span><DueDate item={item} data={data} /></>
-        : <><SeverityBadge item={item} /><FixBy item={item} data={data} /></>}</div>
-      {item.status === 'blocked' && item.blocker && <Alert className="blocker-note"><AlertTriangle size={12} /><AlertDescription>{item.blocker}</AlertDescription></Alert>}
-    </CardContent>
-    <CardFooter className="task-card-bottom"><Avatar member={findMember(data, item.assigneeId)} size="small" /><ItemActions item={item} admin={data.currentUser.role === 'admin'} onAction={onAction} busy={busy} compact /></CardFooter>
+  const project = findProject(data, item.projectId);
+  const owner = findMember(data, item.assigneeId);
+  const phase = item.phaseId ? phaseName(data, item.phaseId) : null;
+  const overdue = item.type === 'task' && !!item.dueDate && item.dueDate < today(data.settings.timezone) && !isDone(item);
+  return <Card className={clsx('task-card', overdue && 'task-card-overdue', isDone(item) && 'task-card-done')} size="sm" style={{ '--project-color': project?.color ?? 'var(--border)' } as CSSProperties}>
+    <div className="task-card-top">
+      <span className="item-key">{item.key}</span>
+      {item.priority !== 'medium' && <PriorityBadge priority={item.priority} />}
+    </div>
+    <Button variant="ghost" className="task-card-title" onClick={() => onOpen(item.id)}>{item.title}</Button>
+    <div className="task-card-context"><span className="task-card-project" title={project?.name}><i aria-hidden="true" /><span>{project?.name ?? 'Unknown project'}</span></span>{phase && <span className="task-card-phase" title={phase}>{phase}</span>}</div>
+    {item.status === 'blocked' && item.blocker && <p className="task-card-blocker"><AlertTriangle size={12} aria-hidden="true" />{item.blocker}</p>}
+    {item.type === 'bug' && <div className="task-card-meta"><SeverityBadge item={item} /><FixBy item={item} data={data} /></div>}
+      {item.type === 'task' && <span className="task-card-facts">
+        <span title="Estimate"><Clock3 size={12} aria-hidden="true" />{item.estimateHours} h</span>
+        {item.dueDate && <span className={clsx(overdue && 'due-overdue')} title={overdue ? 'Overdue' : 'Due date'}><CalendarDays size={12} aria-hidden="true" />{displayDate(item.dueDate)}{overdue && <span className="sr-only"> overdue</span>}</span>}
+        <TicketExtendedBadge data={data} item={item} />
+      </span>}
+    <div className="task-card-bottom">
+      <span className="task-card-owner" title={owner?.name}><Avatar member={owner} size="small" /><span>{firstName(owner)}</span></span>
+      <span className="task-card-action"><ItemActions item={item} admin={data.currentUser.role === 'admin'} onAction={onAction} busy={busy} compact /></span>
+    </div>
   </Card>;
 }
 
