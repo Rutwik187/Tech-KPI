@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { ChevronLeft, ChevronRight, CircleHelp, Clock3, Columns3, List, Plus, Search, X } from 'lucide-react';
 import type { DashboardData, WorkItem } from '@/lib/types';
@@ -86,10 +86,10 @@ export function WorkList({ data, kind, onOpen, onAction, onAdd, busy }: { data: 
       <CardContent className="work-list-content p-0">
         {filtered.length === 0 ? empty
           : view === 'board'
-            ? <div className="kanban-board">{statuses.filter(s => status === 'all' || status === s).map(s => {
+            ? <div className="kanban-board" style={{ '--columns': status === 'all' ? statuses.length : 1 } as CSSProperties}>{statuses.filter(s => status === 'all' || status === s).map(s => {
                 const column = filtered.filter(item => item.status === s);
                 return <div className="kanban-column" key={s}>
-                  <div className="kanban-heading"><span><i className={`dot-${s}`} />{statusLabels[s]}</span><strong>{column.length}</strong></div>
+                  <div className={`kanban-heading kanban-${s}`}><span><i className={`dot-${s}`} />{statusLabels[s]}</span><Badge variant="secondary">{column.length}</Badge></div>
                   <div className="kanban-items">{column.map(item => <TicketCard key={item.id} item={item} data={data} onOpen={onOpen} onAction={onAction} busy={busy} />)}{column.length === 0 && <div className="kanban-empty">Nothing here</div>}</div>
                 </div>;
               })}</div>

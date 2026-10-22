@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from 'react';
 import { AlertTriangle, CalendarDays, Check, CircleHelp, LoaderCircle, Plus, Target, X } from 'lucide-react';
 import type { DashboardData, Settings } from '@/lib/types';
-import { FormField, Panel } from '@/components/ui';
+import { FormDate, FormField, Panel } from '@/components/ui';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -40,7 +40,7 @@ export function SettingsPage({ data, mutate, busy, onHoliday }: { data: Dashboar
         <Card className="settings-fields"><CardContent>
           <FieldGroup className="form-grid">
             <FormField>Timezone<Input value="India · Asia/Kolkata" readOnly aria-label="Timezone" /></FormField>
-            <FormField>Scores start on<Input type="date" required value={settings.trackingStartDate} onChange={event => update('trackingStartDate', event.target.value)} /></FormField>
+            <FormField>Scores start on<FormDate required value={settings.trackingStartDate} onValueChange={value => update('trackingStartDate', value)} /></FormField>
             <FormField>Workday starts<Input type="time" required value={settings.workdayStart} onChange={event => update('workdayStart', event.target.value)} /></FormField>
             <FormField>Workday ends<Input type="time" required value={settings.workdayEnd} onChange={event => update('workdayEnd', event.target.value)} /></FormField>
           </FieldGroup>

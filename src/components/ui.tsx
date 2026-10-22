@@ -13,8 +13,8 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Progress } from "@/components/ui/progress";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
-export { FormField, FormSelect, FormCheckbox } from "./form-select";
-export type { FormSelectProps, FormCheckboxProps } from "./form-select";
+export { FormField, FormSelect, FormCheckbox, FormDate } from "./form-select";
+export type { FormSelectProps, FormCheckboxProps, FormDateProps } from "./form-select";
 
 export function initials(name: string) {
   return name.trim().split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join("").toUpperCase() || "?";
