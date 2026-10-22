@@ -23,7 +23,7 @@ function task(hours: number, completedAt = '2026-10-16T18:00:00', assigneeId = d
   return {
     id: `task-${hours}-${assigneeId}-${completedAt}`, key: 'UG-1', type: 'task', title: 'Deliver a task', description: '',
     projectId: 'project', phaseId: null, assigneeId, status: 'done', priority: 'medium', severity: 'normal', estimateHours: hours,
-    dueDate: null, createdAt: instant('2026-10-12T10:00:00').toISOString(), updatedAt: instant(completedAt).toISOString(),
+    dueDate: null, originalDueDate: null, createdAt: instant('2026-10-12T10:00:00').toISOString(), updatedAt: instant(completedAt).toISOString(),
     startedAt: null, completedAt: instant(completedAt).toISOString(), fixedAt: null, reportedAt: instant('2026-10-12T10:00:00').toISOString(),
     blocker: null, taskId: null, reopenCount: 0,
   };

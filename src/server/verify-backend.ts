@@ -67,6 +67,27 @@ async function main() {
     assert(assignedBeforeWork.projects.every(row => row.id === project.id || row.id === ADHOC_PROJECT_ID));
     assert(assignedBeforeWork.phases.every(row => row.projectId === project.id)); checks += 4;
     await call("/projects", developerCookie);
+    // Project timeline: the first target is planning. Moving it needs a reason, and members can read why.
+    await mutate(adminCookie, { action: "createProject", name: `${trace}-dates`, startDate: "2099-12-01", targetDate: "2099-11-01" }, 400);
+    await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { startDate: "2099-12-01", targetDate: "2099-11-01" } }, 400);
+    data = await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { startDate: "2099-10-01", targetDate: "2099-11-01" } });
+    let timed = data.projects.find(row => row.id === project.id)!;
+    assert.equal(timed.startDate, "2099-10-01"); assert.equal(timed.targetDate, "2099-11-01"); assert.equal(timed.originalTargetDate, "2099-11-01"); checks += 3;
+    await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { targetDate: "2099-11-15" } }, 400);
+    await mutate(developerCookie, { action: "updateProject", id: project.id, patch: { targetDate: "2099-11-15" }, reason: "Developers cannot move targets", reasonCategory: "other" }, 403);
+    await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { targetDate: "2099-09-15" }, reason: "Before the start date", reasonCategory: "other" }, 400);
+    data = await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { targetDate: "2099-11-15" }, reason: "The payment provider changed its API", reasonCategory: "scope_change" });
+    timed = data.projects.find(row => row.id === project.id)!;
+    assert.equal(timed.targetDate, "2099-11-15"); assert.equal(timed.originalTargetDate, "2099-11-01"); checks += 2;
+    const targetMove = data.activities.find(activity => activity.entityId === project.id && activity.action === "project.target_changed" && activity.payload.from === "2099-11-01");
+    assert(targetMove); assert.equal(targetMove.payload.to, "2099-11-15"); assert.equal(targetMove.payload.reasonCategory, "scope_change"); assert.equal(targetMove.reason, "The payment provider changed its API"); checks += 4;
+    const memberView: DashboardData = await (await call("/api/data", developerCookie)).json();
+    assert.equal(memberView.projects.find(row => row.id === project.id)?.targetDate, "2099-11-15");
+    assert(memberView.activities.some(activity => activity.id === targetMove.id));
+    assert(memberView.activities.every(activity => activity.action !== "project.updated")); checks += 3;
+    await mutate(adminCookie, { action: "updateProject", id: ADHOC_PROJECT_ID, patch: { targetDate: "2099-11-15" }, reason: "Ad hoc has no timeline", reasonCategory: "other" }, 400);
+    await assert.rejects(db.update(schema.projects).set({ targetDate: "2099-11-15" }).where(eq(schema.projects.id, ADHOC_PROJECT_ID))); checks++;
+    await assert.rejects(db.update(schema.projects).set({ startDate: "2099-12-30" }).where(eq(schema.projects.id, project.id))); checks++;
     data = await mutate(adminCookie, { action: "createPhase", projectId: project.id, name: "Testing" });
     const testingPhase = data.phases.find(phase => phase.projectId === project.id && phase.name === "Testing")!;
     await mutate(adminCookie, { action: "updatePhase", id: testingPhase.id, name: "QA" });
@@ -95,10 +116,12 @@ async function main() {
     await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { estimateHours: 9 }, reason: "Scope grew", reasonCategory: "scope_change" }, 403);
     await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { assigneeId: fixture.userId } }, 403);
     await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { title: `${trace}` } });
-    await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { dueDate: "2099-11-02" } });
+    data = await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { dueDate: "2099-11-02" } });
+    assert.equal(data.items.find((item) => item.id === task.id)?.originalDueDate, "2099-11-02"); checks++;
     await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { dueDate: "2099-11-05" } }, 400);
     data = await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { dueDate: "2099-11-05" }, reason: "Waiting for the payment sandbox", reasonCategory: "blocked_dependency" });
     assert.equal(data.items.find((item) => item.id === task.id)?.dueDate, "2099-11-05");
+    assert.equal(data.items.find((item) => item.id === task.id)?.originalDueDate, "2099-11-02"); checks++;
     assert(data.activities.some((activity) => activity.entityId === task.id && activity.action === "task.due_changed" && activity.payload.from === "2099-11-02")); checks += 2;
     await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { status: "done" } }, 400);
     await mutate(adminCookie, { action: "updateItem", id: task.id, patch: { estimateHours: 3 } }, 400);
@@ -159,7 +182,7 @@ async function main() {
       const cron = await fetch(`${baseURL}/api/cron/weekly-snapshot`, { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } });
       assert.equal(cron.status, 200); checks++;
     }
-    console.log(`PASS: ${checks} backend checks (projects, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable). Local session fixtures used; real Microsoft OAuth is not exercised.`);
+    console.log(`PASS: ${checks} backend checks (projects, project timelines and extensions, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable). Local session fixtures used; real Microsoft OAuth is not exercised.`);
   } finally {
     await db.transaction(async (tx) => {
       const testItems = await tx.select({ id: schema.workItems.id }).from(schema.workItems).where(like(schema.workItems.title, `${trace}%`));

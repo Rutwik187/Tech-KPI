@@ -213,7 +213,9 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
           if (previous !== value) changes[key] = [previous, value];
         }
         if (!Object.keys(changes).length) break;
-        await tx.update(workItems).set({ ...patch, ...transition, updatedAt: new Date() }).where(eq(workItems.id, item.id));
+        // The first due date set is the original. Later moves keep it, so the size of each extension stays visible.
+        const firstDueDate = changes.dueDate && !item.originalDueDate ? { originalDueDate: patch.dueDate } : {};
+        await tx.update(workItems).set({ ...patch, ...transition, ...firstDueDate, updatedAt: new Date() }).where(eq(workItems.id, item.id));
         const genericChanges = Object.fromEntries(Object.entries(changes).filter(([key]) => !["status", "estimateHours", "dueDate"].includes(key)));
         const reasonPayload = action.reason ? { reasonCategory: action.reasonCategory ?? "other" } : {};
         if (Object.keys(genericChanges).length) await audit(tx, actor, item.id, `${item.type}.updated`, { changes: genericChanges, ...reasonPayload }, action.reason);
@@ -281,20 +283,33 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
       case "createProject": {
         assertProjectName(action.name);
         await assertProjectMembers(tx, action.memberIds);
-        const [project] = await tx.insert(projects).values({ name: action.name, description: action.description ?? "", color: action.color ?? "#2563eb" }).returning();
+        const targetDate = action.targetDate ?? null;
+        const [project] = await tx.insert(projects).values({ name: action.name, description: action.description ?? "", color: action.color ?? "#2563eb", startDate: action.startDate ?? null, targetDate, originalTargetDate: targetDate }).returning();
         if (action.memberIds.length) await tx.insert(projectMembers).values(action.memberIds.map((userId) => ({ projectId: project.id, userId })));
         if (action.phases.length) await tx.insert(projectPhases).values(action.phases.map((phase, position) => ({ projectId: project.id, name: phase.name, description: phase.description ?? "", position })));
-        await audit(tx, actor, project.id, "project.created", { name: project.name, memberIds: action.memberIds, phaseNames: action.phases.map((phase) => phase.name) }); break;
+        await audit(tx, actor, project.id, "project.created", { name: project.name, memberIds: action.memberIds, phaseNames: action.phases.map((phase) => phase.name), startDate: project.startDate, targetDate }); break;
       }
       case "updateProject": {
         const [project] = await tx.select().from(projects).where(eq(projects.id, action.id)).for("update");
         if (!project) throw new AppError("This project was not found.", 404);
         protectAdhoc(project);
         if (action.patch.name) assertProjectName(action.patch.name);
-        const { memberIds, ...details } = action.patch;
+        const { memberIds, targetDate, ...details } = action.patch;
+        const targetChanged = targetDate !== undefined && targetDate !== project.targetDate;
+        const startChanged = details.startDate !== undefined && details.startDate !== project.startDate;
+        if ((targetChanged || startChanged) && project.isArchived && details.isArchived !== false) throw new AppError("Restore this project before changing its timeline.");
+        // Setting the first target is planning. Moving an existing one is an extension and needs a reason.
+        if (targetChanged && project.targetDate) requireReason(action.reason);
+        const nextStart = details.startDate === undefined ? project.startDate : details.startDate;
+        const nextTarget = targetDate ?? project.targetDate;
+        if (nextStart && nextTarget && nextTarget < nextStart) throw new AppError("The target date must be on or after the start date.");
         if (memberIds !== undefined) await replaceProjectMembers(tx, project.id, memberIds);
-        if (Object.keys(details).length) await tx.update(projects).set(details).where(eq(projects.id, project.id));
-        await audit(tx, actor, action.id, "project.updated", { changes: action.patch }); break;
+        const timeline = targetChanged ? { targetDate, ...(project.originalTargetDate ? {} : { originalTargetDate: targetDate }) } : {};
+        if (Object.keys(details).length || targetChanged) await tx.update(projects).set({ ...details, ...timeline }).where(eq(projects.id, project.id));
+        const otherChanges = { ...details, ...(memberIds !== undefined ? { memberIds } : {}) };
+        if (Object.keys(otherChanges).length) await audit(tx, actor, action.id, "project.updated", { changes: otherChanges });
+        if (targetChanged) await audit(tx, actor, action.id, "project.target_changed", { from: project.targetDate, to: targetDate, ...(project.targetDate ? { reasonCategory: action.reasonCategory ?? "other" } : {}) }, project.targetDate ? action.reason : undefined);
+        break;
       }
       case "createPhase": {
         const [project] = await tx.select().from(projects).where(eq(projects.id, action.projectId)).for("update");

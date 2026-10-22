@@ -12,8 +12,10 @@ import { Button } from '@/components/ui/button';
 import { FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { displayDate, displayDateTime, extensions, findMember, hours, kindLabels, percent, projectMembers, statusLabels, today, type MutationFn, type OnAction, type WorkClassification } from './lib';
-import { ExtensionBadge, ItemActions, PhaseTag, ProjectTag, SeverityBadge } from './parts';
+import { extensionHistory, reasonLabel, ticketExtendedDays } from '@/lib/timeline';
+import { displayDate, displayDateTime, findMember, findProject, hours, isAdhocProject, kindLabels, percent, projectMembers, statusLabels, today, type MutationFn, type OnAction, type WorkClassification } from './lib';
+import { ItemActions, PhaseTag, ProjectTag, SeverityBadge } from './parts';
+import { dayCount, ExtensionHistory, TicketExtendedBadge } from './timeline';
 import { ClassificationFields, FormChoice } from './forms';
 
 function activityText(event: Activity, item: WorkItem) {
@@ -32,7 +34,8 @@ function activityText(event: Activity, item: WorkItem) {
   if (event.action.endsWith('.due_changed')) {
     const from = event.payload.from;
     if (typeof from !== 'string') return `set the due date to ${date(event.payload.to)}`;
-    return `${String(event.payload.to) > from ? 'extended' : 'moved'} the due date from ${date(from)} to ${date(event.payload.to)}`;
+    const category = reasonLabel(event.payload.reasonCategory);
+    return `${String(event.payload.to) > from ? 'extended' : 'moved'} the due date from ${date(from)} to ${date(event.payload.to)}${category ? ` · ${category}` : ''}`;
   }
   if (event.action.endsWith('status_changed')) {
     const to = event.payload.to as WorkItem['status'];
@@ -43,7 +46,7 @@ function activityText(event: Activity, item: WorkItem) {
   return event.action.replaceAll('.', ' ').replaceAll('_', ' ');
 }
 
-export function ItemDrawer({ item, data, busy, onClose, onAction, onRevise, mutate }: { item: WorkItem; data: DashboardData; busy: boolean; onClose: () => void; onAction: OnAction; onRevise: (patch: Partial<WorkItem>, label: string) => void; mutate: MutationFn }) {
+export function ItemDrawer({ item, data, busy, onClose, onAction, onRevise, onExtend, mutate }: { item: WorkItem; data: DashboardData; busy: boolean; onClose: () => void; onAction: OnAction; onRevise: (patch: Partial<WorkItem>, label: string) => void; onExtend: () => void; mutate: MutationFn }) {
   const [editing, setEditing] = useState(false);
   const admin = data.currentUser.role === 'admin';
   const owner = item.assigneeId === data.currentUser.id;
@@ -55,14 +58,17 @@ export function ItemDrawer({ item, data, busy, onClose, onAction, onRevise, muta
   const linkedTicket = item.taskId ? data.items.find(i => i.id === item.taskId) : undefined;
   const bugKpi = item.type === 'bug' ? getBugKpi(item, data) : null;
   const closed = item.status === 'done' || item.status === 'fixed' || item.status === 'verified';
-  const extensionCount = extensions(data, item.id).length;
+  const extensionCount = extensionHistory(data, item.id).length;
+  const extendedDays = ticketExtendedDays(item);
+  const project = findProject(data, item.projectId);
+  const pastProjectTarget = item.type === 'task' && !closed && !!item.dueDate && !!project?.targetDate && !isAdhocProject(project) && item.dueDate > project.targetDate;
   const overdue = item.type === 'task' && !closed && !!item.dueDate && item.dueDate < today(data.settings.timezone);
   const actorName = (id: string) => id === data.currentUser.id ? 'You' : findMember(data, id)?.name ?? 'Your admin';
 
   return <Modal title={item.key} subtitle={item.type === 'task' ? 'Ticket' : 'Bug'} onClose={onClose} drawer>
     <div className="item-drawer-body">
       <div className="detail-title-row"><h2>{item.title}</h2>{(admin || owner) && <Button variant="ghost" size="icon" onClick={() => setEditing(!editing)} aria-label={`Edit ${kindLabels[item.type].toLowerCase()} details`} aria-pressed={editing}><Pencil size={16} /></Button>}</div>
-      <div className="detail-status-row"><StatusBadge status={item.status} /><PriorityBadge priority={item.priority} />{item.type === 'bug' && <SeverityBadge item={item} />}<ExtensionBadge data={data} item={item} /></div>
+      <div className="detail-status-row"><StatusBadge status={item.status} /><PriorityBadge priority={item.priority} />{item.type === 'bug' && <SeverityBadge item={item} />}{item.type === 'task' && <TicketExtendedBadge data={data} item={item} />}</div>
       <div className="detail-owner-row">
         <Avatar member={person} /><div><strong>{owner ? 'You' : person?.name ?? 'Unassigned'}</strong><span>Owner</span></div>
         <div className="project-phase-cell"><ProjectTag data={data} id={item.projectId} /><PhaseTag data={data} id={item.phaseId} /></div>
@@ -83,10 +89,12 @@ export function ItemDrawer({ item, data, busy, onClose, onAction, onRevise, muta
       {item.type === 'task'
         ? <div className="detail-facts">
             <div><span>Estimate</span><strong>{item.estimateHours} <small>hours</small></strong>{admin && !closed && <Button variant="link" size="sm" onClick={() => onRevise({ estimateHours: item.estimateHours }, 'Revise estimate')}>Revise<Pencil data-icon="inline-end" size={11} /></Button>}</div>
-            <div><span>Due date</span><strong className={clsx(overdue && 'due-overdue')}>{item.dueDate ? displayDate(item.dueDate) : '—'}{overdue && <small> · overdue</small>}</strong>{(admin || owner) && !closed && <Button variant="link" size="sm" onClick={() => onRevise({ dueDate: item.dueDate }, item.dueDate ? 'Extend due date' : 'Set due date')}>{item.dueDate ? 'Extend' : 'Set date'}{item.dueDate ? <CalendarClock data-icon="inline-end" size={11} /> : <CalendarDays data-icon="inline-end" size={11} />}</Button>}</div>
+            <div><span>Due date</span><strong className={clsx(overdue && 'due-overdue')}>{item.dueDate ? displayDate(item.dueDate) : '—'}{overdue && <small> · overdue</small>}</strong>{(admin || owner) && !closed && (item.dueDate
+              ? <Button variant="link" size="sm" onClick={onExtend}>Extend<CalendarClock data-icon="inline-end" size={11} /></Button>
+              : <Button variant="link" size="sm" onClick={() => onRevise({ dueDate: null }, 'Set due date')}>Set date<CalendarDays data-icon="inline-end" size={11} /></Button>)}</div>
             {item.completedAt
               ? <div><span>Approved on</span><strong>{displayDate(item.completedAt)}</strong><small>{item.estimateHours} h credited</small></div>
-              : <div><span>Extensions</span><strong>{extensionCount}</strong><small>{extensionCount ? 'Reasons are in the timeline' : 'On the original date'}</small></div>}
+              : <div><span>Extended</span><strong>{extendedDays ? `+${dayCount(extendedDays)}` : extensionCount ? 'Moved' : 'No'}</strong><small>{extensionCount ? `${extensionCount} time${extensionCount === 1 ? '' : 's'} · reasons below` : item.dueDate ? 'On its first due date' : 'No due date yet'}</small></div>}
           </div>
         : <div className="detail-facts">
             <div><span>Reported</span><strong>{displayDate(item.reportedAt)}</strong><small>{displayDateTime(item.reportedAt)}</small></div>
@@ -94,7 +102,9 @@ export function ItemDrawer({ item, data, busy, onClose, onAction, onRevise, muta
             <div><span>{closed ? 'Bug points' : 'Time left'}</span><strong>{closed ? percent(bugKpi?.score ?? null) : bugKpi && bugKpi.overdueHours > 0 ? `${hours(bugKpi.overdueHours)} h late` : `${hours(bugKpi?.hoursRemaining ?? 0)} h`}</strong><small>{closed ? `${hours(bugKpi?.resolutionWorkingHours ?? 0)} working h to fix` : 'Working hours only'}</small></div>
           </div>}
 
+      {pastProjectTarget && <Alert className="detail-blocker"><CalendarClock /><AlertTitle>Due after the project target</AlertTitle><AlertDescription>{project!.name} targets {displayDate(project!.targetDate)}. {admin ? 'Extend the project if the whole project slips.' : 'Your admin may need to extend the project.'}</AlertDescription></Alert>}
       {!editing && <div className="detail-description"><h3 className="detail-section-heading">Details</h3><p>{item.description || 'No details yet.'}</p></div>}
+      {item.type === 'task' && item.dueDate && <div className="drawer-section"><h3 className="detail-section-heading">Due date history <span>{extensionCount}</span></h3><ExtensionHistory data={data} entityId={item.id} empty={`Still on its first due date, ${displayDate(item.originalDueDate ?? item.dueDate)}.`} /></div>}
       {linkedTicket && <div className="linked-task"><Link2 size={14} /><span>Linked ticket</span><strong>{linkedTicket.key} · {linkedTicket.title}</strong></div>}
       {linkedBugs.length > 0 && <div className="linked-bugs"><h3 className="detail-section-heading">Linked bugs</h3>{linkedBugs.map(b => <div key={b.id}><Bug size={14} /><span>{b.title}</span><StatusBadge status={b.status} /></div>)}</div>}
       <Attachments data={data} itemId={item.id} />

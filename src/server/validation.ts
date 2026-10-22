@@ -18,6 +18,10 @@ const phaseName = z.string().trim().min(1, "Enter a phase name.").max(100)
 const phaseDescription = z.string().trim().max(2000);
 const phases = z.array(z.object({ name: phaseName, description: phaseDescription.optional() }).strict()).max(50)
   .refine((list) => new Set(list.map((phase) => phase.name.toLowerCase())).size === list.length, "Phase names must be unique within a project.");
+const extensionReason = z.enum(["scope_change", "blocked_dependency", "underestimated", "other"]);
+const reason = z.string().trim().max(2000);
+const timelineOrder = (value: { startDate?: string | null; targetDate?: string | null }) => !value.startDate || !value.targetDate || value.targetDate >= value.startDate;
+const timelineOrderMessage = "The target date must be on or after the start date.";
 const itemFields = {
   title: shortText, description: description.optional(), projectId: uuid.optional(), phaseId: uuid.nullable().optional(), assigneeId: z.string().min(1),
   priority: priority.optional(), severity: severity.optional(), estimateHours: z.number().min(0).max(80).multipleOf(0.01).optional(),
@@ -42,11 +46,12 @@ export const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("updateItem"), id: uuid, patch: z.object({ ...itemFields,
     status: z.enum(["todo", "in_progress", "blocked", "in_review", "done", "open", "fixed", "verified"]).optional(),
     blocker: z.string().trim().max(2000).nullable().optional(),
-  }).partial().strict(), reason: z.string().trim().max(2000).optional(), reasonCategory: z.enum(["scope_change", "blocked_dependency", "underestimated", "other"]).optional() }).strict(),
+  }).partial().strict(), reason: reason.optional(), reasonCategory: extensionReason.optional() }).strict(),
   z.object({ action: z.literal("createMember"), name: shortText, email: z.email(), microsoftObjectId: uuid, role: role.optional(), capacity: capacity.optional() }).strict(),
   z.object({ action: z.literal("updateMember"), id: z.string().min(1), patch: z.object({ name: shortText.optional(), capacity: capacity.optional(), isActive: z.boolean().optional(), role: role.optional(), microsoftObjectId: uuid.optional() }).strict() }).strict(),
-  z.object({ action: z.literal("createProject"), name: shortText, color: color.optional(), description: description.optional(), memberIds: memberIds.default([]), phases: phases.default([]) }).strict(),
-  z.object({ action: z.literal("updateProject"), id: uuid, patch: z.object({ name: shortText.optional(), color: color.optional(), description: description.optional(), isArchived: z.boolean().optional(), memberIds: memberIds.optional() }).strict() }).strict(),
+  z.object({ action: z.literal("createProject"), name: shortText, color: color.optional(), description: description.optional(), memberIds: memberIds.default([]), phases: phases.default([]), startDate: date.nullable().optional(), targetDate: date.nullable().optional() }).strict()
+    .refine(timelineOrder, timelineOrderMessage),
+  z.object({ action: z.literal("updateProject"), id: uuid, patch: z.object({ name: shortText.optional(), color: color.optional(), description: description.optional(), isArchived: z.boolean().optional(), memberIds: memberIds.optional(), startDate: date.nullable().optional(), targetDate: date.optional() }).strict().refine(timelineOrder, timelineOrderMessage), reason: reason.optional(), reasonCategory: extensionReason.optional() }).strict(),
   z.object({ action: z.literal("createPhase"), projectId: uuid, name: phaseName, description: phaseDescription.optional() }).strict(),
   z.object({ action: z.literal("updatePhase"), id: uuid, name: phaseName.optional(), description: phaseDescription.optional() }).strict(),
   z.object({ action: z.literal("saveSettings"), settings: settingsSchema }).strict(),

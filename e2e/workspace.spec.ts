@@ -7,6 +7,8 @@ import { ADHOC_PROJECT } from '../src/lib/project-defaults';
 import type { DashboardData } from '../src/lib/types';
 
 // Session fixture cookies must never enter trace artifacts. This suite does not exercise Microsoft OAuth.
+/** The overview greets the signed-in person by the time of day. */
+const OVERVIEW = /^Good (morning|afternoon|evening), /;
 test.use({ timezoneId: 'Asia/Kolkata', trace: 'off', screenshot: 'off', video: 'off' });
 
 async function openDemo(page: Page, section = 'dashboard') {
@@ -23,17 +25,17 @@ async function chooseOption(page: Page, trigger: Locator, label: string) {
 
 async function readDemoData(page: Page): Promise<DashboardData> {
   return page.evaluate(() => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v3');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v4');
     if (!saved) throw new Error('Demo changes did not persist.');
     return JSON.parse(saved) as DashboardData;
   });
 }
 
-async function saveLiveForm(page: Page, dialog: Locator, label: string) {
+async function saveLiveForm(page: Page, dialog: Locator, label: string | RegExp) {
   const started = Date.now();
   const [response] = await Promise.all([
     page.waitForResponse(response => response.url().endsWith('/api/data') && response.request().method() === 'POST', { timeout: 45_000 }),
-    dialog.getByRole('button', { name: label, exact: true }).click(),
+    dialog.getByRole('button', typeof label === 'string' ? { name: label, exact: true } : { name: label }).click(),
   ]);
   console.log(`[live verification] ${label}: API ${response.status()} in ${Date.now() - started} ms`);
   if (!response.ok()) {
@@ -57,16 +59,17 @@ async function authenticateWithFixture(page: Page): Promise<OfflineFixture> {
   const { config } = await import('dotenv');
   config({ path: resolve('.env.local'), quiet: true });
   const { createOfflineSessionFixture } = await import('../src/server/verification-fixtures');
-  const fixture = await createOfflineSessionFixture({ baseURL: process.env.TEST_BASE_URL ?? 'http://localhost:3100', role: 'admin', name: 'Browser verification administrator' });
+  // A unique name keeps a leftover from an interrupted run from matching the same owner option.
+  const fixture = await createOfflineSessionFixture({ baseURL: process.env.TEST_BASE_URL ?? 'http://localhost:3100', role: 'admin', name: `Browser verification administrator ${randomUUID().slice(0, 6)}` });
   console.log(`[fixture verification] Offline session created in ${Date.now() - started} ms`);
   try {
     await page.context().addCookies([fixture.cookie]);
     await page.goto('/dashboard');
-    await expect(page.getByRole('heading', { level: 1, name: /^(Team overview|We couldn’t load your workspace\.)/ })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole('heading', { level: 1, name: /^(Good (morning|afternoon|evening)|We couldn’t load your workspace\.)/ })).toBeVisible({ timeout: 30_000 });
     if (await page.getByRole('heading', { name: 'We couldn’t load your workspace.', exact: true }).isVisible()) {
       throw new Error('Offline fixture GET /dashboard rendered the workspace error boundary before team data loaded.');
     }
-    await expect(page.getByRole('heading', { level: 1, name: /^Team overview/ })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole('heading', { level: 1, name: OVERVIEW })).toBeVisible({ timeout: 30_000 });
     console.log(`[fixture verification] Authenticated dashboard ready in ${Date.now() - started} ms`);
     return fixture;
   } catch (error) {
@@ -131,7 +134,7 @@ test('demo navigation keeps every page in the demo workspace', async ({ page }) 
     { label: /^Projects$/, path: 'projects', heading: /^Projects/ },
     { label: /^Settings$/, path: 'settings', heading: /^Settings/ },
     { label: /Rohan Desai/, path: 'account', heading: /^My account/ },
-    { label: /^Overview$/, path: 'dashboard', heading: /^Team overview/ },
+    { label: /^Overview$/, path: 'dashboard', heading: OVERVIEW },
   ];
   for (const destination of destinations) {
     const link = sidebar.getByRole('link', { name: destination.label });
@@ -172,6 +175,8 @@ test('a ticket needs only a title, owner and estimate, survives reload, and appe
   const owner = dialog.getByRole('combobox', { name: 'Owner', exact: true });
   await owner.focus();
   await owner.press('Enter');
+  // Type-ahead only works once the list is open. Typing earlier drops letters on a busy machine.
+  await expect(page.getByRole('listbox')).toBeVisible();
   await page.keyboard.type('Aarav');
   await expect(page.getByRole('option', { name: 'Aarav Mehta', exact: true })).toBeFocused();
   await page.keyboard.press('Enter');
@@ -186,7 +191,7 @@ test('a ticket needs only a title, owner and estimate, survives reload, and appe
   await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click();
   await expect(dialog).toBeHidden();
   const savedDescription = await page.evaluate(title => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v3');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v4');
     if (!saved) throw new Error('Demo ticket did not persist.');
     return (JSON.parse(saved) as { items: { title: string; description: string }[] }).items.find(item => item.title === title)?.description;
   }, title);
@@ -260,7 +265,7 @@ test('project members and custom phases can be created on mobile and edited afte
   data = await readDemoData(page);
   expect(data.projects.find(candidate => candidate.id === project.id)?.memberIds.sort()).toEqual(['demo-ananya', 'demo-sanya']);
   expect(data.phases.filter(phase => phase.projectId === project.id).sort((a, b) => a.position - b.position).map(phase => phase.name)).toEqual(['Planning', 'Delivery', 'Quality checks']);
-  const adhoc = page.locator('.project-card').filter({ has: page.getByRole('link', { name: ADHOC_PROJECT.name, exact: true }) });
+  const adhoc = page.locator('.project-card').filter({ has: page.getByRole('button', { name: ADHOC_PROJECT.name, exact: true }) });
   await expect(adhoc).toBeVisible();
   await expect(adhoc.getByRole('button', { name: /^Edit / })).toHaveCount(0);
   await expect(adhoc.getByRole('button', { name: /^Archive$/ })).toHaveCount(0);
@@ -372,7 +377,7 @@ test('logging a linked bug fills its owner and project, then supports fix and ve
   await page.getByRole('textbox', { name: 'Search bugs' }).fill(standaloneTitle);
   await expect(page.getByRole('row').filter({ hasText: standaloneTitle })).toBeVisible();
   const storedTaskId = await page.evaluate(title => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v3');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v4');
     if (!saved) throw new Error('Demo bug did not persist.');
     return (JSON.parse(saved) as { items: { title: string; taskId: string | null }[] }).items.find(item => item.title === title)?.taskId;
   }, standaloneTitle);
@@ -389,7 +394,7 @@ test('working-day buttons save ISO weekdays including Sunday as seven in the dem
   await sunday.click();
   await page.getByRole('button', { name: /^Save settings/ }).click();
   const workingDays = await page.evaluate(() => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v3');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v4');
     if (!saved) throw new Error('Demo settings did not persist.');
     return (JSON.parse(saved) as { settings: { workingDays: number[] } }).settings.workingDays;
   });
@@ -457,17 +462,101 @@ test('a developer adds their own ticket and extends its due date with a reason',
   await page.getByRole('dialog').getByRole('button', { name: /^Extend/ }).click();
   const extend = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Extend due date', exact: true }) });
   await extend.getByLabel('New due date').fill(later);
+  await expect(extend).toContainText('Moves the date by 3 days');
   await extend.getByRole('radio', { name: 'Took longer', exact: true }).click();
   await extend.getByRole('textbox', { name: 'Reason', exact: true }).fill('Signature keys need a second review.');
-  await extend.getByRole('button', { name: 'Extend due date', exact: true }).click();
+  await extend.getByRole('button', { name: /^Extend to / }).click();
   await expect(extend).toBeHidden();
   data = await readDemoData(page);
   expect(data.items.find(item => item.id === ticket.id)?.dueDate).toBe(later);
   expect(data.activities.find(activity => activity.entityId === ticket.id && activity.action === 'task.due_changed'))
     .toMatchObject({ actorId: 'demo-aarav', reason: 'Signature keys need a second review.', payload: { from: due, to: later } });
   const drawer = page.getByRole('dialog');
-  await expect(drawer.locator('.extension-badge')).toHaveText(/Extended/);
+  await expect(drawer.locator('.extension-badge')).toHaveText('+3 days');
+  await expect(drawer.locator('.extension-history')).toContainText('Signature keys need a second review.');
+  await expect(drawer.locator('.extension-history')).toContainText('Took longer');
   await expect(drawer.locator('.timeline')).toContainText('extended the due date');
+});
+
+test('an admin extends a project timeline with a reason and the history shows why', async ({ page }) => {
+  await openDemo(page, 'projects');
+  const sample = createDemoData().projects.find(project => project.id === 'demo-inventory')!;
+  const later = shiftDate(sample.targetDate!, 14, 'Asia/Kolkata');
+  const card = page.locator('.project-card').filter({ has: page.getByRole('button', { name: 'Inventory management', exact: true }) });
+  await expect(card.locator('.extension-badge')).toHaveCount(0);
+  await card.getByRole('button', { name: 'Extend', exact: true }).click();
+  const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Extend project timeline', exact: true }) });
+  await dialog.getByRole('button', { name: '+2 weeks', exact: true }).click();
+  await expect(dialog.getByLabel('New target date')).toHaveValue(later);
+  await expect(dialog).toContainText('Moves the date by 14 days');
+  // The reason is required, so the dialog stays open without one.
+  await dialog.getByRole('button', { name: /^Extend to / }).click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('radio', { name: 'Scope grew', exact: true }).click();
+  const reason = 'The warehouse team added barcode labels to the scope.';
+  await dialog.getByRole('textbox', { name: 'Reason', exact: true }).fill(reason);
+  await dialog.getByRole('button', { name: /^Extend to / }).click();
+  await expect(dialog).toBeHidden();
+  const data = await readDemoData(page);
+  expect(data.projects.find(project => project.id === sample.id)).toMatchObject({ targetDate: later, originalTargetDate: sample.originalTargetDate });
+  expect(data.activities.find(activity => activity.entityId === sample.id && activity.action === 'project.target_changed'))
+    .toMatchObject({ reason, payload: { from: sample.targetDate, to: later, reasonCategory: 'scope_change' } });
+  await expect(card.locator('.extension-badge')).toHaveText('+14 days');
+  await card.getByRole('button', { name: 'Inventory management', exact: true }).click();
+  const drawer = page.getByRole('dialog');
+  await expect(drawer.getByRole('heading', { name: /^Timeline changes/ })).toBeVisible();
+  await expect(drawer.locator('.extension-history li')).toHaveCount(1);
+  await expect(drawer.locator('.extension-history')).toContainText(reason);
+  await expect(drawer.locator('.extension-history')).toContainText('Scope grew');
+  await expect(drawer.locator('.burnup-chart .recharts-surface').first()).toBeVisible();
+  await page.reload();
+  await expect(card.locator('.extension-badge')).toHaveText('+14 days');
+});
+
+test('moving a ticket past its project target warns before saving', async ({ page }) => {
+  await openDemo(page, 'tickets');
+  await page.getByRole('button', { name: 'Add retry handling for failed payment callbacks', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: /^Extend/ }).click();
+  const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Extend due date', exact: true }) });
+  await expect(dialog).toContainText('Moved before');
+  await dialog.getByRole('button', { name: '+1 day', exact: true }).click();
+  await expect(dialog.locator('.extend-warning')).toHaveCount(0);
+  await dialog.getByRole('button', { name: '+2 weeks', exact: true }).click();
+  await expect(dialog.locator('.extend-warning')).toContainText('after the Commerce target date');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(dialog).toBeHidden();
+});
+
+test('overview charts render with table twins and a project timeline row opens its project', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await openDemo(page);
+  await expect(page.locator('.trend-chart .recharts-surface').first()).toBeVisible();
+  await expect(page.locator('.trend-panel table.sr-only tbody tr')).toHaveCount(7);
+  await expect(page.locator('.trend-stats')).toContainText('Best week');
+  await expect(page.locator('.highlights .highlight')).toHaveCount(3);
+  const rows = page.locator('.gantt-row');
+  await expect(rows).toHaveCount(4);
+  await expect(page.locator('.gantt table.sr-only tbody tr')).toHaveCount(4);
+  await expect(page.locator('.streak-badge').first()).toBeVisible();
+  await rows.filter({ hasText: 'Creator marketplace' }).click();
+  const drawer = page.getByRole('dialog');
+  await expect(drawer.getByRole('heading', { name: 'Creator marketplace', exact: true })).toBeVisible();
+  await expect(drawer.locator('.extension-history li')).toHaveCount(2);
+  await expect(drawer.locator('.extension-badge')).toHaveText('+14 days · 2×');
+  expect(pageErrors).toEqual([]);
+});
+
+test('a developer reads why their project moved but cannot extend it', async ({ page }) => {
+  await openDemo(page, 'projects');
+  await chooseOption(page, page.getByRole('combobox', { name: 'View the demo as', exact: true }), 'Aarav Mehta · Developer');
+  const card = page.locator('.project-card').filter({ has: page.getByRole('button', { name: 'Commerce', exact: true }) });
+  await expect(card.locator('.extension-badge')).toHaveText('+7 days');
+  await expect(card.getByRole('button', { name: 'Extend', exact: true })).toHaveCount(0);
+  await card.getByRole('button', { name: 'Commerce', exact: true }).click();
+  const drawer = page.getByRole('dialog');
+  await expect(drawer.locator('.extension-history')).toContainText('callback format');
+  await expect(drawer.getByRole('button', { name: /Extend/ })).toHaveCount(0);
 });
 
 test('an admin records several days of leave from the team table and sees one range', async ({ page }) => {
@@ -518,7 +607,7 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
     const response = await page.request.get('/api/data');
     expect(response.status()).toBe(200);
     const identity = (await response.json() as { currentUser: { id: string; role: string; isActive: boolean } }).currentUser;
-    await expect(page.getByRole('heading', { level: 1, name: /^Team overview/ })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: OVERVIEW })).toBeVisible();
     await expect(page.getByText('Live workspace', { exact: true })).toBeVisible();
     await expect(page.locator('.demo-banner')).toBeHidden();
     expect(identity.role).toBe('admin');
@@ -541,7 +630,7 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
     const createdIds = new Set<string>();
     let actorId: string | undefined;
     let fixture: OfflineFixture | undefined;
-    type Item = { id: string; key: string; title: string; type: string; estimateHours: number; projectId: string; phaseId: string | null; assigneeId: string; taskId: string | null };
+    type Item = { id: string; key: string; title: string; type: string; status: string; estimateHours: number; dueDate: string | null; originalDueDate: string | null; projectId: string; phaseId: string | null; assigneeId: string; taskId: string | null };
     const readItems = async () => {
       const response = await page.request.get('/api/data');
       expect(response.status()).toBe(200);
@@ -554,7 +643,8 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
       page.setDefaultNavigationTimeout(45_000);
       await page.goto('/tickets');
       await expect(page.getByRole('heading', { level: 1, name: /^Tickets/ })).toBeVisible({ timeout: 10_000 });
-      await page.getByRole('button', { name: 'New ticket', exact: true }).click();
+      // An empty workspace also shows New ticket in its empty state. Use the page action.
+      await page.locator('.page-actions').getByRole('button', { name: 'New ticket', exact: true }).click();
       let dialog = page.getByRole('dialog');
       await expect(dialog.getByRole('combobox', { name: 'Project', exact: true })).toHaveText(ADHOC_PROJECT.name);
       await expect(dialog.getByRole('combobox', { name: 'Phase', exact: true })).toBeDisabled();
@@ -582,10 +672,31 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
       await dialog.getByRole('textbox', { name: 'Reason', exact: true }).fill('Additional scope agreed during browser verification');
       await saveLiveForm(page, dialog, 'Revise estimate');
       expect((await readItems()).find((item) => item.id === task.id)?.estimateHours).toBe(3);
+      // The first due date is planning. Moving it is an extension and needs a reason.
+      const firstDue = shiftDate(dateKey(new Date(), 'Asia/Kolkata'), 3, 'Asia/Kolkata');
+      await page.getByRole('dialog').getByRole('button', { name: /^Set date/ }).click();
+      dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Set due date', exact: true }) });
+      await dialog.getByLabel('Due date').fill(firstDue);
+      await saveLiveForm(page, dialog, 'Set due date');
+      await page.getByRole('dialog').getByRole('button', { name: /^Extend/ }).click();
+      dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Extend due date', exact: true }) });
+      await dialog.getByRole('button', { name: '+1 week', exact: true }).click();
+      await dialog.getByRole('textbox', { name: 'Reason', exact: true }).fill('Waiting for the payment sandbox during browser verification');
+      await saveLiveForm(page, dialog, /^Extend to /);
+      const extended = (await readItems()).find((item) => item.id === task.id);
+      expect(extended?.dueDate).toBe(shiftDate(firstDue, 7, 'Asia/Kolkata'));
+      expect(extended?.originalDueDate).toBe(firstDue);
+      await expect(page.getByRole('dialog').locator('.extension-history')).toContainText('Waiting for the payment sandbox');
       await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+      // Status changes show before the server answers.
+      const startedAt = Date.now();
+      await row.getByRole('button', { name: /^Start/ }).click();
+      await expect(row.getByText('In progress', { exact: true })).toBeVisible({ timeout: 1_500 });
+      console.log(`[live verification] Start shown in ${Date.now() - startedAt} ms`);
+      await expect.poll(async () => (await readItems()).find((item) => item.id === task.id)?.status, { timeout: 30_000 }).toBe('in_progress');
       await page.goto('/bugs');
       await expect(page.getByRole('heading', { level: 1, name: /^Bugs/ })).toBeVisible({ timeout: 10_000 });
-      await page.getByRole('button', { name: 'Log bug', exact: true }).click();
+      await page.locator('.page-actions').getByRole('button', { name: 'Log bug', exact: true }).click();
       dialog = page.getByRole('dialog');
       await dialog.getByLabel('What went wrong?').fill(bugTitle);
       await chooseOption(page, dialog.getByRole('combobox', { name: /^Linked ticket/ }), `${task.key} · ${taskTitle}`);

@@ -2,7 +2,7 @@
 
 import { useId, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { toast } from 'sonner';
-import { Activity as ActivityIcon, Bug, CalendarPlus, Check, ChevronDown, CircleHelp, Clock3, FileText, ListTodo, LoaderCircle, Plus, ShieldCheck, X } from 'lucide-react';
+import { Activity as ActivityIcon, Bug, CalendarClock, CalendarPlus, Check, ChevronDown, CircleHelp, Clock3, FileText, ListTodo, LoaderCircle, Plus, ShieldCheck, X } from 'lucide-react';
 import type { DashboardData, Leave, Member, Phase, Project, WorkItem } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
 import { addWorkingHours, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
@@ -166,8 +166,12 @@ function PhaseRow({ phase, busy, mutate }: { phase: Phase; busy: boolean; mutate
   </div>;
 }
 
-export function ProjectForm({ data, editing, mutate, onClose, busy }: { data: DashboardData; editing?: Project; mutate: MutationFn; onClose: () => void; busy: boolean }) {
+export function ProjectForm({ data, editing, mutate, onClose, onExtend, busy }: { data: DashboardData; editing?: Project; mutate: MutationFn; onClose: () => void; onExtend: (project: Project) => void; busy: boolean }) {
   const [color, setColor] = useState(editing?.color ?? '#617eb7');
+  const [startDate, setStartDate] = useState(editing?.startDate ?? '');
+  const [targetDate, setTargetDate] = useState(editing?.targetDate ?? '');
+  // Once a target exists, moving it is an extension. That needs a reason, so it has its own dialog.
+  const targetLocked = !!editing?.targetDate;
   const [memberIds, setMemberIds] = useState<string[]>(editing?.memberIds ?? []);
   const [drafts, setDrafts] = useState<PhaseDraft[]>([]);
   const [draft, setDraft] = useState<PhaseDraft>({ name: '', description: '' });
@@ -190,10 +194,11 @@ export function ProjectForm({ data, editing, mutate, onClose, busy }: { data: Da
     const pending = draft.name.trim();
     if (pending && editing) { toast.error('Select Add phase to save the new phase, or clear its name.'); return; }
     if (pending && nameTaken(pending)) { toast.error('This phase already exists. Choose another name or clear it.'); return; }
-    const details = { name: String(fields.get('name')).trim(), description: String(fields.get('description')), color, memberIds };
+    if (startDate && targetDate && targetDate < startDate) { toast.error('The target date must be on or after the start date.'); return; }
+    const details = { name: String(fields.get('name')).trim(), description: String(fields.get('description')), color, memberIds, startDate: startDate || null };
     const ok = await mutate(editing
-      ? { action: 'updateProject', id: editing.id, patch: details }
-      : { action: 'createProject', ...details, phases: pending ? [...drafts, { name: pending, description: draft.description.trim() }] : drafts }, editing ? 'Project saved' : 'Project created');
+      ? { action: 'updateProject', id: editing.id, patch: { ...details, ...(!targetLocked && targetDate ? { targetDate } : {}) } }
+      : { action: 'createProject', ...details, targetDate: targetDate || null, phases: pending ? [...drafts, { name: pending, description: draft.description.trim() }] : drafts }, editing ? 'Project saved' : 'Project created');
     if (ok) onClose();
   }
   return <Modal title={editing ? 'Edit project' : 'New project'} subtitle="Name the project, choose its team, and add phases if it needs them." onClose={onClose}>
@@ -201,6 +206,13 @@ export function ProjectForm({ data, editing, mutate, onClose, busy }: { data: Da
       <FieldGroup className="modal-form-body">
         <FormField>Project title<Input name="name" required defaultValue={editing?.name} maxLength={100} placeholder="e.g. Inventory management" /></FormField>
         <FormField>Description <span className="optional">optional</span><Textarea name="description" defaultValue={editing?.description} rows={2} placeholder="What is this project for?" /></FormField>
+        <FieldGroup className="form-grid">
+          <FormField>Start date <span className="optional">optional</span><Input type="date" value={startDate} max={targetDate || undefined} onChange={event => setStartDate(event.target.value)} /></FormField>
+          <FormField>Target date <span className="optional">optional</span>{targetLocked
+            ? <div className="locked-date"><strong>{displayDate(editing!.targetDate, { weekday: 'short', year: 'numeric' })}</strong><Button type="button" variant="outline" size="sm" onClick={() => onExtend(editing!)}><CalendarClock data-icon="inline-start" />Extend</Button></div>
+            : <Input type="date" value={targetDate} min={startDate || undefined} onChange={event => setTargetDate(event.target.value)} />}
+            <span className="field-help">{targetLocked ? 'Moving the target needs a reason. It goes into the project history.' : 'When the project should be done. You can extend it later with a reason.'}</span></FormField>
+        </FieldGroup>
         <FormField>Colour<div className="color-picker"><Input aria-label="Custom project colour" type="color" value={color} onChange={event => setColor(event.target.value)} />
           <ToggleGroup type="single" variant="outline" value={color} onValueChange={value => { if (value) setColor(value); }} aria-label="Project colour presets">{['#448768', '#617eb7', '#9571b6', '#c18c47', '#b86878'].map(preset => <ToggleGroupItem key={preset} value={preset} aria-label={`Select ${preset}`}><span className="size-4 rounded-full" style={{ background: preset }} /></ToggleGroupItem>)}</ToggleGroup></div></FormField>
         <section className="project-form-section">
@@ -291,7 +303,7 @@ export function HolidayForm({ mutate, onClose, busy }: { mutate: MutationFn; onC
   </Modal>;
 }
 
-/** Changes that need a reason: blocking, sending back, reopening, revising an estimate, or moving a due date. */
+/** Changes that need a reason: blocking, sending back, reopening, or revising an estimate. Also sets a first due date. Moving a date uses ExtendForm. */
 export function ReasonForm({ action, data, mutate, onClose, busy }: { action: QuickAction; data: DashboardData; mutate: MutationFn; onClose: () => void; busy: boolean }) {
   const estimate = action.patch.estimateHours !== undefined;
   const due = action.patch.dueDate !== undefined;
@@ -306,21 +318,16 @@ export function ReasonForm({ action, data, mutate, onClose, busy }: { action: Qu
     if (estimate) patch.estimateHours = Number(f.get('estimateHours'));
     if (due) patch.dueDate = String(f.get('dueDate'));
     if (blocked) patch.blocker = reason;
-    const message = blocked ? 'Blocker saved. Your admin can see it.' : firstDue ? 'Due date set' : due ? 'Due date extended. The reason is in the timeline.' : 'Saved. The reason is in the timeline.';
-    const ok = await mutate({ action: 'updateItem', id: action.item.id, patch, ...(reason ? { reason } : {}), reasonCategory: estimate ? 'scope_change' : String(f.get('reasonCategory') ?? 'other') }, message);
+    const message = blocked ? 'Blocker saved. Your admin can see it.' : firstDue ? 'Due date set' : 'Saved. The reason is in the timeline.';
+    const ok = await mutate({ action: 'updateItem', id: action.item.id, patch, ...(reason ? { reason } : {}), ...(estimate ? { reasonCategory: 'scope_change' } : {}) }, message);
     if (ok) onClose();
   }
-  const minDue = action.item.dueDate ? shiftDate(action.item.dueDate, 1, data.settings.timezone) : day;
   return <Modal title={action.label} subtitle={`${action.item.key} · ${action.item.title}`} onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
         {estimate && <><Alert className="form-tip"><CircleHelp size={17} /><AlertDescription><p>Change the estimate only when the scope changes. If the same work needs more time, extend the due date instead.</p></AlertDescription></Alert>
           <FormField>New estimate <span className="optional">hours</span><Input type="number" name="estimateHours" min={.5} max={80} step={.5} defaultValue={action.item.estimateHours} required /></FormField></>}
-        {due && <>
-          {!firstDue && <Alert className="form-tip"><CircleHelp size={17} /><AlertDescription><p>Current due date: {displayDate(action.item.dueDate, { weekday: 'short', year: 'numeric' })}. The new date and your reason go into the ticket timeline.</p></AlertDescription></Alert>}
-          <FormField>{firstDue ? 'Due date' : 'New due date'}<Input type="date" name="dueDate" required defaultValue={action.item.dueDate ? minDue : ''} min={minDue} /></FormField>
-          {!firstDue && <FormField>Why is more time needed?<FormChoice name="reasonCategory" defaultValue="blocked_dependency" options={[{ value: 'blocked_dependency', label: 'Waiting on someone' }, { value: 'scope_change', label: 'Scope grew' }, { value: 'underestimated', label: 'Took longer' }, { value: 'other', label: 'Other' }]} /></FormField>}
-        </>}
+        {firstDue && <FormField>Due date<Input type="date" name="dueDate" required min={day} /><span className="field-help">Setting the first due date needs no reason. Moving it later does.</span></FormField>}
         {!firstDue && <FormField>{blocked ? 'What is blocking this ticket?' : 'Reason'}<Textarea name="reason" required minLength={3} rows={3} placeholder={blocked ? 'Name the person or thing you are waiting for.' : 'A short explanation for the team.'} /></FormField>}
         {!firstDue && <div className="form-help"><ActivityIcon size={13} />This reason appears in the ticket timeline.</div>}
       </FieldGroup>

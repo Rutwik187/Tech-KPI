@@ -1,4 +1,4 @@
-import type { Activity, BugStatus, DashboardData, Holiday, Leave, Member, Project, Settings, TaskStatus, WorkItem } from '@/lib/types';
+import type { BugStatus, DashboardData, Holiday, Leave, Member, Project, Settings, TaskStatus, WorkItem } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
 import { getBugKpi, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
 
@@ -57,10 +57,6 @@ export function downloadCsv(rows: (string | number | null)[][], name: string) {
   URL.revokeObjectURL(url);
 }
 
-/** Due date moves after the first one was set. Each move needed a reason. */
-export function extensions(data: DashboardData, itemId: string): Activity[] {
-  return data.activities.filter(a => a.entityId === itemId && a.action.endsWith('.due_changed') && typeof a.payload.from === 'string');
-}
 function sentBack(item: WorkItem, data: DashboardData) {
   if (item.status !== 'in_progress') return null;
   const latest = data.activities.filter(a => a.entityId === item.id && a.action.endsWith('status_changed')).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -138,8 +134,8 @@ export type Mutation =
   | { action: 'updateItem'; id: string; patch: Partial<WorkItem>; reason?: string; reasonCategory?: string }
   | { action: 'createMember'; name: string; email: string; microsoftObjectId: string; role: Member['role']; capacity: number }
   | { action: 'updateMember'; id: string; patch: Partial<Member> }
-  | { action: 'createProject'; name: string; color: string; description: string; memberIds: string[]; phases: PhaseDraft[] }
-  | { action: 'updateProject'; id: string; patch: Partial<Project> }
+  | { action: 'createProject'; name: string; color: string; description: string; memberIds: string[]; phases: PhaseDraft[]; startDate: string | null; targetDate: string | null }
+  | { action: 'updateProject'; id: string; patch: Partial<Project>; reason?: string; reasonCategory?: string }
   | { action: 'createPhase'; projectId: string; name: string; description: string }
   | { action: 'updatePhase'; id: string; name?: string; description?: string }
   | { action: 'saveSettings'; settings: Settings }
@@ -147,7 +143,7 @@ export type Mutation =
   | ({ action: 'addHoliday' } & Omit<Holiday, 'id'>)
   | { action: 'deleteLeave'; ids: string[] }
   | { action: 'deleteHoliday'; id: string };
-export type MutationFn = (mutation: Mutation, message?: string) => Promise<boolean>;
+export type MutationFn = (mutation: Mutation, message?: string, options?: { optimistic?: boolean }) => Promise<boolean>;
 export type OnAction = (item: WorkItem, status: WorkItem['status']) => void;
 export type QuickAction = { item: WorkItem; patch: Partial<WorkItem>; requireReason: boolean; label: string };
 export type ModalState =
@@ -156,7 +152,10 @@ export type ModalState =
   | { type: 'project'; project?: Project }
   | { type: 'leave'; userId?: string }
   | { type: 'holiday' }
+  | { type: 'extend'; target: ExtendTarget }
   | null;
+/** A ticket due date or a project target that already exists and is being moved. Both need a reason. */
+export type ExtendTarget = { kind: 'ticket'; item: WorkItem } | { kind: 'project'; project: Project };
 
 /** Applies a change to demo data in the browser. It follows the server's rules closely enough to try every flow. */
 export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Member): DashboardData {
@@ -171,7 +170,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       next.items.unshift({
         id, key: `${mutation.type === 'bug' ? 'BUG' : 'UG'}-${String(sequence).padStart(3, '0')}`, type: mutation.type, title: mutation.title, description: mutation.description,
         projectId: mutation.projectId, phaseId: mutation.phaseId, assigneeId: mutation.assigneeId, status: mutation.type === 'task' ? 'todo' : 'open',
-        priority: mutation.priority, severity: mutation.severity, estimateHours: mutation.type === 'task' ? mutation.estimateHours : 0, dueDate: mutation.dueDate,
+        priority: mutation.priority, severity: mutation.severity, estimateHours: mutation.type === 'task' ? mutation.estimateHours : 0, dueDate: mutation.dueDate, originalDueDate: mutation.dueDate,
         createdAt: now, updatedAt: now, startedAt: null, completedAt: null, fixedAt: null, reportedAt: now, blocker: null, taskId: mutation.taskId, reopenCount: 0,
       });
       log(id, mutation.type === 'task' ? 'task.created' : 'bug.reported', { estimateHours: mutation.estimateHours, dueDate: mutation.dueDate });
@@ -197,7 +196,10 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
           : item.type === 'bug' && patch.status === 'open' ? 'bug.reopened' : `${item.type}.status_changed`;
         log(item.id, event, { from: before.status, to: patch.status }, reason);
       }
-      if (patch.dueDate !== undefined && patch.dueDate !== before.dueDate) log(item.id, `${item.type}.due_changed`, { from: before.dueDate, to: patch.dueDate, reasonCategory: mutation.reasonCategory }, reason);
+      if (patch.dueDate !== undefined && patch.dueDate !== before.dueDate) {
+        if (!before.originalDueDate) item.originalDueDate = patch.dueDate;
+        log(item.id, `${item.type}.due_changed`, { from: before.dueDate, to: patch.dueDate, ...(before.dueDate ? { reasonCategory: mutation.reasonCategory ?? 'other' } : {}) }, before.dueDate ? reason : null);
+      }
       if (patch.estimateHours !== undefined && patch.estimateHours !== before.estimateHours) log(item.id, 'task.estimate_revised', { from: before.estimateHours, to: patch.estimateHours }, reason);
       const changed = (Object.keys(patch) as (keyof WorkItem)[]).filter(key => !['status', 'dueDate', 'estimateHours', 'blocker'].includes(key) && patch[key] !== before[key]);
       if (changed.length) log(item.id, `${item.type}.updated`, { changes: changed }, reason);
@@ -212,12 +214,21 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       break;
     }
     case 'createProject':
-      next.projects.push({ id, name: mutation.name, color: mutation.color, description: mutation.description, isArchived: false, memberIds: mutation.memberIds, isAdhoc: false });
+      next.projects.push({ id, name: mutation.name, color: mutation.color, description: mutation.description, isArchived: false, memberIds: mutation.memberIds, isAdhoc: false, startDate: mutation.startDate, targetDate: mutation.targetDate, originalTargetDate: mutation.targetDate });
       mutation.phases.forEach((phase, position) => next.phases.push({ id: crypto.randomUUID(), projectId: id, name: phase.name, description: phase.description, position }));
+      log(id, 'project.created', { name: mutation.name, startDate: mutation.startDate, targetDate: mutation.targetDate });
       break;
     case 'updateProject': {
       const found = next.projects.find(p => p.id === mutation.id);
-      if (found) Object.assign(found, mutation.patch);
+      if (!found) break;
+      const before = { ...found };
+      Object.assign(found, mutation.patch);
+      const { targetDate } = mutation.patch;
+      if (targetDate !== undefined && targetDate !== before.targetDate) {
+        if (before.targetDate && (mutation.reason ?? '').trim().length < 3) throw new Error('Add a short reason for this change.');
+        if (!before.originalTargetDate) found.originalTargetDate = targetDate;
+        log(found.id, 'project.target_changed', { from: before.targetDate, to: targetDate, ...(before.targetDate ? { reasonCategory: mutation.reasonCategory ?? 'other' } : {}) }, before.targetDate ? mutation.reason ?? null : null);
+      }
       break;
     }
     case 'createPhase':
@@ -265,12 +276,12 @@ export function viewAs(data: DashboardData, viewerId: string | null): DashboardD
   return {
     ...data, currentUser: viewer, members: [viewer], items, projects,
     phases: data.phases.filter(phase => projectIds.has(phase.projectId)),
-    activities: data.activities.filter(a => itemIds.has(a.entityId)),
+    activities: data.activities.filter(a => itemIds.has(a.entityId) || (projectIds.has(a.entityId) && a.action === 'project.target_changed')),
     leaves: data.leaves.filter(l => l.userId === viewer.id),
   };
 }
 
-export const DEMO_DATA_KEY = 'urban-gabru-kpi-demo-v3';
+export const DEMO_DATA_KEY = 'urban-gabru-kpi-demo-v4';
 const DEMO_VIEWER_KEY = 'urban-gabru-kpi-demo-viewer';
 let demoCacheText: string | null = null;
 let demoCacheData: DashboardData | null = null;
@@ -285,7 +296,7 @@ export function demoSnapshot(initialData: DashboardData) {
   }
   const valid = demoCacheData?.mode === 'demo' && demoCacheData.currentUser.id === initialData.currentUser.id
     && Array.isArray(demoCacheData.phases) && demoCacheData.phases.every(phase => typeof phase.description === 'string')
-    && demoCacheData.projects.every(p => Array.isArray(p.memberIds) && typeof p.isAdhoc === 'boolean');
+    && demoCacheData.projects.every(p => Array.isArray(p.memberIds) && typeof p.isAdhoc === 'boolean' && p.targetDate !== undefined);
   return valid ? demoCacheData! : initialData;
 }
 export function saveDemo(data: DashboardData) {
