@@ -1,6 +1,6 @@
-import type { BugStatus, DashboardData, Holiday, Leave, Member, Project, Settings, TaskStatus, TicketRequest, WorkItem } from '@/lib/types';
+import type { BugStatus, DashboardData, DueDateRequest, Holiday, Leave, Member, Project, Settings, TaskStatus, TicketRequest, WorkItem } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
-import { getBugKpi, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
+import { dueDateAfterHours, getBugKpi, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
 
 /** The database calls a ticket a "task". Everything a person reads says "ticket". */
 export const kindLabels = { task: 'Ticket', bug: 'Bug' } as const;
@@ -171,6 +171,10 @@ export type Mutation =
   | { action: 'approveTicketRequest'; id: string; patch?: RequestChanges; note?: string }
   | { action: 'declineTicketRequest'; id: string; reason: string }
   | { action: 'withdrawTicketRequest'; id: string }
+  | { action: 'extendTicket'; itemId: string; hours: number; reasonCategory: DueDateRequest['reasonCategory']; reason: string }
+  | { action: 'approveDueDateRequest'; id: string; hours?: number; note?: string }
+  | { action: 'declineDueDateRequest'; id: string; reason: string }
+  | { action: 'withdrawDueDateRequest'; id: string }
   | { action: 'updateItem'; id: string; patch: Partial<WorkItem>; reason?: string; reasonCategory?: string }
   | { action: 'createMember'; name: string; email: string; microsoftObjectId?: string; role: Member['role']; capacity: number }
   | { action: 'updateMember'; id: string; patch: Partial<Member> }
@@ -194,6 +198,15 @@ export type ModalState =
   | { type: 'holiday' }
   | { type: 'extend'; target: ExtendTarget }
   | null;
+/** What more hours do to a ticket: they join the estimate, and the due date moves by them. The server applies the same rule. */
+export function ticketExtension(data: DashboardData, item: WorkItem, hours: number, now = new Date()) {
+  return {
+    estimate: Math.round((item.estimateHours + hours) * 100) / 100,
+    dueDate: item.dueDate ? dueDateAfterHours(item.dueDate, hours, getWorkCalendar(data, item.assigneeId), now) : null,
+  };
+}
+/** The largest estimate a ticket can hold. More work than this belongs in a new ticket. */
+export const MAX_TICKET_HOURS = 80;
 /** A ticket due date or a project target that already exists and is being moved. Both need a reason. */
 export type ExtendTarget = { kind: 'ticket'; item: WorkItem } | { kind: 'project'; project: Project };
 
@@ -205,6 +218,16 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
   const log = (entityId: string, action: string, payload: Record<string, unknown> = {}, reason: string | null = null) =>
     next.activities.unshift({ id: crypto.randomUUID(), entityId, actorId: actor.id, action, reason, payload, createdAt: now });
   const nextKey = () => Math.max(0, ...next.items.map(i => Number(i.key.split('-').pop()) || 0)) + 1;
+  function extend(item: WorkItem, hours: number, reasonCategory: string, reason: string, request?: DueDateRequest) {
+    if (!item.dueDate) throw new Error('Set a due date first. An extension moves an existing date.');
+    if (item.estimateHours + hours > MAX_TICKET_HOURS) throw new Error(`This ticket already has ${item.estimateHours} h. A ticket holds up to ${MAX_TICKET_HOURS} h, so split the extra work into a new ticket.`);
+    const { estimate, dueDate } = ticketExtension(next, item, hours);
+    log(item.id, 'task.due_changed', {
+      from: item.dueDate, to: dueDate, addedHours: hours, estimateFrom: item.estimateHours, estimateTo: estimate, reasonCategory,
+      ...(request ? { requestId: request.id, requestedBy: request.requesterId, ...(hours !== request.hours ? { requestedHours: request.hours } : {}) } : {}),
+    }, reason);
+    Object.assign(item, { dueDate, estimateHours: estimate, updatedAt: now });
+  }
   switch (mutation.action) {
     case 'requestTicket':
       next.requests.unshift({ id, requesterId: actor.id, title: mutation.title, description: mutation.description, note: mutation.note, projectId: mutation.projectId, phaseId: mutation.phaseId,
@@ -228,6 +251,40 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       const request = next.requests.find(r => r.id === mutation.id);
       if (!request || request.status !== 'pending') throw new Error('This request was already reviewed.');
       Object.assign(request, { status: 'declined', reviewedById: actor.id, reviewedAt: now, reviewNote: mutation.reason });
+      break;
+    }
+    case 'extendTicket': {
+      const item = next.items.find(i => i.id === mutation.itemId);
+      if (!item?.dueDate) throw new Error('Set a due date first. An extension moves an existing date.');
+      if (actor.role === 'admin') { extend(item, mutation.hours, mutation.reasonCategory, mutation.reason); break; }
+      if (item.estimateHours + mutation.hours > MAX_TICKET_HOURS) throw new Error(`This ticket already has ${item.estimateHours} h. A ticket holds up to ${MAX_TICKET_HOURS} h, so split the extra work into a new ticket.`);
+      if (next.dueDateRequests.some(r => r.itemId === item.id && r.status === 'pending')) throw new Error('An extension for this ticket already waits for approval.');
+      next.dueDateRequests.unshift({ id, itemId: item.id, requesterId: actor.id, fromDate: item.dueDate, fromEstimate: item.estimateHours, hours: mutation.hours, approvedHours: null, reasonCategory: mutation.reasonCategory, reason: mutation.reason, status: 'pending', reviewedById: null, reviewedAt: null, reviewNote: null, createdAt: now });
+      log(item.id, 'task.due_change_requested', { requestId: id, from: item.dueDate, hours: mutation.hours, reasonCategory: mutation.reasonCategory }, mutation.reason);
+      break;
+    }
+    case 'approveDueDateRequest': {
+      const request = next.dueDateRequests.find(r => r.id === mutation.id);
+      const item = next.items.find(i => i.id === request?.itemId);
+      if (!request || request.status !== 'pending' || !item) throw new Error('This request was already reviewed.');
+      if (item.dueDate !== request.fromDate || item.estimateHours !== request.fromEstimate) throw new Error('The ticket\'s due date or estimate changed after this request. Decline it, and the developer can ask again.');
+      const hours = mutation.hours ?? request.hours;
+      extend(item, hours, request.reasonCategory, request.reason, request);
+      Object.assign(request, { status: 'approved', approvedHours: hours, reviewedById: actor.id, reviewedAt: now, reviewNote: mutation.note?.trim() || null });
+      break;
+    }
+    case 'declineDueDateRequest': {
+      const request = next.dueDateRequests.find(r => r.id === mutation.id);
+      if (!request || request.status !== 'pending') throw new Error('This request was already reviewed.');
+      Object.assign(request, { status: 'declined', reviewedById: actor.id, reviewedAt: now, reviewNote: mutation.reason });
+      log(request.itemId, 'task.due_change_declined', { requestId: request.id, from: request.fromDate, hours: request.hours }, mutation.reason);
+      break;
+    }
+    case 'withdrawDueDateRequest': {
+      const request = next.dueDateRequests.find(r => r.id === mutation.id && r.status === 'pending');
+      if (!request) break;
+      next.dueDateRequests = next.dueDateRequests.filter(r => r.id !== request.id);
+      log(request.itemId, 'task.due_change_withdrawn', { requestId: request.id, from: request.fromDate, hours: request.hours });
       break;
     }
     case 'withdrawTicketRequest':
@@ -339,19 +396,24 @@ export function viewAs(data: DashboardData, viewerId: string | null): DashboardD
   if (viewer.role === 'admin') return { ...data, currentUser: viewer };
   const items = data.items.filter(item => item.assigneeId === viewer.id);
   const requests = data.requests.filter(request => request.requesterId === viewer.id);
+  const dueDateRequests = data.dueDateRequests.filter(request => request.requesterId === viewer.id);
   const itemIds = new Set(items.map(item => item.id));
   const history = new Set([...items, ...requests].map(row => row.projectId));
   const projects = data.projects.filter(p => isAdhocProject(p) || p.memberIds.includes(viewer.id) || history.has(p.id));
   const projectIds = new Set(projects.map(p => p.id));
   return {
-    ...data, currentUser: viewer, members: [viewer], items, requests, projects,
+    ...data, currentUser: viewer, members: [viewer], items, requests, dueDateRequests, projects,
     phases: data.phases.filter(phase => projectIds.has(phase.projectId)),
     activities: data.activities.filter(a => itemIds.has(a.entityId) || (projectIds.has(a.entityId) && a.action === 'project.target_changed')),
     leaves: data.leaves.filter(l => l.userId === viewer.id),
   };
 }
 
-export const DEMO_DATA_KEY = 'urban-gabru-kpi-demo-v6';
+export const DEMO_DATA_KEY = 'urban-gabru-kpi-demo-v7';
+/** The extension waiting for approval on a ticket, if any. */
+export function pendingExtension(data: DashboardData, itemId: string) {
+  return data.dueDateRequests.find(request => request.itemId === itemId && request.status === 'pending');
+}
 const DEMO_VIEWER_KEY = 'urban-gabru-kpi-demo-viewer';
 let demoCacheText: string | null = null;
 let demoCacheData: DashboardData | null = null;

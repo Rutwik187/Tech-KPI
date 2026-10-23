@@ -18,7 +18,7 @@ import { DueDate, FixBy, ItemActions, PhaseTag, ProjectTag, SeverityBadge, Ticke
 
 const PAGE_SIZE = 12;
 
-export function WorkList({ data, kind, onOpen, onAction, onAdd, busy }: { data: DashboardData; kind: 'task' | 'bug'; onOpen: (id: string) => void; onAction: OnAction; onAdd: (kind: 'task' | 'bug') => void; busy: boolean }) {
+export function WorkList({ data, kind, onOpen, onAction, onExtend, onAdd, busy }: { data: DashboardData; kind: 'task' | 'bug'; onOpen: (id: string) => void; onAction: OnAction; onExtend: (item: WorkItem) => void; onAdd: (kind: 'task' | 'bug') => void; busy: boolean }) {
   const query = useSearchParams();
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('all');
@@ -90,7 +90,7 @@ export function WorkList({ data, kind, onOpen, onAction, onAdd, busy }: { data: 
                 const column = filtered.filter(item => item.status === s);
                 return <div className="kanban-column" key={s}>
                   <div className={`kanban-heading kanban-${s}`}><span><i className={`dot-${s}`} />{statusLabels[s]}</span><Badge variant="secondary">{column.length}</Badge></div>
-                  <div className="kanban-items">{column.map(item => <TicketCard key={item.id} item={item} data={data} onOpen={onOpen} onAction={onAction} busy={busy} />)}{column.length === 0 && <div className="kanban-empty">Nothing here</div>}</div>
+                  <div className="kanban-items">{column.map(item => <TicketCard key={item.id} item={item} data={data} onOpen={onOpen} onAction={onAction} onExtend={onExtend} busy={busy} />)}{column.length === 0 && <div className="kanban-empty">Nothing here</div>}</div>
                 </div>;
               })}</div>
             : <div className="table-scroll"><Table className="data-table work-table">
@@ -104,7 +104,7 @@ export function WorkList({ data, kind, onOpen, onAction, onAdd, busy }: { data: 
                   {admin && <TableCell><div className="owner-cell"><Avatar member={findMember(data, item.assigneeId)} size="small" /><span>{firstName(findMember(data, item.assigneeId))}</span></div></TableCell>}
                   <TableCell><div className="project-phase-cell"><ProjectTag data={data} id={item.projectId} /><PhaseTag data={data} id={item.phaseId} /></div></TableCell>
                   <TableCell>{kind === 'task' ? <span className="estimate-cell"><Clock3 size={12} />{item.estimateHours} h</span> : <SeverityBadge item={item} />}</TableCell>
-                  <TableCell>{kind === 'task' ? <DueDate item={item} data={data} /> : <FixBy item={item} data={data} />}</TableCell>
+                  <TableCell>{kind === 'task' ? <DueDate item={item} data={data} onExtend={onExtend} /> : <FixBy item={item} data={data} />}</TableCell>
                   <TableCell><ItemActions item={item} admin={admin} onAction={onAction} busy={busy} /></TableCell>
                 </TableRow>)}</TableBody>
               </Table></div>}

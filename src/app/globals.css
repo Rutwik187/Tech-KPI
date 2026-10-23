@@ -962,5 +962,23 @@ button.project-title:hover { color:var(--primary); }
   .finished-list { padding:0 16px 8px; }
   .finished-row { flex-wrap:wrap; }
   .finished-row .project-tag { display:none; }
-  .approvals-strip { grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; padding:16px; }
+  .approvals-strip { gap:10px; padding:16px; }
 }
+
+/* Extend or set a ticket's due date right where the date is shown. */
+.due-cell:has(.due-action) { flex-direction:column; align-items:flex-start; gap:4px; }
+.due-cell .due-action { margin-left:-6px; }
+.due-cell .due-action,.task-card-facts .due-action { height:24px; padding:0 6px; gap:4px; font-size:12px; font-weight:500; color:var(--primary); }
+.due-cell .due-action svg,.task-card-facts .due-action svg { width:13px; height:13px; }
+.task-card-facts .due-action { margin-left:auto; }
+
+/* Due date extensions that wait for an admin. */
+.approvals-strip { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.extension-pending { display:inline-flex; align-items:center; gap:4px; font-size:11px; color:var(--warning-foreground); border-color:color-mix(in oklch, var(--warning-foreground) 35%, var(--border)); }
+.extension-waiting { display:block; margin-top:2px; font-size:11px; color:var(--warning-foreground); }
+.request-card .request-title-link { justify-content:flex-start; gap:8px; height:auto; padding:2px 0; white-space:normal; text-align:left; font-size:15px; font-weight:600; }
+.request-card .request-title-link .item-key { font-weight:500; white-space:nowrap; flex-shrink:0; }
+.extension-dates strong { font-weight:600; color:var(--foreground); }
+.request-warning { display:flex; gap:8px; padding:8px 12px; border-radius:8px; font-size:12px; color:var(--warning-foreground); background:color-mix(in oklch, var(--warning-foreground) 8%, var(--card)); }
+.request-warning svg { flex-shrink:0; margin-top:2px; }
+@media (max-width:767px) { .approvals-strip { grid-template-columns:repeat(2,minmax(0,1fr)); } }

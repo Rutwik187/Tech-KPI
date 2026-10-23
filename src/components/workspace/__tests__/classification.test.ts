@@ -14,7 +14,7 @@ const project = (id: string, primary: Member, ...others: Member[]): Project => (
 const data: DashboardData = {
   currentUser: admin, members: [admin, arshad, gayatri, pratik, arpit],
   projects: [{ ...ADHOC_PROJECT }, project('dm-portal', gayatri, arshad), project('im-portal', arshad), project('npd', pratik, gayatri), project('price-tracker', arpit)],
-  phases: [], items: [], requests: [], activities: [], leaves: [], holidays: [], settings: defaultSettings, mode: 'demo',
+  phases: [], items: [], requests: [], dueDateRequests: [], activities: [], leaves: [], holidays: [], settings: defaultSettings, mode: 'demo',
 };
 const start: WorkClassification = { projectId: ADHOC_PROJECT_ID, phaseId: null, assigneeId: arshad.id };
 const none: PickedByHand = { project: false, owner: false };

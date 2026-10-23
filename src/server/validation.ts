@@ -19,6 +19,7 @@ const phaseDescription = z.string().trim().max(2000);
 const phases = z.array(z.object({ name: phaseName, description: phaseDescription.optional() }).strict()).max(50)
   .refine((list) => new Set(list.map((phase) => phase.name.toLowerCase())).size === list.length, "Phase names must be unique within a project.");
 const extensionReason = z.enum(["scope_change", "blocked_dependency", "underestimated", "other"]);
+const extraHours = z.number().min(0.5, "Ask for at least half an hour.").max(80).multipleOf(0.5, "Use steps of half an hour.");
 const reason = z.string().trim().max(2000);
 const timelineOrder = (value: { startDate?: string | null; targetDate?: string | null }) => !value.startDate || !value.targetDate || value.targetDate >= value.startDate;
 const timelineOrderMessage = "The target date must be on or after the start date.";
@@ -70,5 +71,10 @@ export const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("approveTicketRequest"), id: uuid, patch: z.object(requestFields).partial().strict().optional(), note: reason.optional() }).strict(),
   z.object({ action: z.literal("declineTicketRequest"), id: uuid, reason: z.string().trim().min(3, "Say why you are declining, so the developer can adjust.").max(2000) }).strict(),
   z.object({ action: z.literal("withdrawTicketRequest"), id: uuid }).strict(),
+  // A ticket needs more hours. An admin's extension applies at once. A developer's waits for an admin to approve it.
+  z.object({ action: z.literal("extendTicket"), itemId: uuid, hours: extraHours, reasonCategory: extensionReason, reason: z.string().trim().min(3, "Say why the ticket needs more time.").max(2000) }).strict(),
+  z.object({ action: z.literal("approveDueDateRequest"), id: uuid, hours: extraHours.optional(), note: reason.optional() }).strict(),
+  z.object({ action: z.literal("declineDueDateRequest"), id: uuid, reason: z.string().trim().min(3, "Say why you are declining, so the developer can adjust.").max(2000) }).strict(),
+  z.object({ action: z.literal("withdrawDueDateRequest"), id: uuid }).strict(),
 ]);
 export type DataAction = z.infer<typeof actionSchema>;

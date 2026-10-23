@@ -13,8 +13,8 @@ import { FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { extensionHistory, reasonLabel, ticketExtendedDays } from '@/lib/timeline';
-import { displayDate, displayDateTime, findMember, findProject, hours, isAdhocProject, kindLabels, percent, projectMembers, statusLabels, today, type MutationFn, type OnAction, type WorkClassification } from './lib';
-import { ItemActions, PhaseTag, ProjectTag, SeverityBadge } from './parts';
+import { displayDate, displayDateTime, findMember, findProject, hours, isAdhocProject, kindLabels, pendingExtension, percent, projectMembers, statusLabels, today, type MutationFn, type OnAction, type WorkClassification } from './lib';
+import { canMoveDueDate, ItemActions, PhaseTag, ProjectTag, SeverityBadge } from './parts';
 import { dayCount, ExtensionHistory, TicketExtendedBadge } from './timeline';
 import { ClassificationFields, FormChoice } from './forms';
 
@@ -31,11 +31,20 @@ function activityText(event: Activity, item: WorkItem) {
     case 'task.estimate_revised': return `changed the estimate from ${event.payload.from} h to ${event.payload.to} h`;
     case 'task.updated': case 'bug.updated': case 'updated': return `updated the ${noun} details`;
   }
+  const category = reasonLabel(event.payload.reasonCategory);
+  const asked = `${event.payload.hours} more ${event.payload.hours === 1 ? 'hour' : 'hours'}`;
+  switch (event.action) {
+    case 'task.due_change_requested': return `asked for ${asked}${category ? ` · ${category}` : ''}`;
+    case 'task.due_change_declined': return `declined the ask for ${asked}`;
+    case 'task.due_change_withdrawn': return `withdrew the ask for ${asked}`;
+  }
   if (event.action.endsWith('.due_changed')) {
     const from = event.payload.from;
     if (typeof from !== 'string') return `set the due date to ${date(event.payload.to)}`;
-    const category = reasonLabel(event.payload.reasonCategory);
-    return `${String(event.payload.to) > from ? 'extended' : 'moved'} the due date from ${date(from)} to ${date(event.payload.to)}${category ? ` · ${category}` : ''}`;
+    const moved = `from ${date(from)} to ${date(event.payload.to)}${category ? ` · ${category}` : ''}`;
+    // An extension in hours names them. An older one only moved the date.
+    if (typeof event.payload.addedHours === 'number') return `${typeof event.payload.requestedBy === 'string' ? 'approved' : 'added'} ${event.payload.addedHours} more ${event.payload.addedHours === 1 ? 'hour' : 'hours'}, so the due date moved ${moved}`;
+    return `${String(event.payload.to) > from ? 'extended the due date' : 'moved the due date'} ${moved}`;
   }
   if (event.action.endsWith('status_changed')) {
     const to = event.payload.to as WorkItem['status'];
@@ -60,6 +69,7 @@ export function ItemDrawer({ item, data, busy, onClose, onAction, onRevise, onEx
   const closed = item.status === 'done' || item.status === 'fixed' || item.status === 'verified';
   const extensionCount = extensionHistory(data, item.id).length;
   const extendedDays = ticketExtendedDays(item);
+  const waitingExtension = pendingExtension(data, item.id);
   const project = findProject(data, item.projectId);
   const pastProjectTarget = item.type === 'task' && !closed && !!item.dueDate && !!project?.targetDate && !isAdhocProject(project) && item.dueDate > project.targetDate;
   const overdue = item.type === 'task' && !closed && !!item.dueDate && item.dueDate < today(data.settings.timezone);
@@ -88,9 +98,10 @@ export function ItemDrawer({ item, data, busy, onClose, onAction, onRevise, onEx
       {item.type === 'task'
         ? <div className="detail-facts">
             <div><span>Estimate</span><strong>{item.estimateHours} <small>hours</small></strong>{admin && !closed && <Button variant="link" size="sm" onClick={() => onRevise({ estimateHours: item.estimateHours }, 'Revise estimate')}>Revise<Pencil data-icon="inline-end" size={11} /></Button>}</div>
-            <div><span>Due date</span><strong className={clsx(overdue && 'due-overdue')}>{item.dueDate ? displayDate(item.dueDate) : '—'}{overdue && <small> · overdue</small>}</strong>{(admin || owner) && !closed && (item.dueDate
-              ? <Button variant="link" size="sm" onClick={onExtend}>Extend<CalendarClock data-icon="inline-end" size={11} /></Button>
-              : <Button variant="link" size="sm" onClick={() => onRevise({ dueDate: null }, 'Set due date')}>Set date<CalendarDays data-icon="inline-end" size={11} /></Button>)}</div>
+            <div><span>Due date</span><strong className={clsx(overdue && 'due-overdue')}>{item.dueDate ? displayDate(item.dueDate) : '—'}{overdue && <small> · overdue</small>}</strong>{canMoveDueDate(item, data) && (item.dueDate
+              ? <Button variant="link" size="sm" onClick={onExtend}>{admin ? 'Extend' : 'Ask to extend'}<CalendarClock data-icon="inline-end" size={11} /></Button>
+              : <Button variant="link" size="sm" onClick={onExtend}>Set date<CalendarDays data-icon="inline-end" size={11} /></Button>)}
+              {waitingExtension && <small className="extension-waiting">Asked for {waitingExtension.hours} more {waitingExtension.hours === 1 ? 'hour' : 'hours'} · waits for approval</small>}</div>
             {item.completedAt
               ? <div><span>Approved on</span><strong>{displayDate(item.completedAt)}</strong><small>{item.estimateHours} h credited</small></div>
               : <div><span>Extended</span><strong>{extendedDays ? `+${dayCount(extendedDays)}` : extensionCount ? 'Moved' : 'No'}</strong><small>{extensionCount ? `${extensionCount} time${extensionCount === 1 ? '' : 's'} · reasons below` : item.dueDate ? 'On its first due date' : 'No due date yet'}</small></div>}

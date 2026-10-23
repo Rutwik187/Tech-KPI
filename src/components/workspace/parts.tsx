@@ -2,14 +2,14 @@
 
 import type { CSSProperties, ReactNode } from 'react';
 import clsx from 'clsx';
-import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCheck, Clock3 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, CalendarClock, CalendarDays, Check, CheckCheck, Clock3 } from 'lucide-react';
 import type { DashboardData, WorkItem } from '@/lib/types';
 import { getBugKpi, type MemberKpi } from '@/lib/kpi';
 import { Avatar, PriorityBadge } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { bands, displayDate, displayDateTime, findMember, findProject, firstName, hours, isDone, percent, phaseName, today, type OnAction } from './lib';
+import { bands, displayDate, displayDateTime, findMember, findProject, firstName, hours, isDone, pendingExtension, percent, phaseName, today, type OnAction } from './lib';
 import { TicketExtendedBadge } from './timeline';
 
 export function ProjectTag({ data, id }: { data: DashboardData; id: string }) {
@@ -56,9 +56,35 @@ export function ItemActions({ item, admin, onAction, busy }: { item: WorkItem; a
   return <Button variant={next === 'done' || next === 'verified' ? 'secondary' : 'outline'} size="sm" type="button" disabled={busy} onClick={() => onAction(item, next)}>{label}<Icon data-icon="inline-end" size={13} /></Button>;
 }
 
-export function DueDate({ item, data }: { item: WorkItem; data: DashboardData }) {
+/**
+ * The owner or an admin may change an open ticket's due date. Setting the first one is planning.
+ * An admin extends directly with a reason; a developer asks, and may not ask again while one request waits.
+ */
+export function canMoveDueDate(item: WorkItem, data: DashboardData) {
+  if (item.type !== 'task' || !['todo', 'in_progress', 'blocked'].includes(item.status)) return false;
+  if (data.currentUser.role === 'admin') return true;
+  return item.assigneeId === data.currentUser.id && !(item.dueDate && pendingExtension(data, item.id));
+}
+
+/** Shows that an extension waits for the admin, with the extra hours that were asked for. */
+export function PendingExtensionBadge({ data, item }: { data: DashboardData; item: WorkItem }) {
+  const request = pendingExtension(data, item.id);
+  if (!request) return null;
+  return <Badge variant="outline" className="extension-pending" title={`${request.hours} more ${request.hours === 1 ? 'hour waits' : 'hours wait'} for approval`}><CalendarClock size={11} />Asked +{request.hours} h</Badge>;
+}
+
+function DueDateButton({ item, data, onExtend }: { item: WorkItem; data: DashboardData; onExtend: (item: WorkItem) => void }) {
+  // A developer's extension is a request, so the button says so.
+  const label = !item.dueDate ? 'Set date' : data.currentUser.role === 'admin' ? 'Extend' : 'Ask to extend';
+  return <Button variant="ghost" size="sm" type="button" className="due-action" aria-label={`${item.dueDate ? 'Extend the due date of' : 'Set a due date for'} ${item.key}`} onClick={() => onExtend(item)}>
+    <CalendarClock data-icon="inline-start" />{label}
+  </Button>;
+}
+
+export function DueDate({ item, data, onExtend }: { item: WorkItem; data: DashboardData; onExtend?: (item: WorkItem) => void }) {
   const overdue = !!item.dueDate && item.dueDate < today(data.settings.timezone) && !isDone(item);
-  return <span className="due-cell"><span className={clsx('due-date', overdue && 'due-overdue')}><CalendarDays size={12} />{item.dueDate ? displayDate(item.dueDate) : 'No due date'}</span>{overdue && <span className="sr-only">Overdue</span>}<TicketExtendedBadge data={data} item={item} /></span>;
+  return <span className="due-cell"><span className={clsx('due-date', overdue && 'due-overdue')}><CalendarDays size={12} />{item.dueDate ? displayDate(item.dueDate) : 'No due date'}</span>{overdue && <span className="sr-only">Overdue</span>}<TicketExtendedBadge data={data} item={item} /><PendingExtensionBadge data={data} item={item} />
+    {onExtend && canMoveDueDate(item, data) && <DueDateButton item={item} data={data} onExtend={onExtend} />}</span>;
 }
 
 /** A bug earns full points when fixed by its fix-by time, half within twice the target, none after that. */
@@ -74,7 +100,7 @@ export function FixBy({ item, data }: { item: WorkItem; data: DashboardData }) {
 }
 
 /** Shared ticket card for the board and personal work grid. */
-export function TicketCard({ item, data, onOpen, onAction, busy }: { item: WorkItem; data: DashboardData; onOpen: (id: string) => void; onAction: OnAction; busy: boolean }) {
+export function TicketCard({ item, data, onOpen, onAction, onExtend, busy }: { item: WorkItem; data: DashboardData; onOpen: (id: string) => void; onAction: OnAction; onExtend?: (item: WorkItem) => void; busy: boolean }) {
   const project = findProject(data, item.projectId);
   const owner = findMember(data, item.assigneeId);
   const phase = item.phaseId ? phaseName(data, item.phaseId) : null;
@@ -91,7 +117,8 @@ export function TicketCard({ item, data, onOpen, onAction, busy }: { item: WorkI
       {item.type === 'task' && <span className="task-card-facts">
         <span title="Estimate"><Clock3 size={12} aria-hidden="true" />{item.estimateHours} h</span>
         {item.dueDate && <span className={clsx(overdue && 'due-overdue')} title={overdue ? 'Overdue' : 'Due date'}><CalendarDays size={12} aria-hidden="true" />{displayDate(item.dueDate)}{overdue && <span className="sr-only"> overdue</span>}</span>}
-        <TicketExtendedBadge data={data} item={item} />
+        <TicketExtendedBadge data={data} item={item} /><PendingExtensionBadge data={data} item={item} />
+        {onExtend && canMoveDueDate(item, data) && <DueDateButton item={item} data={data} onExtend={onExtend} />}
       </span>}
     <div className="task-card-bottom">
       <span className="task-card-owner" title={owner?.name}><Avatar member={owner} size="small" /><span>{firstName(owner)}</span></span>

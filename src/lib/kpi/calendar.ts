@@ -104,3 +104,13 @@ export function addWorkingHours(start: Date, hours: number, calendar: WorkCalend
   }
   throw new RangeError('Cannot find a working deadline in this calendar.');
 }
+
+/**
+ * The due date after a ticket gets more hours. The extra hours start when the current due date's workday ends,
+ * or now if that has already passed, so an overdue ticket never gets a new date in the past.
+ */
+export function dueDateAfterHours(dueDate: string, hours: number, calendar: WorkCalendar, now = new Date()): string {
+  const dueEnd = localDate(dueDate, calendar.workdayEnd, calendar.timezone);
+  const start = now.getTime() > dueEnd.getTime() ? now : dueEnd;
+  return dateKey(addWorkingHours(start, hours, calendar), calendar.timezone);
+}

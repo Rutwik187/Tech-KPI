@@ -3,16 +3,17 @@
 import { useState, type FormEvent } from 'react';
 import clsx from 'clsx';
 import { AlertTriangle, CalendarClock, CalendarRange, CircleCheck, CircleHelp, Flag, Hourglass, TrendingDown } from 'lucide-react';
-import type { DashboardData } from '@/lib/types';
+import type { DashboardData, DueDateRequest } from '@/lib/types';
 import { addDays, daysBetween, extensionHistory, healthLabels, projectTimeline, reasonLabel, ticketExtendedDays, type ProjectTimeline, type TimelineHealth } from '@/lib/timeline';
 import { FormDate, FormField, Modal } from '@/components/ui';
+import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { FieldGroup } from '@/components/ui/field';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { displayDate, findMember, findProject, isAdhocProject, today, type ExtendTarget, type MutationFn } from './lib';
+import { displayDate, findMember, findProject, isAdhocProject, MAX_TICKET_HOURS, ticketExtension, today, type ExtendTarget, type MutationFn } from './lib';
 import { FormChoice, FormFooter } from './forms';
 
 export function plural(count: number, noun: string, many = `${noun}s`) { return `${count} ${count === 1 ? noun : many}`; }
@@ -42,12 +43,18 @@ export function ExtensionHistory({ data, entityId, empty }: { data: DashboardDat
   return <ol className="extension-history">{moves.map((move, index) => {
     const from = String(move.payload.from), to = String(move.payload.to);
     const shift = daysBetween(from, to);
-    const actor = move.actorId === data.currentUser.id ? 'You' : findMember(data, move.actorId)?.name ?? 'Your admin';
+    const name = (id: string) => id === data.currentUser.id ? 'You' : findMember(data, id)?.name ?? 'Your admin';
+    // An approved request names who asked and who approved it.
+    const actor = typeof move.payload.requestedBy === 'string' ? `${name(move.payload.requestedBy)} asked · ${name(move.actorId)} approved` : name(move.actorId);
     const category = reasonLabel(move.payload.reasonCategory);
+    // A ticket extension adds hours. The admin may approve fewer or more hours than were asked for.
+    const added = typeof move.payload.addedHours === 'number' ? move.payload.addedHours : null;
+    const asked = typeof move.payload.requestedHours === 'number' ? move.payload.requestedHours : null;
     return <li key={move.id}>
       <span className="extension-step" aria-hidden="true">{index + 1}</span>
       <div>
-        <p className="extension-move"><strong>{displayDate(from)} → {displayDate(to)}</strong><Badge variant="outline">{shift >= 0 ? '+' : '−'}{dayCount(shift)}</Badge>{category && <Badge variant="secondary">{category}</Badge>}</p>
+        <p className="extension-move"><strong>{displayDate(from)} → {displayDate(to)}</strong>{added !== null && <Badge variant="outline">+{added} h</Badge>}<Badge variant="outline">{shift >= 0 ? '+' : '−'}{dayCount(shift)}</Badge>{category && <Badge variant="secondary">{category}</Badge>}</p>
+        {added !== null && <span className="extension-meta">Estimate {String(move.payload.estimateFrom)} h → {String(move.payload.estimateTo)} h{asked !== null ? ` · asked for ${asked} h` : ''}</span>}
         {move.reason && <blockquote>{move.reason}</blockquote>}
         <span className="extension-meta">{actor} · {displayDate(move.createdAt, { weekday: 'short' })}</span>
       </div>
@@ -56,14 +63,31 @@ export function ExtensionHistory({ data, entityId, empty }: { data: DashboardDat
 }
 
 const QUICK_SHIFTS = [{ days: 1, label: '+1 day' }, { days: 2, label: '+2 days' }, { days: 7, label: '+1 week' }, { days: 14, label: '+2 weeks' }];
+const QUICK_HOURS = [1, 2, 4, 8];
 const REASONS = [{ value: 'blocked_dependency', label: 'Waiting on someone' }, { value: 'scope_change', label: 'Scope grew' }, { value: 'underestimated', label: 'Took longer' }, { value: 'other', label: 'Other' }];
 
-/** Moves a ticket's due date or a project's target date. The reason goes into the history for everyone to see. */
+/**
+ * Gives a ticket more time, or moves a project's target date. A ticket asks for extra hours: they join the estimate,
+ * and the due date moves by them. The reason goes into the history for everyone to see.
+ */
 export function ExtendForm({ target, data, mutate, onClose, busy }: { target: ExtendTarget; data: DashboardData; mutate: MutationFn; onClose: () => void; busy: boolean }) {
   const ticket = target.kind === 'ticket';
-  const current = (ticket ? target.item.dueDate : target.project.targetDate) ?? today(data.settings.timezone);
+  // A ticket without a due date gets its first one here. That is planning, so it needs no reason.
+  const setting = ticket && !target.item.dueDate;
+  const addingHours = ticket && !setting;
+  // A developer's extension is a request. Nothing changes until an admin approves it.
+  const requesting = addingHours && data.currentUser.role !== 'admin';
+  const [hoursText, setHoursText] = useState('2');
+  const hours = Number(hoursText);
+  const room = ticket ? MAX_TICKET_HOURS - target.item.estimateHours : 0;
+  const hoursValid = hours >= 0.5 && Number.isInteger(hours * 2) && hours <= room;
+  const extension = addingHours && hoursValid ? ticketExtension(data, target.item, hours) : null;
+  const day = today(data.settings.timezone);
+  const current = (ticket ? target.item.dueDate : target.project.targetDate) ?? day;
   const original = ticket ? target.item.originalDueDate : target.project.originalTargetDate;
-  const [date, setDate] = useState(addDays(current, 7));
+  const [pickedDate, setDate] = useState(addDays(current, 7));
+  // When a ticket gets more hours, its new due date follows from them.
+  const date = addingHours ? extension?.dueDate ?? current : pickedDate;
   const moves = extensionHistory(data, ticket ? target.item.id : target.project.id).length;
   const shift = date ? daysBetween(current, date) : 0;
   const project = ticket ? findProject(data, target.item.projectId) : target.project;
@@ -75,30 +99,47 @@ export function ExtendForm({ target, data, mutate, onClose, busy }: { target: Ex
     const fields = new FormData(event.currentTarget);
     const reason = String(fields.get('reason') ?? '').trim();
     const reasonCategory = String(fields.get('reasonCategory') ?? 'other');
-    const ok = ticket
-      ? await mutate({ action: 'updateItem', id: target.item.id, patch: { dueDate: date }, reason, reasonCategory }, `Due date moved to ${displayDate(date)}. The reason is in the history.`)
+    const ok = setting
+      ? await mutate({ action: 'updateItem', id: target.item.id, patch: { dueDate: date } }, `Due date set to ${displayDate(date)}.`)
+      : ticket
+      ? await mutate({ action: 'extendTicket', itemId: target.item.id, hours, reason, reasonCategory: reasonCategory as DueDateRequest['reasonCategory'] },
+        requesting ? `Asked for ${hours} more ${hours === 1 ? 'hour' : 'hours'}. Your admin approves it.` : `Added ${hours} h. Due ${displayDate(date)}. The reason is in the history.`)
       : await mutate({ action: 'updateProject', id: target.project.id, patch: { targetDate: date }, reason, reasonCategory }, `${target.project.name} now targets ${displayDate(date)}. The reason is in the history.`);
     if (ok) onClose();
   }
-  return <Modal title={ticket ? 'Extend due date' : 'Extend project timeline'} subtitle={ticket ? `${target.item.key} · ${target.item.title}` : target.project.name} onClose={onClose}>
+  const valid = setting ? !!date && date >= day : addingHours ? hoursValid : shift > 0;
+  const hoursLabel = `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+  return <Modal title={setting ? 'Set due date' : requesting ? 'Ask for more time' : ticket ? 'Give this ticket more time' : 'Extend project timeline'} subtitle={ticket ? `${target.item.key} · ${target.item.title}` : target.project.name} onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
-        <div className="extend-current">
+        {requesting && <Alert className="form-tip"><CircleHelp size={17} /><AlertDescription><p>Your admin approves the extra hours. Until then, the estimate and due date stay as they are.</p></AlertDescription></Alert>}
+        {setting ? <p className="field-help">This ticket has no due date yet. Once it has one, you can extend it with a reason.</p> : addingHours ? <div className="extend-current">
+          <div><span>Estimate now</span><strong>{target.item.estimateHours} h</strong></div>
+          <div><span>Due now</span><strong>{displayDate(current, { weekday: 'short', year: 'numeric' })}</strong></div>
+          <div><span>Extended before</span><strong>{moves ? plural(moves, 'time') : 'Never'}</strong></div>
+        </div> : <div className="extend-current">
           <div><span>{ticket ? 'Due now' : 'Target now'}</span><strong>{displayDate(current, { weekday: 'short', year: 'numeric' })}</strong></div>
           {original && original !== current && <div><span>First {ticket ? 'due date' : 'target'}</span><strong>{displayDate(original, { year: 'numeric' })}</strong></div>}
           <div><span>Moved before</span><strong>{moves ? plural(moves, 'time') : 'Never'}</strong></div>
-        </div>
-        <div className="extend-date-row">
-          <FormField>New {ticket ? 'due date' : 'target date'}<FormDate name="date" required value={date} min={addDays(current, 1)} onValueChange={setDate} /></FormField>
+        </div>}
+        {addingHours ? <div className="extend-date-row">
+          <FormField>Extra hours needed<Input type="number" name="hours" required min={0.5} max={room} step={0.5} value={hoursText} onChange={event => setHoursText(event.target.value)} className="extend-hours-input" /></FormField>
+          <div className="extend-quick" role="group" aria-label="Add hours">{QUICK_HOURS.filter(option => option <= room).map(option => <Button key={option} type="button" size="sm" variant={hours === option ? 'secondary' : 'outline'} aria-pressed={hours === option} onClick={() => setHoursText(String(option))}>+{option} h</Button>)}</div>
+          <p className="field-help extend-preview" aria-live="polite">{extension
+            ? <>Estimate <strong>{target.item.estimateHours} h → {extension.estimate} h</strong>. Due date <strong>{displayDate(current)} → {displayDate(extension.dueDate, { weekday: 'short' })}</strong>{extension.dueDate === current ? '' : ` (+${dayCount(daysBetween(current, extension.dueDate!))})`}.{current < day ? ' It is overdue, so the hours count from now.' : ''}</>
+            : room < 0.5 ? `This ticket already has ${MAX_TICKET_HOURS} h. Split the extra work into a new ticket.`
+            : hours > room ? `A ticket holds up to ${MAX_TICKET_HOURS} h. Ask for ${room} h at most, or split the work into a new ticket.` : 'Enter the extra hours, in steps of half an hour.'}</p>
+        </div> : <div className="extend-date-row">
+          <FormField>{setting ? 'Due date' : `New ${ticket ? 'due date' : 'target date'}`}<FormDate name="date" required value={date} min={setting ? day : addDays(current, 1)} onValueChange={setDate} /></FormField>
           <div className="extend-quick" role="group" aria-label="Move the date by">{QUICK_SHIFTS.map(option => <Button key={option.days} type="button" size="sm" variant={shift === option.days ? 'secondary' : 'outline'} aria-pressed={shift === option.days} onClick={() => setDate(addDays(current, option.days))}>{option.label}</Button>)}</div>
-          <p className="field-help extend-preview" aria-live="polite">{shift > 0 ? <>Moves the date by <strong>{dayCount(shift)}</strong>, from {displayDate(current)} to {displayDate(date, { weekday: 'short' })}.</> : 'Choose a date after the current one.'}</p>
-        </div>
+          <p className="field-help extend-preview" aria-live="polite">{setting ? (valid ? <>Due <strong>{displayDate(date, { weekday: 'short' })}</strong>, {shift === 0 ? 'today' : `in ${dayCount(shift)}`}.</> : 'Choose today or a later date.') : shift > 0 ? <>Moves the date by <strong>{dayCount(shift)}</strong>, from {displayDate(current)} to {displayDate(date, { weekday: 'short' })}.</> : 'Choose a date after the current one.'}</p>
+        </div>}
         {pastProjectTarget && <Alert className="form-tip extend-warning"><AlertTriangle size={17} /><AlertDescription><p>This is after the <strong>{project!.name}</strong> target date ({displayDate(project!.targetDate)}). {admin ? 'Extend the project too if the whole project slips.' : 'Tell your admin, as the project may need more time too.'}</p></AlertDescription></Alert>}
         {ticketsAfter ? <Alert className="form-tip"><CircleHelp size={17} /><AlertDescription><p>{plural(ticketsAfter, 'open ticket')} {ticketsAfter === 1 ? 'is' : 'are'} still due after this date.</p></AlertDescription></Alert> : null}
-        <FormField>Why does it need more time?<FormChoice name="reasonCategory" defaultValue="blocked_dependency" options={REASONS} /></FormField>
-        <FormField>Reason<Textarea name="reason" required minLength={3} maxLength={2000} rows={3} placeholder={ticket ? 'e.g. The payment sandbox was down for a day.' : 'e.g. The client added a refunds screen to the scope.'} /><span className="field-help">Everyone on the {ticket ? 'ticket' : 'project'} can read this in its history.</span></FormField>
+        {!setting && <><FormField>Why does it need more time?<FormChoice name="reasonCategory" defaultValue="blocked_dependency" options={REASONS} /></FormField>
+        <FormField>Reason<Textarea name="reason" required minLength={3} maxLength={2000} rows={3} placeholder={ticket ? 'e.g. The payment sandbox was down for a day.' : 'e.g. The client added a refunds screen to the scope.'} /><span className="field-help">Everyone on the {ticket ? 'ticket' : 'project'} can read this in its history.</span></FormField></>}
       </FieldGroup>
-      <FormFooter busy={busy} disabled={shift <= 0} onClose={onClose} label={shift > 0 ? `Extend to ${displayDate(date)}` : 'Choose a later date'} />
+      <FormFooter busy={busy} disabled={!valid} onClose={onClose} label={setting ? valid ? `Set due date to ${displayDate(date)}` : 'Choose a date' : addingHours ? !valid ? 'Enter the extra hours' : requesting ? `Ask for ${hoursLabel} more` : `Add ${hoursLabel}` : !valid ? 'Choose a later date' : `Extend to ${displayDate(date)}`} />
     </form>
   </Modal>;
 }

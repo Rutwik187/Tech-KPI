@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { account, activities, holidays, leaves, memberProfiles, projectMembers, projectPhases, projects, session, settings, ticketRequests, user, workItems } from "@/db/schema";
+import { account, activities, dueDateRequests, holidays, leaves, memberProfiles, projectMembers, projectPhases, projects, session, settings, ticketRequests, user, workItems } from "@/db/schema";
 import type { Member } from "@/lib/types";
 import { requireAdmin } from "./authz";
 import { AppError } from "./errors";
 import type { DataAction } from "./validation";
 import { DEFAULT_SETTINGS } from "./default-settings";
-import { isWorkingDay, shiftDate, workingHoursBetween } from "@/lib/kpi/calendar";
+import { dueDateAfterHours, isWorkingDay, shiftDate, workingHoursBetween, type WorkCalendar } from "@/lib/kpi/calendar";
 import { linkMicrosoftAccount } from "./microsoft-accounts";
 import { ADHOC_PROJECT_ID } from "@/lib/project-defaults";
 
@@ -23,14 +23,22 @@ async function assertEmailFree(tx: Tx, email: string) {
 function requireReason(reason?: string) {
   if (!reason || reason.trim().length < 3) throw new AppError("Add a short reason for this change.");
 }
-/** One leave row per working day. Weekends and holidays are skipped because they already cost no hours. */
-async function leaveDates(tx: Tx, first: string, last: string) {
+/** Working days and hours from settings and holidays. With a person, their full days of leave are days off too. */
+async function workCalendar(tx: Tx, userId?: string): Promise<WorkCalendar> {
   const [saved] = await tx.select().from(settings).where(eq(settings.id, 1));
   const config = saved?.value ?? DEFAULT_SETTINGS;
   const holidayRows = await tx.select({ date: holidays.date }).from(holidays);
-  const calendar = { timezone: config.timezone, workingDays: config.workingDays, workdayStart: config.workdayStart, workdayEnd: config.workdayEnd, holidays: new Set(holidayRows.map((row) => row.date)) };
+  const leaveRows = userId ? await tx.select({ date: leaves.date }).from(leaves).where(and(eq(leaves.userId, userId), eq(leaves.type, "full_day"))) : [];
+  return {
+    timezone: config.timezone, workingDays: config.workingDays, workdayStart: config.workdayStart, workdayEnd: config.workdayEnd,
+    holidays: new Set(holidayRows.map((row) => row.date)), ...(userId ? { extraDaysOff: new Set(leaveRows.map((row) => row.date)) } : {}),
+  };
+}
+/** One leave row per working day. Weekends and holidays are skipped because they already cost no hours. */
+async function leaveDates(tx: Tx, first: string, last: string) {
+  const calendar = await workCalendar(tx);
   const dates: string[] = [];
-  for (let date = first, days = 0; date <= last; date = shiftDate(date, 1, config.timezone), days++) {
+  for (let date = first, days = 0; date <= last; date = shiftDate(date, 1, calendar.timezone), days++) {
     if (days >= 62) throw new AppError("Record up to two months of leave at a time.");
     if (first === last || isWorkingDay(date, calendar)) dates.push(date);
   }
@@ -140,7 +148,8 @@ function statusChange(item: ItemRow, next: string, actor: Member, reason?: strin
 const OWNER_FIELDS = new Set(["status", "blocker", "dueDate", "title", "description", "priority"]);
 
 /** What a developer may do. Everything else is an admin's. New work from a developer goes through a request. */
-const DEVELOPER_ACTIONS = new Set<DataAction["action"]>(["updateItem", "requestTicket", "withdrawTicketRequest"]);
+const DEVELOPER_ACTIONS = new Set<DataAction["action"]>(["updateItem", "requestTicket", "withdrawTicketRequest", "extendTicket", "withdrawDueDateRequest"]);
+const OPEN_TICKET = ["todo", "in_progress", "blocked"];
 
 type ItemInput = Extract<DataAction, { action: "createItem" }> | (Omit<Extract<DataAction, { action: "createItem" }>, "action">);
 /** Creates a ticket or bug after the same checks every path uses. An approved request passes its developer as the creator. */
@@ -169,6 +178,29 @@ async function insertItem(tx: Tx, actor: Member, input: ItemInput, origin: { cre
     ...(origin.requestId ? { requestId: origin.requestId } : {}),
   });
   return item;
+}
+/** Only an open ticket with a due date can get more hours, and a ticket holds at most 80. */
+function assertExtendable(item: ItemRow, hours: number): asserts item is ItemRow & { dueDate: string } {
+  if (item.type !== "task" || !OPEN_TICKET.includes(item.status)) throw new AppError("Only an open ticket can get more time.");
+  if (!item.dueDate) throw new AppError("Set a due date first. An extension moves an existing date.");
+  if (item.estimateHours + hours > 80) throw new AppError(`This ticket already has ${item.estimateHours} h. A ticket holds up to 80 h, so split the extra work into a new ticket.`);
+}
+/** Adds the hours to the estimate and moves the due date by them. The reason goes into the ticket's history. */
+async function applyExtension(tx: Tx, actor: Member, item: ItemRow & { dueDate: string }, hours: number, reasonCategory: string, reason: string, request?: typeof dueDateRequests.$inferSelect) {
+  const to = dueDateAfterHours(item.dueDate, hours, await workCalendar(tx, item.assigneeId));
+  const estimate = Math.round((item.estimateHours + hours) * 100) / 100;
+  await tx.update(workItems).set({ dueDate: to, estimateHours: estimate, updatedAt: new Date() }).where(eq(workItems.id, item.id));
+  // An approved request names who asked, so the history reads the same as a direct extension.
+  await audit(tx, actor, item.id, "task.due_changed", {
+    from: item.dueDate, to, addedHours: hours, estimateFrom: item.estimateHours, estimateTo: estimate, reasonCategory,
+    ...(request ? { requestId: request.id, requestedBy: request.requesterId, ...(hours !== request.hours ? { requestedHours: request.hours } : {}) } : {}),
+  }, reason);
+}
+async function pendingDueDateRequest(tx: Tx, id: string) {
+  const [request] = await tx.select().from(dueDateRequests).where(eq(dueDateRequests.id, id)).for("update");
+  if (!request) throw new AppError("This request was not found.", 404);
+  if (request.status !== "pending") throw new AppError("This request was already reviewed.", 409);
+  return request;
 }
 async function pendingRequest(tx: Tx, id: string) {
   const [request] = await tx.select().from(ticketRequests).where(eq(ticketRequests.id, id)).for("update");
@@ -221,6 +253,44 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         await audit(tx, actor, request.id, "ticket_request.declined", {}, action.reason);
         break;
       }
+      case "extendTicket": {
+        const admin = actor.role === "admin";
+        const [item] = await tx.select().from(workItems).where(eq(workItems.id, action.itemId)).for("update");
+        if (!item || (!admin && item.assigneeId !== actor.id)) throw new AppError("This item was not found.", 404);
+        assertExtendable(item, action.hours);
+        if (admin) { await applyExtension(tx, actor, item, action.hours, action.reasonCategory, action.reason); break; }
+        // A developer's extension waits for an admin. Nothing on the ticket changes until then.
+        const [waiting] = await tx.select({ id: dueDateRequests.id }).from(dueDateRequests).where(and(eq(dueDateRequests.itemId, item.id), eq(dueDateRequests.status, "pending")));
+        if (waiting) throw new AppError("An extension for this ticket already waits for approval.", 409);
+        const [request] = await tx.insert(dueDateRequests).values({ itemId: item.id, requesterId: actor.id, fromDate: item.dueDate, fromEstimate: item.estimateHours, hours: action.hours, reasonCategory: action.reasonCategory, reason: action.reason }).returning();
+        await audit(tx, actor, item.id, "task.due_change_requested", { requestId: request.id, from: item.dueDate, hours: action.hours, reasonCategory: action.reasonCategory }, action.reason);
+        break;
+      }
+      case "approveDueDateRequest": {
+        const request = await pendingDueDateRequest(tx, action.id);
+        const [item] = await tx.select().from(workItems).where(eq(workItems.id, request.itemId)).for("update");
+        if (!item || !OPEN_TICKET.includes(item.status)) throw new AppError("This ticket is no longer open. Decline the request instead.", 409);
+        if (item.dueDate !== request.fromDate || item.estimateHours !== request.fromEstimate) throw new AppError("The ticket's due date or estimate changed after this request. Decline it, and the developer can ask again.", 409);
+        const hours = action.hours ?? request.hours;
+        assertExtendable(item, hours);
+        await applyExtension(tx, actor, item, hours, request.reasonCategory, request.reason, request);
+        await tx.update(dueDateRequests).set({ status: "approved", approvedHours: hours, reviewedById: actor.id, reviewedAt: new Date(), reviewNote: action.note?.trim() || null }).where(eq(dueDateRequests.id, request.id));
+        break;
+      }
+      case "declineDueDateRequest": {
+        const request = await pendingDueDateRequest(tx, action.id);
+        await tx.update(dueDateRequests).set({ status: "declined", reviewedById: actor.id, reviewedAt: new Date(), reviewNote: action.reason }).where(eq(dueDateRequests.id, request.id));
+        await audit(tx, actor, request.itemId, "task.due_change_declined", { requestId: request.id, from: request.fromDate, hours: request.hours }, action.reason);
+        break;
+      }
+      case "withdrawDueDateRequest": {
+        const [request] = await tx.select().from(dueDateRequests).where(eq(dueDateRequests.id, action.id)).for("update");
+        if (!request || request.requesterId !== actor.id) throw new AppError("This request was not found.", 404);
+        if (request.status !== "pending") throw new AppError("This request was already reviewed.", 409);
+        await tx.delete(dueDateRequests).where(eq(dueDateRequests.id, request.id));
+        await audit(tx, actor, request.itemId, "task.due_change_withdrawn", { requestId: request.id, from: request.fromDate, hours: request.hours });
+        break;
+      }
       case "withdrawTicketRequest": {
         const [request] = await tx.select().from(ticketRequests).where(eq(ticketRequests.id, action.id)).for("update");
         if (!request || request.requesterId !== actor.id) throw new AppError("This request was not found.", 404);
@@ -269,7 +339,9 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         if (patch.dueDate !== undefined && patch.dueDate !== item.dueDate) {
           if (item.type === "bug") throw new AppError("Bugs use their fix-by time instead of a due date.");
           if (item.status === "done") throw new AppError("Reopen this ticket before changing its due date.");
-          // Setting the first due date is planning. Moving an existing one is an extension and needs a reason.
+          // Setting the first due date is planning. Moving an existing one is an extension: an admin's needs a reason,
+          // and a developer asks for it, so the date moves only after an admin approves.
+          if (item.dueDate && actor.role !== "admin") throw new AppError("Use Extend to ask for more hours. Your admin approves it.", 403);
           if (item.dueDate) requireReason(action.reason);
         }
         if (item.status === "done" && patch.status !== "in_progress" && Object.keys(patch).some((key) => ["estimateHours", "assigneeId", "projectId", "phaseId"].includes(key))) throw new AppError("Reopen this task before changing its estimate, owner, project, or phase.");
