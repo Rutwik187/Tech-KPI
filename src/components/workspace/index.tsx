@@ -148,7 +148,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
       return;
     }
     const owner = item.assigneeId === data.currentUser.id ? 'you' : firstName(findMember(data, item.assigneeId));
-    const message = status === 'done' ? `Ticket approved. +${item.estimateHours} h for ${owner}.` : status === 'verified' ? 'Fix verified. Nice catch.' : status === 'fixed' ? 'Marked fixed. Waiting for verification.' : status === 'in_review' ? 'Submitted for review' : `Moved to ${statusLabels[status].toLowerCase()}`;
+    const message = status === 'done' ? `Ticket ${item.status === 'in_review' ? 'approved' : 'completed'}. +${item.estimateHours} h for ${owner}.` : status === 'verified' ? 'Fix verified. Nice catch.' : status === 'fixed' ? 'Marked fixed. Waiting for verification.' : status === 'in_review' ? 'Completed. Waiting for admin review.' : `Moved to ${statusLabels[status].toLowerCase()}`;
     if (status === 'done' || status === 'verified') celebrate();
     void mutate({ action: 'updateItem', id: item.id, patch: { status } }, message, { optimistic: true });
   }

@@ -218,7 +218,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       const reason = mutation.reason ?? null;
       Object.assign(item, patch, { updatedAt: now });
       if (patch.status && patch.status !== before.status) {
-        if (patch.status === 'in_progress' && !item.startedAt) item.startedAt = now;
+        if (['in_progress', 'in_review', 'done'].includes(patch.status) && !item.startedAt) item.startedAt = now;
         if (patch.status === 'done') item.completedAt = now;
         if (before.status === 'done') { item.completedAt = null; item.reopenCount++; }
         if (patch.status === 'fixed') item.fixedAt = now;

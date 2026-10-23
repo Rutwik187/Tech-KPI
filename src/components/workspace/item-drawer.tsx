@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import clsx from 'clsx';
 import { toast } from 'sonner';
-import { Activity as ActivityIcon, AlertTriangle, ArrowDown, ArrowUpRight, Bug, CalendarClock, CalendarDays, FileText, Flag, Link2, LoaderCircle, Pencil, Play, Plus, RotateCcw } from 'lucide-react';
+import { Activity as ActivityIcon, AlertTriangle, ArrowDown, ArrowUpRight, Bug, CalendarClock, CalendarDays, FileText, Flag, Link2, LoaderCircle, Pencil, Plus, RotateCcw } from 'lucide-react';
 import type { Activity, DashboardData, WorkItem } from '@/lib/types';
 import { getBugKpi } from '@/lib/kpi';
 import { Avatar, FormField, FormSelect, Modal, PriorityBadge, StatusBadge } from '@/components/ui';
@@ -78,7 +78,6 @@ export function ItemDrawer({ item, data, busy, onClose, onAction, onRevise, onEx
       <div className="detail-actions">
         <ItemActions item={item} admin={admin} onAction={onAction} busy={busy} />
         {item.type === 'task' && ['todo', 'in_progress'].includes(item.status) && <Button variant="outline" size="sm" onClick={() => onAction(item, 'blocked')} disabled={busy}><Flag data-icon="inline-start" size={13} />Mark blocked</Button>}
-        {item.type === 'bug' && item.status === 'open' && <Button variant="outline" size="sm" onClick={() => onAction(item, 'in_progress')} disabled={busy}><Play data-icon="inline-start" size={13} />Start fix</Button>}
         {admin && item.status === 'in_review' && <Button variant="outline" size="sm" onClick={() => onAction(item, 'in_progress')} disabled={busy}>Send back<ArrowDown data-icon="inline-end" size={13} /></Button>}
         {admin && item.status === 'done' && <Button variant="outline" size="sm" onClick={() => onAction(item, 'in_progress')} disabled={busy}><RotateCcw data-icon="inline-start" size={13} />Reopen</Button>}
         {admin && (item.status === 'fixed' || item.status === 'verified') && <Button variant="outline" size="sm" onClick={() => onAction(item, 'open')} disabled={busy}><RotateCcw data-icon="inline-start" size={13} />Reopen</Button>}

@@ -2,7 +2,7 @@
 
 import type { CSSProperties, ReactNode } from 'react';
 import clsx from 'clsx';
-import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCheck, Clock3, Eye } from 'lucide-react';
+import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCheck, Clock3 } from 'lucide-react';
 import type { DashboardData, WorkItem } from '@/lib/types';
 import { getBugKpi, type MemberKpi } from '@/lib/kpi';
 import { Avatar, PriorityBadge } from '@/components/ui';
@@ -36,14 +36,13 @@ export function MetricCard({ label, value, detail, icon, primary, children }: { 
 }
 
 /** The one button that moves an item to its next state. Approvals and verification belong to the admin. */
-export function ItemActions({ item, admin, onAction, busy, compact = false }: { item: WorkItem; admin: boolean; onAction: OnAction; busy: boolean; compact?: boolean }) {
+export function ItemActions({ item, admin, onAction, busy }: { item: WorkItem; admin: boolean; onAction: OnAction; busy: boolean }) {
   let status: WorkItem['status'] | null = null;
   let label = '';
   let Icon = ArrowRight;
   if (item.type === 'task') {
-    if (item.status === 'todo') { status = 'in_progress'; label = 'Start'; }
-    else if (item.status === 'in_progress') { status = 'in_review'; label = compact ? 'Submit' : 'Submit for review'; Icon = Eye; }
-    else if (item.status === 'blocked') { status = 'in_progress'; label = 'Resume'; }
+    // One step to finish. A developer's ticket then waits for review; an admin approves as they complete.
+    if (['todo', 'in_progress', 'blocked'].includes(item.status)) { status = admin ? 'done' : 'in_review'; label = 'Complete'; Icon = Check; }
     else if (item.status === 'in_review' && admin) { status = 'done'; label = 'Approve'; Icon = Check; }
   } else {
     if (item.status === 'open' || item.status === 'in_progress') { status = 'fixed'; label = 'Mark fixed'; Icon = Check; }
@@ -96,7 +95,7 @@ export function TicketCard({ item, data, onOpen, onAction, busy }: { item: WorkI
       </span>}
     <div className="task-card-bottom">
       <span className="task-card-owner" title={owner?.name}><Avatar member={owner} size="small" /><span>{firstName(owner)}</span></span>
-      <span className="task-card-action"><ItemActions item={item} admin={data.currentUser.role === 'admin'} onAction={onAction} busy={busy} compact /></span>
+      <span className="task-card-action"><ItemActions item={item} admin={data.currentUser.role === 'admin'} onAction={onAction} busy={busy} /></span>
     </div>
   </Card>;
 }

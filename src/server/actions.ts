@@ -101,17 +101,19 @@ function statusChange(item: ItemRow, next: string, actor: Member, reason?: strin
   const admin = actor.role === "admin";
   const now = new Date();
   if (item.type === "task") {
+    // Open work completes in one step: to review for a developer, straight to done for an admin.
+    const complete = admin ? ["in_review", "done"] : ["in_review"];
     const allowed: Record<string, string[]> = {
-      todo: ["in_progress", "blocked"], in_progress: ["blocked", "in_review"],
-      blocked: ["in_progress", "todo"], in_review: admin ? ["done", "in_progress"] : [],
+      todo: ["in_progress", "blocked", ...complete], in_progress: ["blocked", ...complete],
+      blocked: ["in_progress", "todo", ...complete], in_review: admin ? ["done", "in_progress"] : [],
       done: admin ? ["in_progress"] : [],
     };
     if (!allowed[item.status]?.includes(next)) throw new AppError("That task state change is not allowed.");
     if (item.status === "in_review" && next === "in_progress" || item.status === "done") requireReason(reason);
     return {
       status: next as ItemRow["status"],
-      ...(next === "in_progress" && !item.startedAt ? { startedAt: now } : {}),
-      ...(next === "in_review" ? { submittedAt: now } : {}),
+      ...(["in_progress", "in_review", "done"].includes(next) && !item.startedAt ? { startedAt: now } : {}),
+      ...(next === "in_review" || next === "done" && item.status !== "in_review" ? { submittedAt: now } : {}),
       ...(next === "done" ? { completedAt: now } : {}),
       ...(item.status === "done" ? { completedAt: null, submittedAt: null, reopenCount: item.reopenCount + 1 } : {}),
       ...(item.status === "blocked" ? { blocker: null } : {}),

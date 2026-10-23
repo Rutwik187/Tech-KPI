@@ -58,7 +58,7 @@ export function Standup({ data, week, onOpen, onAction, onAdd, mutate, busy }: {
           ? <div className="standup-clear"><CircleCheck size={17} /><p>No open tickets. Ready for the next one.</p></div>
           : tickets.map(item => <div className="standup-task" key={item.id}>
               <Button variant="ghost" className="item-name" onClick={() => onOpen(item.id)}>{item.title}</Button>
-              <div><StatusBadge status={item.status} /><span className="estimate-cell">{item.estimateHours} h</span><ItemActions item={item} admin onAction={onAction} busy={busy} compact /></div>
+              <div><StatusBadge status={item.status} /><span className="estimate-cell">{item.estimateHours} h</span><ItemActions item={item} admin onAction={onAction} busy={busy} /></div>
               {item.status === 'blocked' && <span className="blocked-inline">{item.blocker ?? 'Blocked. Open the ticket to add the reason.'}</span>}
             </div>)}</div>
         <div className="standup-person-footer">
