@@ -345,9 +345,8 @@ export function HolidayForm({ mutate, onClose, busy }: { mutate: MutationFn; onC
   </Modal>;
 }
 
-/** Changes that need a reason: blocking, sending back, reopening, or revising an estimate. Also sets a first due date. Moving a date uses ExtendForm. */
+/** Changes that need a reason: blocking, sending back, or reopening. Also sets a first due date. More hours on a ticket uses ExtendForm. */
 export function ReasonForm({ action, data, mutate, onClose, busy }: { action: QuickAction; data: DashboardData; mutate: MutationFn; onClose: () => void; busy: boolean }) {
-  const estimate = action.patch.estimateHours !== undefined;
   const due = action.patch.dueDate !== undefined;
   const firstDue = due && !action.item.dueDate;
   const blocked = action.patch.status === 'blocked';
@@ -357,18 +356,15 @@ export function ReasonForm({ action, data, mutate, onClose, busy }: { action: Qu
     const f = new FormData(event.currentTarget);
     const reason = String(f.get('reason') ?? '').trim();
     const patch = { ...action.patch };
-    if (estimate) patch.estimateHours = Number(f.get('estimateHours'));
     if (due) patch.dueDate = String(f.get('dueDate'));
     if (blocked) patch.blocker = reason;
     const message = blocked ? 'Blocker saved. Your admin can see it.' : firstDue ? 'Due date set' : 'Saved. The reason is in the timeline.';
-    const ok = await mutate({ action: 'updateItem', id: action.item.id, patch, ...(reason ? { reason } : {}), ...(estimate ? { reasonCategory: 'scope_change' } : {}) }, message);
+    const ok = await mutate({ action: 'updateItem', id: action.item.id, patch, ...(reason ? { reason } : {}) }, message);
     if (ok) onClose();
   }
   return <Modal title={action.label} subtitle={`${action.item.key} · ${action.item.title}`} onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
-        {estimate && <><Alert className="form-tip"><CircleHelp size={17} /><AlertDescription><p>Change the estimate only when the scope changes. If the same work needs more time, extend the due date instead.</p></AlertDescription></Alert>
-          <FormField>New estimate <span className="optional">hours</span><Input type="number" name="estimateHours" min={.5} max={80} step={.5} defaultValue={action.item.estimateHours} required /></FormField></>}
         {firstDue && <FormField>Due date<FormDate name="dueDate" required min={day} /></FormField>}
         {!firstDue && <FormField>{blocked ? 'What is blocking this ticket?' : 'Reason'}<Textarea name="reason" required minLength={3} rows={3} placeholder={blocked ? 'Name the person or thing you are waiting for.' : 'A short explanation for the team.'} /></FormField>}
         {!firstDue && <div className="form-help"><ActivityIcon size={13} />This reason appears in the ticket timeline.</div>}

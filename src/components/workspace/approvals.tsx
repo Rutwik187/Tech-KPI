@@ -167,8 +167,10 @@ function ExtensionCard({ data, request, onOpen, actions, mine = false }: { data:
       <Badge variant="outline" className="extension-hours">+{granted ?? request.hours} h{granted !== null && granted !== request.hours ? ` (asked ${request.hours} h)` : ''}</Badge>
       {preview
         ? <><span className="extension-dates"><Clock3 size={13} />{request.fromEstimate} h → <strong>{preview.estimate} h</strong></span>
-            <span className="extension-dates"><CalendarDays size={13} />Due {displayDate(request.fromDate)} → <strong>{displayDate(preview.dueDate)}</strong>{preview.dueDate !== request.fromDate && ` (+${dayCount(daysBetween(request.fromDate, preview.dueDate!))})`}</span></>
-        : <span className="extension-dates"><CalendarDays size={13} />Was due {displayDate(request.fromDate)} with {request.fromEstimate} h</span>}
+            {request.fromDate && preview.dueDate
+              ? <span className="extension-dates"><CalendarDays size={13} />Due {displayDate(request.fromDate)} → <strong>{displayDate(preview.dueDate)}</strong>{preview.dueDate !== request.fromDate && ` (+${dayCount(daysBetween(request.fromDate, preview.dueDate))})`}</span>
+              : <span className="extension-dates"><CalendarDays size={13} />No due date</span>}</>
+        : <span className="extension-dates"><CalendarDays size={13} />{request.fromDate ? `Was due ${displayDate(request.fromDate)}` : 'No due date'} with {request.fromEstimate} h</span>}
       {category && <Badge variant="secondary">{category}</Badge>}
     </div>
     <p className="request-note"><MessageSquareText size={14} /><span>{request.reason}</span></p>
@@ -192,7 +194,7 @@ function ApproveExtensionForm({ data, request, mutate, busy, onClose }: { data: 
     event.preventDefault();
     const note = String(new FormData(event.currentTarget).get('note') ?? '').trim();
     const ok = await mutate({ action: 'approveDueDateRequest', id: request.id, ...(granted !== request.hours ? { hours: granted } : {}), ...(note ? { note } : {}) },
-      `Approved +${granted} h. ${item?.key ?? 'The ticket'} is now due ${displayDate(preview?.dueDate ?? null)}.`);
+      `Approved +${granted} h.${preview?.dueDate ? ` ${item?.key ?? 'The ticket'} is now due ${displayDate(preview.dueDate)}.` : ''}`);
     if (ok) onClose();
   }
   return <Modal title="Approve more hours" subtitle={item ? `${item.key} · ${item.title}` : undefined} onClose={onClose}>
@@ -204,7 +206,7 @@ function ApproveExtensionForm({ data, request, mutate, busy, onClose }: { data: 
         </div>
         <FormField>Hours to approve<Input type="number" name="hours" required min={0.5} max={room} step={0.5} value={hoursText} onChange={event => setHoursText(event.target.value)} className="extend-hours-input" />
           <span className="field-help">{preview
-            ? <>Estimate <strong>{item!.estimateHours} h → {preview.estimate} h</strong>. Due <strong>{displayDate(item!.dueDate)} → {displayDate(preview.dueDate, { weekday: 'short' })}</strong>. You can approve a different number of hours.</>
+            ? <>Estimate <strong>{item!.estimateHours} h → {preview.estimate} h</strong>.{preview.dueDate ? <> Due <strong>{displayDate(item!.dueDate)} → {displayDate(preview.dueDate, { weekday: 'short' })}</strong>.</> : ' No due date to move.'} You can approve a different number of hours.</>
             : granted > room ? `A ticket holds up to ${MAX_TICKET_HOURS} h. Approve ${room} h at most.` : 'Enter the hours, in steps of half an hour.'}</span></FormField>
         <FormField>Note for {person ? firstName(person) : 'the developer'} <span className="optional">optional</span><Textarea name="note" rows={2} placeholder="For example, why you approved fewer hours." /></FormField>
       </FieldGroup>

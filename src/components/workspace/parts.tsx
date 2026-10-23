@@ -66,6 +66,13 @@ export function canMoveDueDate(item: WorkItem, data: DashboardData) {
   return item.assigneeId === data.currentUser.id && !(item.dueDate && pendingExtension(data, item.id));
 }
 
+/** Who may add hours to an open ticket. An admin adds them directly; the owner asks, one ask at a time. */
+export function canAddHours(item: WorkItem, data: DashboardData) {
+  if (item.type !== 'task' || !['todo', 'in_progress', 'blocked'].includes(item.status)) return false;
+  if (data.currentUser.role === 'admin') return true;
+  return item.assigneeId === data.currentUser.id && !pendingExtension(data, item.id);
+}
+
 /** Shows that an extension waits for the admin, with the extra hours that were asked for. */
 export function PendingExtensionBadge({ data, item }: { data: DashboardData; item: WorkItem }) {
   const request = pendingExtension(data, item.id);

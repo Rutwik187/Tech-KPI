@@ -179,19 +179,21 @@ async function insertItem(tx: Tx, actor: Member, input: ItemInput, origin: { cre
   });
   return item;
 }
-/** Only an open ticket with a due date can get more hours, and a ticket holds at most 80. */
-function assertExtendable(item: ItemRow, hours: number): asserts item is ItemRow & { dueDate: string } {
+/** Only an open ticket can get more hours, and a ticket holds at most 80. */
+function assertExtendable(item: ItemRow, hours: number) {
   if (item.type !== "task" || !OPEN_TICKET.includes(item.status)) throw new AppError("Only an open ticket can get more time.");
-  if (!item.dueDate) throw new AppError("Set a due date first. An extension moves an existing date.");
   if (item.estimateHours + hours > 80) throw new AppError(`This ticket already has ${item.estimateHours} h. A ticket holds up to 80 h, so split the extra work into a new ticket.`);
 }
-/** Adds the hours to the estimate and moves the due date by them. The reason goes into the ticket's history. */
-async function applyExtension(tx: Tx, actor: Member, item: ItemRow & { dueDate: string }, hours: number, reasonCategory: string, reason: string, request?: typeof dueDateRequests.$inferSelect) {
-  const to = dueDateAfterHours(item.dueDate, hours, await workCalendar(tx, item.assigneeId));
+/**
+ * Adds the hours to the estimate. With a due date, the date moves by those working hours too.
+ * The reason goes into the ticket's history.
+ */
+async function applyExtension(tx: Tx, actor: Member, item: ItemRow, hours: number, reasonCategory: string, reason: string, request?: typeof dueDateRequests.$inferSelect) {
+  const to = item.dueDate ? dueDateAfterHours(item.dueDate, hours, await workCalendar(tx, item.assigneeId)) : null;
   const estimate = Math.round((item.estimateHours + hours) * 100) / 100;
   await tx.update(workItems).set({ dueDate: to, estimateHours: estimate, updatedAt: new Date() }).where(eq(workItems.id, item.id));
   // An approved request names who asked, so the history reads the same as a direct extension.
-  await audit(tx, actor, item.id, "task.due_changed", {
+  await audit(tx, actor, item.id, item.dueDate ? "task.due_changed" : "task.hours_added", {
     from: item.dueDate, to, addedHours: hours, estimateFrom: item.estimateHours, estimateTo: estimate, reasonCategory,
     ...(request ? { requestId: request.id, requestedBy: request.requesterId, ...(hours !== request.hours ? { requestedHours: request.hours } : {}) } : {}),
   }, reason);

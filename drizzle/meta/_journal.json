@@ -57,6 +57,13 @@
       "when": 1793000000000,
       "tag": "0007_due_date_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793003600000,
+      "tag": "0008_hours_without_due_date",
+      "breakpoints": true
     }
   ]
 }

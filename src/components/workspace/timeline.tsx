@@ -72,9 +72,10 @@ const REASONS = [{ value: 'blocked_dependency', label: 'Waiting on someone' }, {
  */
 export function ExtendForm({ target, data, mutate, onClose, busy }: { target: ExtendTarget; data: DashboardData; mutate: MutationFn; onClose: () => void; busy: boolean }) {
   const ticket = target.kind === 'ticket';
-  // A ticket without a due date gets its first one here. That is planning, so it needs no reason.
-  const setting = ticket && !target.item.dueDate;
-  const addingHours = ticket && !setting;
+  // "Add hours" always adds hours. Otherwise a ticket without a due date gets its first one here, which needs no reason.
+  const addingHours = ticket && (!!target.hours || !!target.item.dueDate);
+  const setting = ticket && !addingHours;
+  const hasDue = ticket && !!target.item.dueDate;
   // A developer's extension is a request. Nothing changes until an admin approves it.
   const requesting = addingHours && data.currentUser.role !== 'admin';
   const [hoursText, setHoursText] = useState('2');
@@ -91,7 +92,7 @@ export function ExtendForm({ target, data, mutate, onClose, busy }: { target: Ex
   const moves = extensionHistory(data, ticket ? target.item.id : target.project.id).length;
   const shift = date ? daysBetween(current, date) : 0;
   const project = ticket ? findProject(data, target.item.projectId) : target.project;
-  const pastProjectTarget = ticket && project && !isAdhocProject(project) && project.targetDate && date > project.targetDate;
+  const pastProjectTarget = ticket && (hasDue || !addingHours) && project && !isAdhocProject(project) && project.targetDate && date > project.targetDate;
   const admin = data.currentUser.role === 'admin';
   const ticketsAfter = !ticket && data.items.filter(item => item.projectId === target.project.id && item.type === 'task' && item.status !== 'done' && item.dueDate && item.dueDate > date).length;
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -103,7 +104,7 @@ export function ExtendForm({ target, data, mutate, onClose, busy }: { target: Ex
       ? await mutate({ action: 'updateItem', id: target.item.id, patch: { dueDate: date } }, `Due date set to ${displayDate(date)}.`)
       : ticket
       ? await mutate({ action: 'extendTicket', itemId: target.item.id, hours, reason, reasonCategory: reasonCategory as DueDateRequest['reasonCategory'] },
-        requesting ? `Asked for ${hours} more ${hours === 1 ? 'hour' : 'hours'}. Your admin approves it.` : `Added ${hours} h. Due ${displayDate(date)}. The reason is in the history.`)
+        requesting ? `Asked for ${hours} more ${hours === 1 ? 'hour' : 'hours'}. Your admin approves it.` : `Added ${hours} h.${hasDue ? ` Due ${displayDate(date)}.` : ''} The reason is in the history.`)
       : await mutate({ action: 'updateProject', id: target.project.id, patch: { targetDate: date }, reason, reasonCategory }, `${target.project.name} now targets ${displayDate(date)}. The reason is in the history.`);
     if (ok) onClose();
   }
@@ -115,7 +116,7 @@ export function ExtendForm({ target, data, mutate, onClose, busy }: { target: Ex
         {requesting && <Alert className="form-tip"><CircleHelp size={17} /><AlertDescription><p>Your admin approves the extra hours. Until then, the estimate and due date stay as they are.</p></AlertDescription></Alert>}
         {setting ? <p className="field-help">This ticket has no due date yet. Once it has one, you can extend it with a reason.</p> : addingHours ? <div className="extend-current">
           <div><span>Estimate now</span><strong>{target.item.estimateHours} h</strong></div>
-          <div><span>Due now</span><strong>{displayDate(current, { weekday: 'short', year: 'numeric' })}</strong></div>
+          <div><span>Due now</span><strong>{hasDue ? displayDate(current, { weekday: 'short', year: 'numeric' }) : 'No due date'}</strong></div>
           <div><span>Extended before</span><strong>{moves ? plural(moves, 'time') : 'Never'}</strong></div>
         </div> : <div className="extend-current">
           <div><span>{ticket ? 'Due now' : 'Target now'}</span><strong>{displayDate(current, { weekday: 'short', year: 'numeric' })}</strong></div>
@@ -126,7 +127,8 @@ export function ExtendForm({ target, data, mutate, onClose, busy }: { target: Ex
           <FormField>Extra hours needed<Input type="number" name="hours" required min={0.5} max={room} step={0.5} value={hoursText} onChange={event => setHoursText(event.target.value)} className="extend-hours-input" /></FormField>
           <div className="extend-quick" role="group" aria-label="Add hours">{QUICK_HOURS.filter(option => option <= room).map(option => <Button key={option} type="button" size="sm" variant={hours === option ? 'secondary' : 'outline'} aria-pressed={hours === option} onClick={() => setHoursText(String(option))}>+{option} h</Button>)}</div>
           <p className="field-help extend-preview" aria-live="polite">{extension
-            ? <>Estimate <strong>{target.item.estimateHours} h → {extension.estimate} h</strong>. Due date <strong>{displayDate(current)} → {displayDate(extension.dueDate, { weekday: 'short' })}</strong>{extension.dueDate === current ? '' : ` (+${dayCount(daysBetween(current, extension.dueDate!))})`}.{current < day ? ' It is overdue, so the hours count from now.' : ''}</>
+            ? !extension.dueDate ? <>Estimate <strong>{target.item.estimateHours} h → {extension.estimate} h</strong>. The ticket has no due date, so only the estimate changes.</>
+            : <>Estimate <strong>{target.item.estimateHours} h → {extension.estimate} h</strong>. Due date <strong>{displayDate(current)} → {displayDate(extension.dueDate, { weekday: 'short' })}</strong>{extension.dueDate === current ? '' : ` (+${dayCount(daysBetween(current, extension.dueDate!))})`}.{current < day ? ' It is overdue, so the hours count from now.' : ''}</>
             : room < 0.5 ? `This ticket already has ${MAX_TICKET_HOURS} h. Split the extra work into a new ticket.`
             : hours > room ? `A ticket holds up to ${MAX_TICKET_HOURS} h. Ask for ${room} h at most, or split the work into a new ticket.` : 'Enter the extra hours, in steps of half an hour.'}</p>
         </div> : <div className="extend-date-row">
