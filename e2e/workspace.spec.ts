@@ -39,7 +39,7 @@ async function pickDate(page: Page, trigger: Locator, iso: string) {
 
 async function readDemoData(page: Page): Promise<DashboardData> {
   return page.evaluate(() => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v5');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v6');
     if (!saved) throw new Error('Demo changes did not persist.');
     return JSON.parse(saved) as DashboardData;
   });
@@ -144,6 +144,7 @@ test('demo navigation keeps every page in the demo workspace', async ({ page }) 
     { label: /^Daily standup/, path: 'standup', heading: /^Daily standup/ },
     { label: /^Tickets/, path: 'tickets', heading: /^Tickets/ },
     { label: /^Bugs/, path: 'bugs', heading: /^Bugs/ },
+    { label: /^Approvals/, path: 'approvals', heading: /^Approvals/ },
     { label: /^Team$/, path: 'team', heading: /^Team/ },
     { label: /^Projects$/, path: 'projects', heading: /^Projects/ },
     { label: /^Settings$/, path: 'settings', heading: /^Settings/ },
@@ -205,7 +206,7 @@ test('a ticket needs only a title, owner and estimate, survives reload, and appe
   await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click();
   await expect(dialog).toBeHidden();
   const savedDescription = await page.evaluate(title => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v5');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v6');
     if (!saved) throw new Error('Demo ticket did not persist.');
     return (JSON.parse(saved) as { items: { title: string; description: string }[] }).items.find(item => item.title === title)?.description;
   }, title);
@@ -428,7 +429,7 @@ test('logging a linked bug fills its owner and project, then supports fix and ve
   await page.getByRole('textbox', { name: 'Search bugs' }).fill(standaloneTitle);
   await expect(page.getByRole('row').filter({ hasText: standaloneTitle })).toBeVisible();
   const storedTaskId = await page.evaluate(title => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v5');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v6');
     if (!saved) throw new Error('Demo bug did not persist.');
     return (JSON.parse(saved) as { items: { title: string; taskId: string | null }[] }).items.find(item => item.title === title)?.taskId;
   }, standaloneTitle);
@@ -445,7 +446,7 @@ test('working-day buttons save ISO weekdays including Sunday as seven in the dem
   await sunday.click();
   await page.getByRole('button', { name: /^Save settings/ }).click();
   const workingDays = await page.evaluate(() => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v5');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v6');
     if (!saved) throw new Error('Demo settings did not persist.');
     return (JSON.parse(saved) as { settings: { workingDays: number[] } }).settings.workingDays;
   });
@@ -482,13 +483,15 @@ test('mobile navigation and dialogs work at 375 pixels with keyboard focus', asy
   await expect(trigger).toBeFocused();
 });
 
-test('a developer adds their own ticket and extends its due date with a reason', async ({ page }) => {
+test('a developer requests a ticket, an admin approves it, and the developer extends and completes it', async ({ page }) => {
   await openDemo(page, 'tickets');
-  await chooseOption(page, page.getByRole('combobox', { name: 'View the demo as', exact: true }), 'Aarav Mehta · Developer');
+  const viewAs = page.getByRole('combobox', { name: 'View the demo as', exact: true });
+  await chooseOption(page, viewAs, 'Aarav Mehta · Developer');
   await expect(page.getByRole('heading', { level: 1, name: /^My tickets/ })).toBeVisible();
   await expect(page.locator('[data-slot="sidebar"]').getByRole('link', { name: /^Team$/ })).toHaveCount(0);
-  await page.getByRole('button', { name: 'New ticket', exact: true }).click();
-  const dialog = page.getByRole('dialog');
+  await page.locator('.page-actions').getByRole('button', { name: 'Request ticket', exact: true }).click();
+  let dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: 'Request a ticket', exact: true })).toBeVisible();
   await expect(dialog.getByRole('radio', { name: 'Bug', exact: true })).toHaveCount(0);
   await expect(dialog.getByRole('combobox', { name: 'Owner', exact: true })).toHaveCount(0);
   await dialog.getByRole('combobox', { name: 'Project', exact: true }).click();
@@ -503,13 +506,41 @@ test('a developer adds their own ticket and extends its due date with a reason',
   await dialog.getByRole('textbox', { name: 'Title', exact: true }).fill(title);
   await dialog.getByLabel(/^Estimate/).fill('6');
   await pickDate(page, dialog.getByRole('button', { name: /^Due date/ }), due);
-  await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click();
+  await dialog.getByRole('textbox', { name: /^Description/ }).fill('Verify webhook signatures before processing.');
+  await dialog.getByRole('textbox', { name: /^Note for your admin/ }).fill('The payment provider now signs every callback.');
+  await dialog.getByRole('button', { name: 'Send for approval', exact: true }).click();
   await expect(dialog).toBeHidden();
   let data = await readDemoData(page);
+  const request = data.requests.find(row => row.title === title);
+  if (!request) throw new Error('The ticket request did not persist.');
+  expect(request).toMatchObject({ requesterId: 'demo-aarav', projectId: 'demo-commerce', estimateHours: 6, dueDate: due, status: 'pending', note: 'The payment provider now signs every callback.' });
+  // A request is not a ticket until it is approved.
+  expect(data.items.some(item => item.title === title)).toBe(false);
+  await page.locator('[data-slot="sidebar"]').getByRole('link', { name: /^Approvals/ }).click();
+  const mine = page.locator('.request-card').filter({ hasText: title });
+  await expect(mine).toContainText('Waiting for approval');
+
+  // The admin lowers the estimate while approving.
+  await chooseOption(page, viewAs, 'Rohan Desai · Admin');
+  const card = page.locator('.request-card').filter({ hasText: title });
+  await expect(card).toContainText('Aarav Mehta');
+  await expect(card).toContainText('The payment provider now signs every callback.');
+  await card.getByRole('button', { name: 'Approve', exact: true }).click();
+  dialog = page.getByRole('dialog');
+  await dialog.getByLabel(/^Estimate/).fill('5');
+  await dialog.getByRole('textbox', { name: /^Note for Aarav/ }).fill('Five hours is enough.');
+  await dialog.getByRole('button', { name: 'Approve and create ticket', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  data = await readDemoData(page);
   const ticket = data.items.find(item => item.title === title);
-  if (!ticket) throw new Error('The developer ticket did not persist.');
-  expect(ticket).toMatchObject({ assigneeId: 'demo-aarav', projectId: 'demo-commerce', estimateHours: 6, status: 'todo', dueDate: due });
-  await page.getByRole('button', { name: title, exact: true }).click();
+  if (!ticket) throw new Error('The approved request did not create a ticket.');
+  expect(ticket).toMatchObject({ assigneeId: 'demo-aarav', projectId: 'demo-commerce', estimateHours: 5, status: 'todo', dueDate: due });
+  expect(data.requests.find(row => row.id === request.id)).toMatchObject({ status: 'approved', itemId: ticket.id, reviewNote: 'Five hours is enough.' });
+
+  // Back as the developer: the request shows as approved, and the ticket can be extended and completed.
+  await chooseOption(page, viewAs, 'Aarav Mehta · Developer');
+  await expect(mine).toContainText('Approved');
+  await mine.getByRole('button', { name: /^Open ticket/ }).click();
   await page.getByRole('dialog').getByRole('button', { name: /^Extend/ }).click();
   const extend = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Extend due date', exact: true }) });
   await pickDate(page, extend.getByRole('button', { name: /^New due date/ }), later);
@@ -527,6 +558,26 @@ test('a developer adds their own ticket and extends its due date with a reason',
   await expect(drawer.locator('.extension-history')).toContainText('Signature keys need a second review.');
   await expect(drawer.locator('.extension-history')).toContainText('Took longer');
   await expect(drawer.locator('.timeline')).toContainText('extended the due date');
+  // Developers complete their own tickets. The ticket then waits for the admin's review.
+  await drawer.getByRole('button', { name: /^Complete/ }).click();
+  await expect.poll(async () => (await readDemoData(page)).items.find(item => item.id === ticket.id)?.status).toBe('in_review');
+});
+
+test('an admin declines a ticket request with a reason the developer can read', async ({ page }) => {
+  await openDemo(page, 'approvals');
+  const card = page.locator('.request-card').filter({ hasText: 'Low-stock email digest for warehouse leads' });
+  await card.getByRole('button', { name: 'Decline', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Decline request', exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('textbox', { name: /^Why are you declining it/ }).fill('Use the existing stock alert instead.');
+  await dialog.getByRole('button', { name: 'Decline request', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect((await readDemoData(page)).requests.find(row => row.id === 'demo-request-2')).toMatchObject({ status: 'declined', reviewNote: 'Use the existing stock alert instead.' });
+  await chooseOption(page, page.getByRole('combobox', { name: 'View the demo as', exact: true }), 'Ananya Rao · Developer');
+  const mine = page.locator('.request-card').filter({ hasText: 'Low-stock email digest for warehouse leads' });
+  await expect(mine).toContainText('Declined');
+  await expect(mine).toContainText('Use the existing stock alert instead.');
 });
 
 test('an admin extends a project timeline with a reason and the history shows why', async ({ page }) => {

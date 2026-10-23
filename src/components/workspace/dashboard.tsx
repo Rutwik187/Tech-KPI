@@ -80,7 +80,7 @@ export function Dashboard({ data, week, scores, onOpen, onOpenProject, onAction,
       : <>
           <Panel title="My open tickets" action={<Button variant="link" size="sm" asChild><Link href={routeFor(data, 'tickets')}>All my tickets<ArrowUpRight data-icon="inline-end" size={14} /></Link></Button>}>
             {openTickets.length === 0
-              ? <EmptyState title="No open tickets" description="Add a ticket for the work you are doing, or wait for your admin to assign one." action={<Button onClick={() => onAdd('task')}><Plus data-icon="inline-start" />New ticket</Button>} />
+              ? <EmptyState title="No open tickets" description="Request a ticket for new work, or wait for your admin to assign one." action={<Button onClick={() => onAdd('task')}><Plus data-icon="inline-start" />Request ticket</Button>} />
               : <div className="my-task-grid">{openTickets.slice(0, 6).map(item => <TicketCard key={item.id} data={data} item={item} onOpen={onOpen} onAction={onAction} busy={busy} />)}</div>}
           </Panel>
           <Panel title="How my score works" className="score-explainer"><ScoreExplainer kpi={own} data={data} current={current} /></Panel>

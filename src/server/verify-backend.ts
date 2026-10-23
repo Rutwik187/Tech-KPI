@@ -146,9 +146,40 @@ async function main() {
     assert.equal(developerData.members.length, 1); assert(developerData.items.every((item) => item.assigneeId === member.id)); checks += 2;
     await mutate(developerCookie, { action: "createItem", type: "bug", title: "Forbidden", projectId: project.id, assigneeId: member.id }, 403);
     await mutate(developerCookie, { action: "createItem", type: "task", title: "Forbidden", projectId: project.id, assigneeId: fixture.userId, estimateHours: 1 }, 403);
-    const ownTicketData = await mutate(developerCookie, { action: "createItem", type: "task", title: `${trace}-own`, projectId: project.id, phaseId: buildPhase.id, assigneeId: member.id, estimateHours: 3 });
-    const ownTicket = ownTicketData.items.find((item) => item.title === `${trace}-own`)!; ids.add(ownTicket.id);
-    assert.equal(ownTicket.assigneeId, member.id); assert.equal(ownTicket.status, "todo"); checks += 2;
+    // A developer's new work is a request. It becomes a ticket only when an admin approves it.
+    await mutate(developerCookie, { action: "createItem", type: "task", title: `${trace}-direct`, projectId: project.id, assigneeId: member.id, estimateHours: 3 }, 403);
+    await mutate(adminCookie, { action: "requestTicket", title: `${trace}-admin-request`, estimateHours: 2 }, 400);
+    await mutate(developerCookie, { action: "requestTicket", title: `${trace}-no-estimate`, estimateHours: 0 }, 400);
+    let requestData = await mutate(developerCookie, { action: "requestTicket", title: `${trace}-own`, description: "Needed for the release", note: "A customer asked for it", projectId: project.id, phaseId: buildPhase.id, estimateHours: 5, priority: "high" });
+    const request = requestData.requests.find((row) => row.title === `${trace}-own`)!; ids.add(request.id);
+    assert.equal(request.status, "pending"); assert.equal(request.requesterId, member.id); assert.equal(request.note, "A customer asked for it"); checks += 3;
+    assert(!requestData.items.some((item) => item.title === `${trace}-own`)); checks++;
+    await mutate(developerCookie, { action: "approveTicketRequest", id: request.id }, 403);
+    await mutate(adminCookie, { action: "declineTicketRequest", id: request.id, reason: "" }, 400);
+    requestData = await mutate(developerCookie, { action: "requestTicket", title: `${trace}-declined`, estimateHours: 40 });
+    const declined = requestData.requests.find((row) => row.title === `${trace}-declined`)!; ids.add(declined.id);
+    requestData = await mutate(developerCookie, { action: "requestTicket", title: `${trace}-withdrawn`, estimateHours: 1 });
+    const withdrawn = requestData.requests.find((row) => row.title === `${trace}-withdrawn`)!; ids.add(withdrawn.id);
+    // Another developer can neither see nor withdraw these requests.
+    const otherCookie = (await createOfflineSessionForUser(invited.id, baseURL)).cookieHeader;
+    const otherData: DashboardData = await (await call("/api/data", otherCookie)).json();
+    assert(!otherData.requests.some((row) => row.requesterId === member.id)); checks++;
+    await mutate(otherCookie, { action: "withdrawTicketRequest", id: withdrawn.id }, 404);
+    data = await mutate(developerCookie, { action: "withdrawTicketRequest", id: withdrawn.id });
+    assert(!data.requests.some((row) => row.id === withdrawn.id)); checks++;
+    data = await mutate(adminCookie, { action: "declineTicketRequest", id: declined.id, reason: "Split it into smaller tickets" });
+    assert.equal(data.requests.find((row) => row.id === declined.id)?.status, "declined"); checks++;
+    await mutate(adminCookie, { action: "approveTicketRequest", id: declined.id }, 409);
+    // The admin lowers the estimate while approving. The ticket belongs to the developer who asked.
+    data = await mutate(adminCookie, { action: "approveTicketRequest", id: request.id, patch: { estimateHours: 3 }, note: "Three hours is enough" });
+    const approved = data.requests.find((row) => row.id === request.id)!;
+    const ownTicket = data.items.find((item) => item.id === approved.itemId)!; ids.add(ownTicket.id);
+    assert.equal(approved.status, "approved"); assert.equal(approved.reviewNote, "Three hours is enough");
+    assert.equal(ownTicket.assigneeId, member.id); assert.equal(ownTicket.estimateHours, 3); assert.equal(ownTicket.status, "todo"); assert.equal(ownTicket.phaseId, buildPhase.id); assert.equal(ownTicket.priority, "high"); checks += 7;
+    assert(data.activities.some((event) => event.entityId === ownTicket.id && event.action === "task.created" && event.payload.requestId === request.id)); checks++;
+    await mutate(adminCookie, { action: "approveTicketRequest", id: request.id }, 409);
+    const developerView: DashboardData = await (await call("/api/data", developerCookie)).json();
+    assert.equal(developerView.requests.find((row) => row.id === request.id)?.itemId, ownTicket.id); checks++;
     // Complete is one step: a developer's ticket goes to review, an admin completes straight to done.
     data = await mutate(developerCookie, { action: "updateItem", id: ownTicket.id, patch: { status: "in_review" } });
     const completedOwn = data.items.find((item) => item.id === ownTicket.id)!;
@@ -229,7 +260,7 @@ async function main() {
       const cron = await fetch(`${baseURL}/api/cron/weekly-snapshot`, { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } });
       assert.equal(cron.status, 200); checks++;
     }
-    console.log(`PASS: ${checks} backend checks (projects, primary developers, project timelines and extensions, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable, sign-in by invited work email). Local session fixtures used; real Microsoft OAuth is not exercised.`);
+    console.log(`PASS: ${checks} backend checks (projects, primary developers, project timelines and extensions, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable, sign-in by invited work email, ticket requests and approvals). Local session fixtures used; real Microsoft OAuth is not exercised.`);
   } finally {
     await db.transaction(async (tx) => {
       const testItems = await tx.select({ id: schema.workItems.id }).from(schema.workItems).where(like(schema.workItems.title, `${trace}%`));
@@ -239,6 +270,7 @@ async function main() {
       if (ids.size) await tx.delete(schema.activities).where(inArray(schema.activities.entityId, [...ids]));
       if (auditIds.size) await tx.delete(schema.activities).where(inArray(schema.activities.id, [...auditIds]));
       if (memberIds.size) await tx.delete(schema.activities).where(inArray(schema.activities.actorId, [...memberIds]));
+      await tx.delete(schema.ticketRequests).where(like(schema.ticketRequests.title, `${trace}%`));
       await tx.delete(schema.workItems).where(like(schema.workItems.title, `${trace}%`));
       const testProjects = await tx.select({ id: schema.projects.id }).from(schema.projects).where(eq(schema.projects.name, trace));
       if (testProjects.length) await tx.delete(schema.projectPhases).where(inArray(schema.projectPhases.projectId, testProjects.map(project => project.id)));

@@ -27,6 +27,10 @@ const itemFields = {
   priority: priority.optional(), severity: severity.optional(), estimateHours: z.number().min(0).max(80).multipleOf(0.01).optional(),
   dueDate: date.nullable().optional(), taskId: uuid.nullable().optional(),
 };
+const requestFields = {
+  title: shortText, projectId: uuid.optional(), phaseId: uuid.nullable().optional(), priority: priority.optional(),
+  estimateHours: z.number().gt(0, "Estimate the hours this work needs.").max(80).multipleOf(0.01), dueDate: date.nullable().optional(),
+};
 export const settingsSchema = z.object({
   timezone: z.literal("Asia/Kolkata"), trackingStartDate: date,
   workingDays: z.array(z.number().int().min(1).max(7)).min(1).max(7).refine((days) => new Set(days).size === days.length, "Working days must be unique."),
@@ -61,5 +65,10 @@ export const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("addHoliday"), date, name: shortText }).strict(),
   z.object({ action: z.literal("deleteLeave"), ids: z.array(uuid).min(1).max(62) }).strict(),
   z.object({ action: z.literal("deleteHoliday"), id: uuid }).strict(),
+  // A developer asks for a ticket. It becomes one only after an admin approves it.
+  z.object({ action: z.literal("requestTicket"), ...requestFields, description: description.optional(), note: description.optional() }).strict(),
+  z.object({ action: z.literal("approveTicketRequest"), id: uuid, patch: z.object(requestFields).partial().strict().optional(), note: reason.optional() }).strict(),
+  z.object({ action: z.literal("declineTicketRequest"), id: uuid, reason: z.string().trim().min(3, "Say why you are declining, so the developer can adjust.").max(2000) }).strict(),
+  z.object({ action: z.literal("withdrawTicketRequest"), id: uuid }).strict(),
 ]);
 export type DataAction = z.infer<typeof actionSchema>;

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDownToLine, ArrowRight, BellDot, Bug, CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, Coffee, Eye, FolderKanban, LayoutDashboard, ListTodo, Plus, RotateCcw, Settings2, Target, Users } from 'lucide-react';
+import { ArrowDownToLine, ArrowRight, BellDot, Bug, CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, ClipboardCheck, Coffee, Eye, FolderKanban, LayoutDashboard, ListTodo, Plus, RotateCcw, Settings2, Target, Users } from 'lucide-react';
 import type { DashboardData, Project, WorkItem } from '@/lib/types';
 import { calculateTeamKpi, getWeekStart, shiftDate } from '@/lib/kpi';
 import { Avatar, EmptyState, FormSelect, Panel } from '@/components/ui';
@@ -20,6 +20,7 @@ import { calculateMemberKpi } from '@/lib/kpi';
 import { isSection } from '@/lib/sections';
 import { adminOnlyPages, attentionItems, bands, DEMO_DATA_KEY, demoSnapshot, demoViewer, displayDate, findMember, firstName, isDone, mutateDemo, routeFor, saveDemo, setDemoViewer, statusLabels, subscribeDemo, viewAs, downloadCsv, type ModalState, type Mutation, type MutationFn, type QuickAction } from './lib';
 import { Dashboard } from './dashboard';
+import { Approvals } from './approvals';
 import { WorkList } from './work-list';
 import { Standup } from './standup';
 import { Team } from './team';
@@ -37,6 +38,7 @@ const pages = [
   { id: 'standup', label: 'Daily standup', icon: Coffee, admin: true },
   { id: 'tickets', label: 'Tickets', icon: ListTodo },
   { id: 'bugs', label: 'Bugs', icon: Bug },
+  { id: 'approvals', label: 'Approvals', icon: ClipboardCheck },
   { id: 'team', label: 'Team', icon: Users, admin: true },
   { id: 'projects', label: 'Projects', icon: FolderKanban },
 ];
@@ -45,8 +47,11 @@ function headings(page: string, data: DashboardData, brief: string): { title: st
   const admin = data.currentUser.role === 'admin';
   switch (page) {
     case 'standup': return { title: 'Daily standup', description: 'Go through each person’s open tickets and add new ones as you talk.' };
-    case 'tickets': return admin ? { title: 'Tickets', description: 'Every ticket, its owner, and its next step.' } : { title: 'My tickets', description: 'Your tickets and their next step. Add a ticket for any work you take on.' };
+    case 'tickets': return admin ? { title: 'Tickets', description: 'Every ticket, its owner, and its next step.' } : { title: 'My tickets', description: 'Your tickets and their next step. Request a ticket for new work you take on.' };
     case 'bugs': return { title: admin ? 'Bugs' : 'My bugs', description: 'Fix a bug before its fix-by time to earn full bug points.' };
+    case 'approvals': return admin
+      ? { title: 'Approvals', description: 'Ticket requests from developers, completed tickets, and fixed bugs waiting for you.' }
+      : { title: 'Approvals', description: 'The tickets you asked for, and finished work waiting for your admin.' };
     case 'team': return { title: 'Team', description: 'People, their hours at work, leave, and scores.' };
     case 'projects': return { title: 'Projects', description: admin ? 'Projects, their phases, members, and progress.' : 'The projects you work on and their phases.' };
     case 'settings': return { title: 'Settings', description: 'Working hours, score weights, bug targets, and holidays.' };
@@ -162,10 +167,12 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
   const addItem = (kind: 'task' | 'bug', assigneeId?: string) => setModal({ type: 'item', kind, assigneeId });
   const extendTicket = (item: WorkItem) => setModal({ type: 'extend', target: { kind: 'ticket', item } });
   const extendProject = (project: Project) => setModal({ type: 'extend', target: { kind: 'project', project } });
-  const newTicket = <Button onClick={() => addItem('task')}><Plus data-icon="inline-start" size={17} />New ticket</Button>;
+  // A developer's new work starts as a request that an admin approves.
+  const newTicket = <Button onClick={() => addItem('task')}><Plus data-icon="inline-start" size={17} />{isAdmin ? 'New ticket' : 'Request ticket'}</Button>;
   const actions: Record<string, ReactNode> = {
     dashboard: <>{isAdmin && <Button variant="outline" onClick={exportScores}><ArrowDownToLine data-icon="inline-start" size={16} />Export report</Button>}{newTicket}</>,
     tickets: newTicket,
+    approvals: !isAdmin && newTicket,
     standup: newTicket,
     bugs: isAdmin && <Button onClick={() => addItem('bug')}><Plus data-icon="inline-start" size={17} />Log bug</Button>,
     team: <><Button variant="outline" onClick={() => setModal({ type: 'leave' })}><CalendarPlus data-icon="inline-start" size={16} />Add leave</Button><Button onClick={() => setModal({ type: 'member' })}><Plus data-icon="inline-start" size={17} />Add member</Button></>,
@@ -206,6 +213,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
         {blocked ? <Panel><EmptyState title="This page is for admins" description="Your overview, tickets, bugs, and projects are in the menu." action={<Button variant="outline" asChild><Link href={routeFor(data, 'dashboard')}>Go to my overview<ArrowRight data-icon="inline-end" /></Link></Button>} /></Panel> : <>
           {page === 'dashboard' && <Dashboard data={data} week={week} scores={scores} onOpen={setSelectedId} onOpenProject={setProjectId} onAction={act} onExtend={extendTicket} onAdd={addItem} busy={busy} />}
           {(page === 'tickets' || page === 'bugs') && <WorkList key={`${page}?${searchParams.toString()}`} data={data} kind={page === 'tickets' ? 'task' : 'bug'} onOpen={setSelectedId} onAction={act} onAdd={addItem} busy={busy} />}
+          {page === 'approvals' && <Approvals data={data} onOpen={setSelectedId} onAction={act} onRequest={() => addItem('task')} mutate={mutate} busy={busy} />}
           {page === 'standup' && <Standup data={data} week={week} onOpen={setSelectedId} onAction={act} onAdd={addItem} mutate={mutate} busy={busy} />}
           {page === 'team' && <Team data={data} week={week} onEdit={m => setModal({ type: 'member', member: m })} onLeave={userId => setModal({ type: 'leave', userId })} mutate={mutate} onOpen={setSelectedId} />}
           {page === 'projects' && <Projects data={data} onEdit={p => setModal({ type: 'project', project: p })} onOpen={setProjectId} onExtend={extendProject} mutate={mutate} />}
@@ -232,13 +240,16 @@ function WorkspaceSidebar({ data, page }: { data: DashboardData; page: string })
   const { setOpenMobile } = useSidebar();
   const isAdmin = data.currentUser.role === 'admin';
   const open = data.items.filter(i => !isDone(i));
+  // Admins see everything waiting for a decision. A developer sees their own requests still waiting.
+  const pendingRequests = data.requests.filter(r => r.status === 'pending').length;
+  const waiting = isAdmin ? pendingRequests + data.items.filter(i => i.type === 'task' ? i.status === 'in_review' : i.status === 'fixed').length : pendingRequests;
   const close = () => setOpenMobile(false);
   return <Sidebar className="app-sidebar" collapsible="offcanvas">
     <SidebarHeader><Link className="brand" href={routeFor(data, 'dashboard')} onClick={close} aria-label="Urban Gabru tech workspace"><div>urban<span className="brand-light">gabru</span><small>Tech workspace</small></div></Link></SidebarHeader>
     <SidebarContent>
       <SidebarGroup><SidebarGroupLabel>Workspace</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{pages.filter(p => isAdmin || !p.admin).map(p => {
         const Icon = p.icon;
-        const count = p.id === 'tickets' ? open.filter(i => i.type === 'task').length : p.id === 'bugs' ? open.filter(i => i.type === 'bug').length : 0;
+        const count = p.id === 'tickets' ? open.filter(i => i.type === 'task').length : p.id === 'bugs' ? open.filter(i => i.type === 'bug').length : p.id === 'approvals' ? waiting : 0;
         return <SidebarMenuItem key={p.id}><SidebarMenuButton asChild isActive={page === p.id} tooltip={p.label}><Link href={routeFor(data, p.id)} onClick={close}><Icon /><span>{p.label}</span></Link></SidebarMenuButton>{count > 0 && <SidebarMenuBadge>{count}</SidebarMenuBadge>}</SidebarMenuItem>;
       })}</SidebarMenu></SidebarGroupContent></SidebarGroup>
     </SidebarContent>
@@ -255,12 +266,17 @@ function WorkspaceSidebar({ data, page }: { data: DashboardData; page: string })
 function AttentionMenu({ data, onOpen }: { data: DashboardData; onOpen: (id: string) => void }) {
   const router = useRouter();
   const items = attentionItems(data);
+  const requests = data.currentUser.role === 'admin' ? data.requests.filter(r => r.status === 'pending').length : 0;
+  const total = items.length + requests;
   return <DropdownMenu>
-    <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label={`Needs attention: ${items.length}`}><BellDot size={19} />{items.length > 0 && <i className="notification-dot" />}</Button></DropdownMenuTrigger>
+    <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label={`Needs attention: ${total}`}><BellDot size={19} />{total > 0 && <i className="notification-dot" />}</Button></DropdownMenuTrigger>
     <DropdownMenuContent align="end" className="attention-menu">
-      <DropdownMenuLabel>Needs attention{items.length ? ` · ${items.length}` : ''}</DropdownMenuLabel>
+      <DropdownMenuLabel>Needs attention{total ? ` · ${total}` : ''}</DropdownMenuLabel>
       <DropdownMenuSeparator />
-      {items.length === 0 ? <p className="attention-menu-empty">Nothing needs attention.</p>
+      {requests > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'approvals'))} className="attention-menu-item">
+        <span className="item-key">Requests</span><span className="attention-menu-title">{requests} ticket {requests === 1 ? 'request waits' : 'requests wait'} for approval</span><span className="attention-menu-reason">Review on Approvals</span>
+      </DropdownMenuItem>}
+      {total === 0 ? <p className="attention-menu-empty">Nothing needs attention.</p>
         : items.slice(0, 6).map(({ item, reason }) => <DropdownMenuItem key={item.id} onSelect={() => onOpen(item.id)} className="attention-menu-item">
             <span className="item-key">{item.key}</span><span className="attention-menu-title">{item.title}</span><span className="attention-menu-reason">{reason}</span>
           </DropdownMenuItem>)}

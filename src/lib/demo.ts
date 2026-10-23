@@ -1,4 +1,4 @@
-import type { Activity, DashboardData, Member, Phase, Project, WorkItem } from './types';
+import type { Activity, DashboardData, Member, Phase, Project, TicketRequest, WorkItem } from './types';
 import { dateKey, defaultSettings, getWeekStart, localDate, shiftDate } from './kpi';
 import { ADHOC_PROJECT } from './project-defaults';
 
@@ -155,8 +155,18 @@ export function createDemoData(now = new Date()): DashboardData {
     payload: { name: project.name, startDate: project.startDate, targetDate: project.originalTargetDate }, createdAt: localDate(project.startDate!, '10:00', timezone).toISOString(),
   });
 
+  // Two requests wait for the admin. One was declined with a reason, so a developer sees what to change.
+  const requests: TicketRequest[] = [
+    { id: 'demo-request-1', requesterId: developers[0].id, title: 'Add UPI autopay to checkout', description: 'Offer UPI autopay for subscription orders, with a fallback to card.', note: 'Three support tickets this week asked for it.',
+      projectId: projects[0].id, phaseId: null, estimateHours: 10, dueDate: day(9), priority: 'high', status: 'pending', reviewedById: null, reviewedAt: null, reviewNote: null, itemId: null, createdAt: past(dateAt(0, '10:20')) },
+    { id: 'demo-request-2', requesterId: developers[1].id, title: 'Low-stock email digest for warehouse leads', description: 'A morning email listing SKUs below their reorder level.', note: '',
+      projectId: projects[1].id, phaseId: null, estimateHours: 6, dueDate: null, priority: 'medium', status: 'pending', reviewedById: null, reviewedAt: null, reviewNote: null, itemId: null, createdAt: past(dateAt(-1, '16:05')) },
+    { id: 'demo-request-3', requesterId: developers[3].id, title: 'Rebuild the PnL report charts', description: 'Move every PnL chart to the new charting library.', note: 'The old charts are slow on large months.',
+      projectId: projects[3].id, phaseId: null, estimateHours: 30, dueDate: null, priority: 'low', status: 'declined', reviewedById: lead.id, reviewedAt: past(dateAt(-2, '12:00')), reviewNote: 'Too large for one ticket. Split it into the export and the chart work, then request each.', itemId: null, createdAt: past(dateAt(-3, '11:00')) },
+  ];
+
   return {
-    currentUser: lead, members: [lead, ...developers], projects, phases, items, activities,
+    currentUser: lead, members: [lead, ...developers], projects, phases, items, requests, activities,
     leaves: [
       { id: 'demo-leave-1', userId: developers[2].id, date: shiftDate(week, 1, timezone), type: 'half_day', note: 'Personal appointment' },
       { id: 'demo-leave-2', userId: developers[5].id, date: shiftDate(week, 4, timezone), type: 'full_day', note: 'Planned leave' },

@@ -1,8 +1,8 @@
 import { and, desc, eq, inArray, or, isNull, ne, sql } from "drizzle-orm";
 import { headers } from "next/headers";
 import { db } from "@/db";
-import { account, activities, holidays, leaves, memberProfiles, projectMembers, projectPhases, projects, settings, snapshots, user, workItems } from "@/db/schema";
-import type { DashboardData, Member, WorkItem } from "@/lib/types";
+import { account, activities, holidays, leaves, memberProfiles, projectMembers, projectPhases, projects, settings, snapshots, ticketRequests, user, workItems } from "@/db/schema";
+import type { DashboardData, Member, TicketRequest, WorkItem } from "@/lib/types";
 import { DEFAULT_SETTINGS } from "./default-settings";
 import { requireSession } from "./authz";
 import { ADHOC_PROJECT_ID } from "@/lib/project-defaults";
@@ -17,6 +17,12 @@ export function serializeItem(item: typeof workItems.$inferSelect): WorkItem {
     startedAt: item.startedAt?.toISOString() ?? null, completedAt: item.completedAt?.toISOString() ?? null,
     fixedAt: item.fixedAt?.toISOString() ?? null, reportedAt: item.reportedAt.toISOString(),
     blocker: item.blocker, taskId: item.taskId, reopenCount: item.reopenCount,
+  };
+}
+
+export function serializeRequest(request: typeof ticketRequests.$inferSelect): TicketRequest {
+  return {
+    ...request, reviewedAt: request.reviewedAt?.toISOString() ?? null, createdAt: request.createdAt.toISOString(),
   };
 }
 export async function getDashboardData(requestHeaders?: Headers): Promise<DashboardData> {
@@ -38,7 +44,7 @@ export async function getSnapshotSource(): Promise<DashboardData | null> {
 
 async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
   const isAdmin = currentUser.role === "admin";
-  const [itemRows, identities, projectRows, membershipRows, phaseRows, leaveRows, holidayRows, settingRows, snapshotRows] = await Promise.all([
+  const [itemRows, identities, projectRows, membershipRows, phaseRows, leaveRows, holidayRows, settingRows, snapshotRows, requestRows] = await Promise.all([
     db.select().from(workItems).where(isAdmin ? undefined : eq(workItems.assigneeId, currentUser.id)).orderBy(desc(workItems.createdAt)),
     db.select({ identity: user, profile: memberProfiles, microsoftObjectId: account.accountId }).from(user)
       .leftJoin(memberProfiles, eq(memberProfiles.userId, user.id))
@@ -50,6 +56,8 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
     db.select().from(leaves).where(isAdmin ? undefined : eq(leaves.userId, currentUser.id)),
     db.select().from(holidays), db.select().from(settings).where(eq(settings.id, 1)),
     db.select({ userId: snapshots.userId, weekStart: snapshots.weekStart, value: snapshots.value }).from(snapshots).where(isAdmin ? undefined : eq(snapshots.userId, currentUser.id)),
+    // Admins review everyone's requests. A developer sees only their own.
+    db.select().from(ticketRequests).where(isAdmin ? undefined : eq(ticketRequests.requesterId, currentUser.id)).orderBy(desc(ticketRequests.createdAt)).limit(200),
   ]);
   const itemIds = itemRows.map((item) => item.id);
   if (!isAdmin) {
@@ -63,7 +71,7 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
     }
   }
   const assignedProjects = new Set(membershipRows.filter((row) => row.userId === currentUser.id).map((row) => row.projectId));
-  const historicalProjects = new Set(itemRows.map((item) => item.projectId));
+  const historicalProjects = new Set([...itemRows, ...requestRows].map((row) => row.projectId));
   const visibleProjects = projectRows.filter((project) => isAdmin || project.id === ADHOC_PROJECT_ID || assignedProjects.has(project.id) || historicalProjects.has(project.id));
   const visibleProjectIds = new Set(visibleProjects.map((project) => project.id));
   // Developers see their own work's history and why their projects' targets moved, nothing else.
@@ -89,7 +97,7 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
       return { ...project, memberIds: rows.map((row) => row.userId), primaryMemberId: rows.find((row) => row.isPrimary)?.userId ?? null };
     }),
     phases: phaseRows.filter((phase) => visibleProjectIds.has(phase.projectId)),
-    items: itemRows.map(serializeItem), activities: activityRows.map((activity) => ({ ...activity, createdAt: activity.createdAt.toISOString() })),
+    items: itemRows.map(serializeItem), requests: requestRows.map(serializeRequest), activities: activityRows.map((activity) => ({ ...activity, createdAt: activity.createdAt.toISOString() })),
     leaves: leaveRows, holidays: holidayRows, settings: appSettings, mode: "live", snapshots: snapshotRows,
   };
 }

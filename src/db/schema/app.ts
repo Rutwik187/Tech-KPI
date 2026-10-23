@@ -71,6 +71,26 @@ export const workItems = pgTable("tech_kpi_work_item", {
   check("tech_kpi_item_estimate_range", sql`(${t.type} = 'task' AND ${t.estimateHours} > 0 AND ${t.estimateHours} <= 80) OR (${t.type} = 'bug' AND ${t.estimateHours} = 0)`),
   check("tech_kpi_item_status_type", sql`(${t.type} = 'task' AND ${t.status} IN ('todo', 'in_progress', 'blocked', 'in_review', 'done')) OR (${t.type} = 'bug' AND ${t.status} IN ('open', 'in_progress', 'fixed', 'verified'))`),
 ]);
+/** A developer's proposed ticket. It becomes a ticket only when an admin approves it, so its estimate cannot change a score before then. */
+export const ticketRequests = pgTable("tech_kpi_ticket_request", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  requesterId: text("requester_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  title: text("title").notNull(), description: text("description").notNull().default(""), note: text("note").notNull().default(""),
+  projectId: uuid("project_id").notNull().references(() => projects.id), phaseId: uuid("phase_id"),
+  estimateHours: hours("estimate_hours").notNull(), dueDate: date("due_date", { mode: "string" }),
+  priority: priority("priority").notNull().default("medium"),
+  status: text("status").$type<"pending" | "approved" | "declined">().notNull().default("pending"),
+  reviewedById: text("reviewed_by_id").references(() => user.id, { onDelete: "set null" }), reviewedAt: stamp("reviewed_at"), reviewNote: text("review_note"),
+  itemId: uuid("item_id").references(() => workItems.id, { onDelete: "set null" }),
+  createdAt: stamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  index("tech_kpi_ticket_request_status_idx").on(t.status, t.createdAt),
+  index("tech_kpi_ticket_request_requester_idx").on(t.requesterId),
+  foreignKey({ name: "tech_kpi_ticket_request_project_phase_fk", columns: [t.projectId, t.phaseId], foreignColumns: [projectPhases.projectId, projectPhases.id] }),
+  check("tech_kpi_ticket_request_estimate_range", sql`${t.estimateHours} > 0 AND ${t.estimateHours} <= 80`),
+  check("tech_kpi_ticket_request_status", sql`${t.status} IN ('pending', 'approved', 'declined')`),
+  check("tech_kpi_ticket_request_reviewed", sql`(${t.status} = 'pending') = (${t.reviewedAt} IS NULL)`),
+]);
 export const activities = pgTable("tech_kpi_activity", {
   id: uuid("id").defaultRandom().primaryKey(), entityId: text("entity_id").notNull(),
   actorId: text("actor_id").notNull().references(() => user.id), action: text("action").notNull(), reason: text("reason"),

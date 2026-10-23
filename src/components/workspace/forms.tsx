@@ -79,10 +79,21 @@ export function ItemForm({ data, kind: initialKind, assigneeId, mutate, onClose,
   const [taskId, setTaskId] = useState('');
   const [severity, setSeverity] = useState<WorkItem['severity']>('normal');
   const target = severity === 'critical' ? data.settings.criticalTargetHours : data.settings.normalTargetHours;
+  // A developer's new work is a request. It becomes a ticket when an admin approves it.
+  const requesting = !admin;
   const fixBy = kind === 'bug' ? addWorkingHours(new Date(), target, getWorkCalendar(data, classification.assigneeId)) : null;
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
+    if (requesting) {
+      const sent = await mutate({
+        action: 'requestTicket', title: String(fields.get('title')).trim(), description: String(fields.get('description') ?? '').trim(), note: String(fields.get('note') ?? '').trim(),
+        projectId: classification.projectId, phaseId: classification.phaseId, estimateHours: Number(fields.get('estimateHours')), dueDate: String(fields.get('dueDate')) || null,
+        priority: String(fields.get('priority')) as WorkItem['priority'],
+      }, 'Sent for approval. Follow it on Approvals.');
+      if (sent) onClose();
+      return;
+    }
     const ok = await mutate({
       action: 'createItem', type: kind, title: String(fields.get('title')).trim(), description: String(fields.get('description') ?? ''), ...classification,
       estimateHours: kind === 'task' ? Number(fields.get('estimateHours')) : 0, dueDate: kind === 'task' ? String(fields.get('dueDate')) || null : null,
@@ -99,7 +110,7 @@ export function ItemForm({ data, kind: initialKind, assigneeId, mutate, onClose,
     }
   }
   const tickets = data.items.filter(item => item.type === 'task').sort((a, b) => Number(isDone(a)) - Number(isDone(b)) || b.createdAt.localeCompare(a.createdAt));
-  return <Modal title={kind === 'task' ? 'New ticket' : 'Log a bug'} subtitle={kind === 'task' ? admin ? 'A title, an owner, and an estimate are enough to start.' : 'Add a ticket for work you are doing. Your admin approves it when it is done.' : 'Describe the problem and choose who fixes it.'} onClose={onClose}>
+  return <Modal title={requesting ? 'Request a ticket' : kind === 'task' ? 'New ticket' : 'Log a bug'} subtitle={requesting ? 'Your admin checks the estimate and approves it. Then it becomes your ticket.' : kind === 'task' ? 'A title, an owner, and an estimate are enough to start.' : 'Describe the problem and choose who fixes it.'} onClose={onClose}>
     <form onSubmit={submit} className="item-form">
       {admin && <ToggleGroup type="single" variant="outline" value={kind} onValueChange={value => { if (value) { setKind(value as 'task' | 'bug'); if (value === 'task') setTaskId(''); } }} className="form-kind-toggle" aria-label="Type">
         <ToggleGroupItem value="task"><ListTodo data-icon="inline-start" />Ticket</ToggleGroupItem><ToggleGroupItem value="bug"><Bug data-icon="inline-start" />Bug</ToggleGroupItem>
@@ -116,12 +127,15 @@ export function ItemForm({ data, kind: initialKind, assigneeId, mutate, onClose,
                 <Alert className="bug-report-note"><Clock3 /><AlertTitle>Fix by {fixBy ? displayDateTime(fixBy) : '—'}</AlertTitle><AlertDescription>On time earns 100 bug points. Up to twice the target earns 50.</AlertDescription></Alert></>}
           <FormField>Priority<FormChoice name="priority" defaultValue="medium" options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }, { value: 'urgent', label: 'Urgent' }]} /></FormField>
         </FieldGroup>
-        <Collapsible className="optional-details">
+        {requesting ? <>
+          <FormField>Description <span className="optional">optional</span><Textarea name="description" placeholder="What is the work? What does done look like?" rows={3} /></FormField>
+          <FormField>Note for your admin <span className="optional">optional</span><Textarea name="note" placeholder="Why it matters now, links, or anything that helps the approval." rows={2} /></FormField>
+        </> : <Collapsible className="optional-details">
           <CollapsibleTrigger asChild><Button type="button" variant="ghost" className="w-full justify-start"><FileText data-icon="inline-start" />Add details<Badge variant="secondary">Optional</Badge><ChevronDown className="ml-auto" data-icon="inline-end" /></Button></CollapsibleTrigger>
           <CollapsibleContent forceMount className="pt-3 data-[state=closed]:hidden"><FormField>Description<Textarea name="description" placeholder={kind === 'task' ? 'What does done look like? Add links or acceptance criteria.' : 'How can someone reproduce this? Add steps or links.'} rows={4} /></FormField></CollapsibleContent>
-        </Collapsible>
+        </Collapsible>}
       </FieldGroup>
-      <FormFooter busy={busy} disabled={!classification.assigneeId} onClose={onClose} label={kind === 'task' ? 'Create ticket' : 'Log bug'} />
+      <FormFooter busy={busy} disabled={!classification.assigneeId} onClose={onClose} label={requesting ? 'Send for approval' : kind === 'task' ? 'Create ticket' : 'Log bug'} />
     </form>
   </Modal>;
 }
