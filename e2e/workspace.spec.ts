@@ -219,17 +219,18 @@ test('a ticket needs only a title, owner and estimate, survives reload, and appe
   let row = page.getByRole('row').filter({ hasText: title });
   await expect(row).toContainText('4.5 h');
   await expect(row).toContainText('To do');
-  await row.getByRole('button', { name: /^Start/ }).click();
-  await expect(row).toContainText('In progress');
+  // The demo user is an admin, so Complete finishes the ticket in one step.
+  await row.getByRole('button', { name: /^Complete/ }).click();
+  await expect(row).toContainText('Done');
   await page.reload();
   await page.getByRole('textbox', { name: 'Search tickets' }).fill(title);
   row = page.getByRole('row').filter({ hasText: title });
-  await expect(row).toContainText('In progress');
+  await expect(row).toContainText('Done');
   await page.getByRole('radio', { name: 'Board view', exact: true }).click();
   const card = page.locator('.task-card').filter({ hasText: title });
   await expect(card).toBeVisible();
   await expect(card).toContainText('4.5 h');
-  await expect(card.getByRole('button', { name: /^Submit/ })).toBeVisible();
+  await expect(card).toContainText('Completed');
   await page.getByRole('textbox', { name: 'Search tickets' }).fill('a search with no possible matching work 98jds');
   await expect(page.getByRole('heading', { name: 'No matches' })).toBeVisible();
   await page.getByRole('button', { name: /^Clear filters/ }).click();
@@ -740,10 +741,10 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
       await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
       // Status changes show before the server answers.
       const startedAt = Date.now();
-      await row.getByRole('button', { name: /^Start/ }).click();
-      await expect(row.getByText('In progress', { exact: true })).toBeVisible({ timeout: 1_500 });
-      console.log(`[live verification] Start shown in ${Date.now() - startedAt} ms`);
-      await expect.poll(async () => (await readItems()).find((item) => item.id === task.id)?.status, { timeout: 30_000 }).toBe('in_progress');
+      await row.getByRole('button', { name: /^Complete/ }).click();
+      await expect(row.getByText('Done', { exact: true })).toBeVisible({ timeout: 1_500 });
+      console.log(`[live verification] Complete shown in ${Date.now() - startedAt} ms`);
+      await expect.poll(async () => (await readItems()).find((item) => item.id === task.id)?.status, { timeout: 30_000 }).toBe('done');
       await page.goto('/bugs');
       await expect(page.getByRole('heading', { level: 1, name: /^Bugs/ })).toBeVisible({ timeout: 10_000 });
       await page.locator('.page-actions').getByRole('button', { name: 'Log bug', exact: true }).click();

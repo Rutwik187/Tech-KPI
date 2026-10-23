@@ -146,6 +146,16 @@ async function main() {
     const ownTicketData = await mutate(developerCookie, { action: "createItem", type: "task", title: `${trace}-own`, projectId: project.id, phaseId: buildPhase.id, assigneeId: member.id, estimateHours: 3 });
     const ownTicket = ownTicketData.items.find((item) => item.title === `${trace}-own`)!; ids.add(ownTicket.id);
     assert.equal(ownTicket.assigneeId, member.id); assert.equal(ownTicket.status, "todo"); checks += 2;
+    // Complete is one step: a developer's ticket goes to review, an admin completes straight to done.
+    data = await mutate(developerCookie, { action: "updateItem", id: ownTicket.id, patch: { status: "in_review" } });
+    const completedOwn = data.items.find((item) => item.id === ownTicket.id)!;
+    assert.equal(completedOwn.status, "in_review"); assert(completedOwn.startedAt); checks += 2;
+    data = await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-quick`, projectId: project.id, phaseId: buildPhase.id, assigneeId: member.id, estimateHours: 1 });
+    const quick = data.items.find((item) => item.title === `${trace}-quick`)!; ids.add(quick.id);
+    await mutate(developerCookie, { action: "updateItem", id: quick.id, patch: { status: "done" } }, 400);
+    data = await mutate(adminCookie, { action: "updateItem", id: quick.id, patch: { status: "done" } });
+    const completedQuick = data.items.find((item) => item.id === quick.id)!;
+    assert.equal(completedQuick.status, "done"); assert(completedQuick.startedAt && completedQuick.completedAt); checks += 2;
     await mutate(developerCookie, { action: "updateItem", id: adminTask.id, patch: { status: "in_progress" } }, 404);
     await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { estimateHours: 9 }, reason: "Scope grew", reasonCategory: "scope_change" }, 403);
     await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { assigneeId: fixture.userId } }, 403);

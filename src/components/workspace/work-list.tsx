@@ -105,7 +105,7 @@ export function WorkList({ data, kind, onOpen, onAction, onAdd, busy }: { data: 
                   <TableCell><div className="project-phase-cell"><ProjectTag data={data} id={item.projectId} /><PhaseTag data={data} id={item.phaseId} /></div></TableCell>
                   <TableCell>{kind === 'task' ? <span className="estimate-cell"><Clock3 size={12} />{item.estimateHours} h</span> : <SeverityBadge item={item} />}</TableCell>
                   <TableCell>{kind === 'task' ? <DueDate item={item} data={data} /> : <FixBy item={item} data={data} />}</TableCell>
-                  <TableCell><ItemActions item={item} admin={admin} onAction={onAction} busy={busy} compact /></TableCell>
+                  <TableCell><ItemActions item={item} admin={admin} onAction={onAction} busy={busy} /></TableCell>
                 </TableRow>)}</TableBody>
               </Table></div>}
       </CardContent>
