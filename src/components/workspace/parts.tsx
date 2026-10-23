@@ -6,10 +6,9 @@ import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCheck, Clock3, Eye
 import type { DashboardData, WorkItem } from '@/lib/types';
 import { getBugKpi, type MemberKpi } from '@/lib/kpi';
 import { Avatar, PriorityBadge } from '@/components/ui';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { bands, displayDate, displayDateTime, findMember, findProject, firstName, hours, isDone, percent, phaseName, today, type OnAction } from './lib';
 import { TicketExtendedBadge } from './timeline';
 

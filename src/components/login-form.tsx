@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { ArrowRight, Check, CircleAlert, Layers3, LoaderCircle, ShieldCheck } from 'lucide-react';
+import { ArrowRight, Check, CircleAlert, LoaderCircle, ShieldCheck } from 'lucide-react';
 import { authClient } from '@/lib/auth-client';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -43,7 +43,6 @@ export function LoginForm({ configured, oauthError }: { configured: boolean; oau
     <main className="login-page">
       <header className="login-header">
         <Link href="/login" className="login-brand" aria-label="Urban Gabru tech workspace">
-          <span className="login-logo"><Layers3 aria-hidden="true" /></span>
           <span>urban<span className="login-brand-light">gabru</span><small>TECH WORKSPACE</small></span>
         </Link>
         <ThemeToggle />

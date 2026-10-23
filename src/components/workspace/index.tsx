@@ -213,7 +213,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
           {page === 'account' && <Account data={data} />}
         </>}
         {children}
-        <footer className="workspace-footer"><span><span className="footer-brand">ug.</span>Urban Gabru tech workspace</span><span>India time (Asia/Kolkata) · {displayDate(new Date(), { year: 'numeric' })}</span></footer>
+        <footer className="workspace-footer"><span>Urban Gabru tech workspace</span><span>India time (Asia/Kolkata) · {displayDate(new Date(), { year: 'numeric' })}</span></footer>
       </div>
     </SidebarInset>
     {modal?.type === 'item' && <ItemForm data={data} kind={modal.kind} assigneeId={modal.assigneeId} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
@@ -234,7 +234,7 @@ function WorkspaceSidebar({ data, page }: { data: DashboardData; page: string })
   const open = data.items.filter(i => !isDone(i));
   const close = () => setOpenMobile(false);
   return <Sidebar className="app-sidebar" collapsible="offcanvas">
-    <SidebarHeader><Link className="brand" href={routeFor(data, 'dashboard')} onClick={close}><span className="brand-mark">ug<span>.</span></span><div>Urban Gabru<span>Tech workspace</span></div></Link></SidebarHeader>
+    <SidebarHeader><Link className="brand" href={routeFor(data, 'dashboard')} onClick={close} aria-label="Urban Gabru tech workspace"><div>urban<span className="brand-light">gabru</span><small>Tech workspace</small></div></Link></SidebarHeader>
     <SidebarContent>
       <SidebarGroup><SidebarGroupLabel>Workspace</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{pages.filter(p => isAdmin || !p.admin).map(p => {
         const Icon = p.icon;
