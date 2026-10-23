@@ -53,7 +53,6 @@ export interface TeamKpi {
   members: MemberKpi[];
   developers: MemberKpi[];
   teamEfficiency: number | null;
-  leadEfficiency: number | null;
   capacityHours: number;
   weekCapacityHours: number;
   creditedHours: number;
@@ -255,41 +254,23 @@ function mean(values: number[]): number | null {
   return values.length ? roundHours(values.reduce((sum, value) => sum + value, 0) / values.length) : null;
 }
 
-function leadScore(own: MemberKpi, teamEfficiency: number | null, settings: Settings): number | null {
-  if (own.capacityHours === 0) return teamEfficiency;
-  if (teamEfficiency === null) return own.deliveryScore;
-  return roundHours(teamEfficiency * settings.leadTeamWeight / 100 + own.deliveryScore * settings.leadOwnWeight / 100);
-}
-
+/** Only developers are scored. Admins manage the work and own no tickets, so they have no score. */
 export function calculateMemberKpi(member: Member, data: DashboardData, weekStart: string, now = new Date()): MemberKpi {
-  const own = baseMemberKpi(member, data, weekStart, now);
-  if (own.isLocked || own.member.role !== 'admin') return own;
-  const developerScores = weeklyMembers(data, weekStart).filter((developer) => developer.role === 'developer' && developer.isActive)
-    .map((developer) => baseMemberKpi(developer, data, weekStart, now).efficiency).filter((score): score is number => score !== null);
-  const efficiency = leadScore(own, mean(developerScores), data.settings);
-  return { ...own, efficiency, band: efficiencyBand(efficiency, data.settings) };
+  return baseMemberKpi(member, data, weekStart, now);
 }
 
 export function calculateTeamKpi(data: DashboardData, weekStart: string, now = new Date()): TeamKpi {
   const base = weeklyMembers(data, weekStart).map((member) => baseMemberKpi(member, data, weekStart, now));
   const developers = base.filter((kpi) => kpi.member.role === 'developer');
   const teamEfficiency = mean(developers.map((kpi) => kpi.efficiency).filter((score): score is number => score !== null));
-  const members = base.map((kpi) => {
-    if (kpi.isLocked || kpi.member.role !== 'admin') return kpi;
-    const efficiency = leadScore(kpi, teamEfficiency, data.settings);
-    return { ...kpi, efficiency, band: efficiencyBand(efficiency, data.settings) };
-  });
-  const lead = members.find((kpi) => kpi.memberId === data.currentUser.id && kpi.member.role === 'admin')
-    || members.find((kpi) => kpi.member.role === 'admin');
   const capacityHours = roundHours(developers.reduce((sum, kpi) => sum + kpi.capacityHours, 0));
   const creditedHours = roundHours(developers.reduce((sum, kpi) => sum + kpi.creditedHours, 0));
   const bugsScored = developers.reduce((sum, kpi) => sum + kpi.bugsScored, 0);
   const frozenTeamBand = data.snapshots?.find((row) => row.weekStart === getWeekStart(weekStart, data.settings.timezone) && validBand(row.value.teamBand))?.value.teamBand;
   return {
-    members,
+    members: developers,
     developers,
     teamEfficiency,
-    leadEfficiency: lead?.efficiency ?? null,
     capacityHours,
     weekCapacityHours: roundHours(developers.reduce((sum, kpi) => sum + kpi.weekCapacityHours, 0)),
     creditedHours,

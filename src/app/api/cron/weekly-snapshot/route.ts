@@ -28,7 +28,8 @@ export async function GET(request: Request) {
       for (const member of result.members) {
         const inserted = await tx.insert(snapshots).values({
           userId: member.memberId, weekStart,
-          value: { ...member, isLocked: true, ...(member.member.role === "admin" ? { teamEfficiency: result.teamEfficiency, teamBand: result.band } : {}) },
+          // Only developers are scored, so each developer's row also carries the team result for that week.
+          value: { ...member, isLocked: true, teamEfficiency: result.teamEfficiency, teamBand: result.band },
         }).onConflictDoNothing().returning({ userId: snapshots.userId });
         saved.push(...inserted.map((row) => row.userId));
       }

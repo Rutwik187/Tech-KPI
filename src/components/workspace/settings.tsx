@@ -19,7 +19,6 @@ export function SettingsPage({ data, mutate, busy, onHoliday }: { data: Dashboar
   async function save(event: FormEvent) {
     event.preventDefault();
     const error = settings.deliveryWeight + settings.bugWeight !== 100 ? 'Ticket hours and bug points must add up to 100%.'
-      : settings.leadTeamWeight + settings.leadOwnWeight !== 100 ? 'The two admin weights must add up to 100%.'
       : settings.workdayEnd <= settings.workdayStart ? 'The workday must end after it starts.'
       : !settings.workingDays.length ? 'Choose at least one working day.'
       : settings.bandBelowTarget >= settings.bandOnTarget ? 'The on target score must be higher than the below target score.' : '';
@@ -55,11 +54,8 @@ export function SettingsPage({ data, mutate, busy, onHoliday }: { data: Dashboar
         <Card className="settings-fields"><CardContent>
           <FieldGroup className="form-grid">
             {numberField('Developer hours per week', 'defaultDevCapacityHours', 'Used for new developers. Leave and holidays lower it.', 168)}
-            {numberField('Admin hours per week', 'defaultLeadCapacityHours', 'Hours an admin spends on their own tickets.', 168)}
             {numberField('Ticket hours weight (%)', 'deliveryWeight', undefined, 100)}
             {numberField('Bug points weight (%)', 'bugWeight', 'These two must add up to 100%.', 100)}
-            {numberField('Admin score: team weight (%)', 'leadTeamWeight', undefined, 100)}
-            {numberField('Admin score: own tickets weight (%)', 'leadOwnWeight', 'These two must add up to 100%.', 100)}
           </FieldGroup>
           <Alert className="formula-preview"><Target size={16} /><AlertDescription><span>Efficiency = ticket hours done ÷ hours at work (max 100%) × {settings.deliveryWeight}% + bug points × {settings.bugWeight}%</span></AlertDescription></Alert>
         </CardContent></Card>

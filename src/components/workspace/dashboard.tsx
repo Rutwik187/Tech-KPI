@@ -75,7 +75,7 @@ export function Dashboard({ data, week, scores, onOpen, onOpenProject, onAction,
     {isAdmin
       ? <Panel title="Team this week" action={<Button variant="link" size="sm" asChild><Link href={routeFor(data, 'team')}>Manage team<ArrowUpRight data-icon="inline-end" size={14} /></Link></Button>} className="team-pulse-panel">
           <TeamTable data={data} scores={scores} current={current} />
-          <div className="team-table-footer"><span><i />{plural(scores.developers.length, 'developer')}</span><div><span>Your admin score</span><strong>{percent(scores.leadEfficiency)}</strong><small>{data.settings.leadTeamWeight}% team + {data.settings.leadOwnWeight}% your own tickets</small></div></div>
+          <div className="team-table-footer"><span><i />{plural(scores.developers.length, 'developer')}</span></div>
         </Panel>
       : <>
           <Panel title="My open tickets" action={<Button variant="link" size="sm" asChild><Link href={routeFor(data, 'tickets')}>All my tickets<ArrowUpRight data-icon="inline-end" size={14} /></Link></Button>}>

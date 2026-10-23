@@ -39,7 +39,7 @@ async function pickDate(page: Page, trigger: Locator, iso: string) {
 
 async function readDemoData(page: Page): Promise<DashboardData> {
   return page.evaluate(() => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v4');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v5');
     if (!saved) throw new Error('Demo changes did not persist.');
     return JSON.parse(saved) as DashboardData;
   });
@@ -205,7 +205,7 @@ test('a ticket needs only a title, owner and estimate, survives reload, and appe
   await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click();
   await expect(dialog).toBeHidden();
   const savedDescription = await page.evaluate(title => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v4');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v5');
     if (!saved) throw new Error('Demo ticket did not persist.');
     return (JSON.parse(saved) as { items: { title: string; description: string }[] }).items.find(item => item.title === title)?.description;
   }, title);
@@ -428,7 +428,7 @@ test('logging a linked bug fills its owner and project, then supports fix and ve
   await page.getByRole('textbox', { name: 'Search bugs' }).fill(standaloneTitle);
   await expect(page.getByRole('row').filter({ hasText: standaloneTitle })).toBeVisible();
   const storedTaskId = await page.evaluate(title => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v4');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v5');
     if (!saved) throw new Error('Demo bug did not persist.');
     return (JSON.parse(saved) as { items: { title: string; taskId: string | null }[] }).items.find(item => item.title === title)?.taskId;
   }, standaloneTitle);
@@ -445,7 +445,7 @@ test('working-day buttons save ISO weekdays including Sunday as seven in the dem
   await sunday.click();
   await page.getByRole('button', { name: /^Save settings/ }).click();
   const workingDays = await page.evaluate(() => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v4');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v5');
     if (!saved) throw new Error('Demo settings did not persist.');
     return (JSON.parse(saved) as { settings: { workingDays: number[] } }).settings.workingDays;
   });
@@ -681,6 +681,8 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
     const createdIds = new Set<string>();
     let actorId: string | undefined;
     let fixture: OfflineFixture | undefined;
+    // Admins own no tickets, so the test brings its own temporary developer as the owner.
+    let owner: { userId: string; member: { name: string }; dispose(): Promise<void> } | undefined;
     type Item = { id: string; key: string; title: string; type: string; status: string; estimateHours: number; dueDate: string | null; originalDueDate: string | null; projectId: string; phaseId: string | null; assigneeId: string; taskId: string | null };
     const readItems = async () => {
       const response = await page.request.get('/api/data');
@@ -690,6 +692,8 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
     try {
       fixture = await authenticateWithFixture(page);
       actorId = fixture.userId;
+      const { createOfflineSessionFixture } = await import('../src/server/verification-fixtures');
+      owner = await createOfflineSessionFixture({ baseURL: process.env.TEST_BASE_URL ?? 'http://localhost:3100', role: 'developer', name: `Browser verification developer ${randomUUID().slice(0, 6)}` });
       page.setDefaultTimeout(15_000);
       page.setDefaultNavigationTimeout(45_000);
       await page.goto('/tickets');
@@ -700,7 +704,7 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
       await expect(dialog.getByRole('combobox', { name: 'Project', exact: true })).toHaveText(ADHOC_PROJECT.name);
       await expect(dialog.getByRole('combobox', { name: 'Phase', exact: true })).toBeDisabled();
       await dialog.getByRole('textbox', { name: 'Title', exact: true }).fill(taskTitle);
-      await chooseOption(page, dialog.getByRole('combobox', { name: 'Owner', exact: true }), fixture.member.name);
+      await chooseOption(page, dialog.getByRole('combobox', { name: 'Owner', exact: true }), owner.member.name);
       const projectLabel = await dialog.getByRole('combobox', { name: 'Project', exact: true }).innerText();
       await dialog.getByLabel(/^Estimate/).fill('2');
       await saveLiveForm(page, dialog, 'Create ticket');
@@ -708,7 +712,7 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
       if (!task) throw new Error('The created task did not persist in Neon.');
       createdIds.add(task.id);
       expect(task.estimateHours).toBe(2);
-      expect(task.assigneeId).toBe(actorId);
+      expect(task.assigneeId).toBe(owner.userId);
       expect(task.projectId).toBe(ADHOC_PROJECT.id);
       expect(task.phaseId).toBeNull();
       await page.reload();
@@ -751,7 +755,7 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
       dialog = page.getByRole('dialog');
       await dialog.getByLabel('What went wrong?').fill(bugTitle);
       await chooseOption(page, dialog.getByRole('combobox', { name: /^Linked ticket/ }), `${task.key} · ${taskTitle}`);
-      await expect(dialog.getByRole('combobox', { name: 'Owner', exact: true })).toHaveText(fixture.member.name);
+      await expect(dialog.getByRole('combobox', { name: 'Owner', exact: true })).toHaveText(owner.member.name);
       await expect(dialog.getByRole('combobox', { name: 'Project', exact: true })).toHaveText(projectLabel.trim());
       await saveLiveForm(page, dialog, 'Log bug');
       const bug = (await readItems()).find((item) => item.title === bugTitle);
@@ -791,7 +795,7 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
           throw error;
         } finally { await cleanup.end(); }
       }
-      } finally { await fixture?.dispose(); console.log('[live verification] Temporary identity cleanup completed'); }
+      } finally { await owner?.dispose(); await fixture?.dispose(); console.log('[live verification] Temporary identity cleanup completed'); }
     }
   });
 });

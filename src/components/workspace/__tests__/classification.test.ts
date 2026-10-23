@@ -44,8 +44,8 @@ describe('project and owner auto-fill', () => {
     expect(withOwner(data, value, gayatri.id, { project: true, owner: true })).toEqual({ ...value, assigneeId: gayatri.id });
   });
 
-  it('lets any person be picked until a project is picked', () => {
-    expect(ownerChoices(data, 'im-portal', false).map(m => m.id)).toEqual(data.members.map(m => m.id));
+  it('lets any developer be picked until a project is picked; admins own no tickets', () => {
+    expect(ownerChoices(data, 'im-portal', false).map(m => m.id)).toEqual(data.members.filter(m => m.role === 'developer').map(m => m.id));
     expect(ownerChoices(data, 'im-portal', true).map(m => m.id)).toEqual([arshad.id]);
   });
 
