@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DashboardData, Member, WorkItem } from '../../types';
 import {
-  addWorkingHours, calculateCapacity, calculateMemberKpi, calculateTeamKpi, defaultSettings,
+  addWorkingHours, calculateCapacity, dueDateAfterHours, calculateMemberKpi, calculateTeamKpi, defaultSettings,
   getBugKpi, getWeekRange, getWeekStart, getWorkCalendar, isWorkingDay, monthWeekStarts,
   workingHoursBetween,
 } from '../index';
@@ -14,7 +14,7 @@ const lead: Member = { ...developer, id: 'lead', role: 'admin', capacity: 10 };
 
 function data(items: WorkItem[] = []): DashboardData {
   return {
-    currentUser: lead, members: [developer, lead], projects: [], phases: [], items, requests: [], activities: [], leaves: [], holidays: [],
+    currentUser: lead, members: [developer, lead], projects: [], phases: [], items, requests: [], dueDateRequests: [], activities: [], leaves: [], holidays: [],
     settings: { ...defaultSettings, trackingStartDate: '2026-01-01' }, mode: 'demo',
   };
 }
@@ -267,6 +267,22 @@ describe('working calendar and date helpers', () => {
     const calendar = { ...getWorkCalendar(data()), workingDays: [2, 3, 4, 5, 6] };
     expect(isWorkingDay('2026-10-12', calendar)).toBe(false);
     expect(addWorkingHours(instant('2026-10-16T18:00:00'), 2, calendar)).toEqual(instant('2026-10-17T11:00:00'));
+  });
+
+  it('moves a due date by the extra working hours a ticket needs', () => {
+    const calendar = getWorkCalendar(data());
+    const monday = instant('2026-10-12T09:00:00');
+    // Friday's workday is over, so two more hours land on Monday.
+    expect(dueDateAfterHours('2026-10-16', 2, calendar, monday)).toBe('2026-10-19');
+    // A full 9-hour day fits in Tuesday. One more hour spills into Wednesday.
+    expect(dueDateAfterHours('2026-10-12', 9, calendar, monday)).toBe('2026-10-13');
+    expect(dueDateAfterHours('2026-10-12', 10, calendar, monday)).toBe('2026-10-14');
+    // Days off are skipped.
+    expect(dueDateAfterHours('2026-10-12', 2, { ...calendar, extraDaysOff: new Set(['2026-10-13']) }, monday)).toBe('2026-10-14');
+  });
+
+  it('counts extra hours from now when the ticket is already overdue', () => {
+    expect(dueDateAfterHours('2026-10-12', 2, getWorkCalendar(data()), instant('2026-10-15T11:00:00'))).toBe('2026-10-15');
   });
 
   it('uses Monday membership for a monthly view', () => {

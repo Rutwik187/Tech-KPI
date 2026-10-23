@@ -91,6 +91,29 @@ export const ticketRequests = pgTable("tech_kpi_ticket_request", {
   check("tech_kpi_ticket_request_status", sql`${t.status} IN ('pending', 'approved', 'declined')`),
   check("tech_kpi_ticket_request_reviewed", sql`(${t.status} = 'pending') = (${t.reviewedAt} IS NULL)`),
 ]);
+/**
+ * A developer's ask for more hours on their ticket. When an admin approves, the hours join the estimate
+ * and the due date moves by those working hours. `fromDate` and `fromEstimate` record the ticket as it was asked.
+ */
+export const dueDateRequests = pgTable("tech_kpi_due_date_request", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  itemId: uuid("item_id").notNull().references(() => workItems.id, { onDelete: "cascade" }),
+  requesterId: text("requester_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  fromDate: date("from_date", { mode: "string" }).notNull(), fromEstimate: hours("from_estimate").notNull(),
+  hours: hours("hours").notNull(), approvedHours: hours("approved_hours"),
+  reasonCategory: text("reason_category").$type<"scope_change" | "blocked_dependency" | "underestimated" | "other">().notNull(),
+  reason: text("reason").notNull(),
+  status: text("status").$type<"pending" | "approved" | "declined">().notNull().default("pending"),
+  reviewedById: text("reviewed_by_id").references(() => user.id, { onDelete: "set null" }), reviewedAt: stamp("reviewed_at"), reviewNote: text("review_note"),
+  createdAt: stamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  index("tech_kpi_due_date_request_status_idx").on(t.status, t.createdAt),
+  uniqueIndex("tech_kpi_due_date_request_one_pending").on(t.itemId).where(sql`${t.status} = 'pending'`),
+  check("tech_kpi_due_date_request_hours", sql`${t.hours} > 0 AND ${t.hours} <= 80 AND (${t.approvedHours} IS NULL OR (${t.approvedHours} > 0 AND ${t.approvedHours} <= 80))`),
+  check("tech_kpi_due_date_request_category", sql`${t.reasonCategory} IN ('scope_change', 'blocked_dependency', 'underestimated', 'other')`),
+  check("tech_kpi_due_date_request_status", sql`${t.status} IN ('pending', 'approved', 'declined')`),
+  check("tech_kpi_due_date_request_reviewed", sql`(${t.status} = 'pending') = (${t.reviewedAt} IS NULL)`),
+]);
 export const activities = pgTable("tech_kpi_activity", {
   id: uuid("id").defaultRandom().primaryKey(), entityId: text("entity_id").notNull(),
   actorId: text("actor_id").notNull().references(() => user.id), action: text("action").notNull(), reason: text("reason"),

@@ -212,7 +212,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
         </div>}
         {blocked ? <Panel><EmptyState title="This page is for admins" description="Your overview, tickets, bugs, and projects are in the menu." action={<Button variant="outline" asChild><Link href={routeFor(data, 'dashboard')}>Go to my overview<ArrowRight data-icon="inline-end" /></Link></Button>} /></Panel> : <>
           {page === 'dashboard' && <Dashboard data={data} week={week} scores={scores} onOpen={setSelectedId} onOpenProject={setProjectId} onAction={act} onExtend={extendTicket} onAdd={addItem} busy={busy} />}
-          {(page === 'tickets' || page === 'bugs') && <WorkList key={`${page}?${searchParams.toString()}`} data={data} kind={page === 'tickets' ? 'task' : 'bug'} onOpen={setSelectedId} onAction={act} onAdd={addItem} busy={busy} />}
+          {(page === 'tickets' || page === 'bugs') && <WorkList key={`${page}?${searchParams.toString()}`} data={data} kind={page === 'tickets' ? 'task' : 'bug'} onOpen={setSelectedId} onAction={act} onExtend={extendTicket} onAdd={addItem} busy={busy} />}
           {page === 'approvals' && <Approvals data={data} onOpen={setSelectedId} onAction={act} onRequest={() => addItem('task')} mutate={mutate} busy={busy} />}
           {page === 'standup' && <Standup data={data} week={week} onOpen={setSelectedId} onAction={act} onAdd={addItem} mutate={mutate} busy={busy} />}
           {page === 'team' && <Team data={data} week={week} onEdit={m => setModal({ type: 'member', member: m })} onLeave={userId => setModal({ type: 'leave', userId })} mutate={mutate} onOpen={setSelectedId} />}
@@ -241,7 +241,7 @@ function WorkspaceSidebar({ data, page }: { data: DashboardData; page: string })
   const isAdmin = data.currentUser.role === 'admin';
   const open = data.items.filter(i => !isDone(i));
   // Admins see everything waiting for a decision. A developer sees their own requests still waiting.
-  const pendingRequests = data.requests.filter(r => r.status === 'pending').length;
+  const pendingRequests = data.requests.filter(r => r.status === 'pending').length + data.dueDateRequests.filter(r => r.status === 'pending').length;
   const waiting = isAdmin ? pendingRequests + data.items.filter(i => i.type === 'task' ? i.status === 'in_review' : i.status === 'fixed').length : pendingRequests;
   const close = () => setOpenMobile(false);
   return <Sidebar className="app-sidebar" collapsible="offcanvas">
@@ -266,8 +266,10 @@ function WorkspaceSidebar({ data, page }: { data: DashboardData; page: string })
 function AttentionMenu({ data, onOpen }: { data: DashboardData; onOpen: (id: string) => void }) {
   const router = useRouter();
   const items = attentionItems(data);
-  const requests = data.currentUser.role === 'admin' ? data.requests.filter(r => r.status === 'pending').length : 0;
-  const total = items.length + requests;
+  const admin = data.currentUser.role === 'admin';
+  const requests = admin ? data.requests.filter(r => r.status === 'pending').length : 0;
+  const extensions = admin ? data.dueDateRequests.filter(r => r.status === 'pending').length : 0;
+  const total = items.length + requests + extensions;
   return <DropdownMenu>
     <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label={`Needs attention: ${total}`}><BellDot size={19} />{total > 0 && <i className="notification-dot" />}</Button></DropdownMenuTrigger>
     <DropdownMenuContent align="end" className="attention-menu">
@@ -275,6 +277,9 @@ function AttentionMenu({ data, onOpen }: { data: DashboardData; onOpen: (id: str
       <DropdownMenuSeparator />
       {requests > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'approvals'))} className="attention-menu-item">
         <span className="item-key">Requests</span><span className="attention-menu-title">{requests} ticket {requests === 1 ? 'request waits' : 'requests wait'} for approval</span><span className="attention-menu-reason">Review on Approvals</span>
+      </DropdownMenuItem>}
+      {extensions > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'approvals'))} className="attention-menu-item">
+        <span className="item-key">Hours</span><span className="attention-menu-title">{extensions} {extensions === 1 ? 'ask for more hours waits' : 'asks for more hours wait'} for approval</span><span className="attention-menu-reason">Review on Approvals</span>
       </DropdownMenuItem>}
       {total === 0 ? <p className="attention-menu-empty">Nothing needs attention.</p>
         : items.slice(0, 6).map(({ item, reason }) => <DropdownMenuItem key={item.id} onSelect={() => onOpen(item.id)} className="attention-menu-item">

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { config } from "dotenv";
 import { and, eq, inArray, like } from "drizzle-orm";
+import { dueDateAfterHours, getWorkCalendar } from "../lib/kpi";
 import { ADHOC_PROJECT_ID } from "../lib/project-defaults";
 import type { DashboardData } from "../lib/types";
 
@@ -196,11 +197,54 @@ async function main() {
     await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { title: `${trace}` } });
     data = await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { dueDate: "2099-11-02" } });
     assert.equal(data.items.find((item) => item.id === task.id)?.originalDueDate, "2099-11-02"); checks++;
-    await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { dueDate: "2099-11-05" } }, 400);
-    data = await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { dueDate: "2099-11-05" }, reason: "Waiting for the payment sandbox", reasonCategory: "blocked_dependency" });
-    assert.equal(data.items.find((item) => item.id === task.id)?.dueDate, "2099-11-05");
-    assert.equal(data.items.find((item) => item.id === task.id)?.originalDueDate, "2099-11-02"); checks++;
-    assert(data.activities.some((activity) => activity.entityId === task.id && activity.action === "task.due_changed" && activity.payload.from === "2099-11-02")); checks += 2;
+    // A developer never moves an existing due date directly. They ask for more hours instead.
+    await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { dueDate: "2099-11-05" }, reason: "Waiting for the payment sandbox", reasonCategory: "blocked_dependency" }, 403);
+    assert.equal((await db.select().from(schema.workItems).where(eq(schema.workItems.id, task.id)))[0].dueDate, "2099-11-02"); checks++;
+
+    // More hours on a ticket: a developer asks, an admin approves, declines, or extends directly.
+    data = await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-more-hours`, projectId: project.id, phaseId: buildPhase.id, assigneeId: member.id, estimateHours: 2, dueDate: "2099-11-02" });
+    const longer = data.items.find((item) => item.title === `${trace}-more-hours`)!; ids.add(longer.id);
+    const ask = { action: "extendTicket", itemId: longer.id, hours: 3, reasonCategory: "blocked_dependency", reason: "Waiting for the payment sandbox" };
+    await mutate(developerCookie, { ...ask, hours: 0.25 }, 400);
+    await mutate(developerCookie, { ...ask, hours: 79 }, 400);
+    await mutate(developerCookie, { ...ask, itemId: adminTask.id }, 404);
+    data = await mutate(developerCookie, ask);
+    let waiting = data.dueDateRequests.find((row) => row.itemId === longer.id && row.status === "pending")!;
+    assert.deepEqual([waiting.hours, waiting.fromDate, waiting.fromEstimate], [3, "2099-11-02", 2]);
+    assert.deepEqual([data.items.find((item) => item.id === longer.id)?.estimateHours, data.items.find((item) => item.id === longer.id)?.dueDate], [2, "2099-11-02"]); checks += 2;
+    await mutate(developerCookie, { ...ask, hours: 1 }, 409);
+    await mutate(developerCookie, { action: "approveDueDateRequest", id: waiting.id }, 403);
+    await mutate(adminCookie, { action: "approveDueDateRequest", id: waiting.id, hours: 79 }, 400);
+    await mutate(developerCookie, { action: "withdrawDueDateRequest", id: waiting.id });
+    data = await mutate(developerCookie, ask);
+    waiting = data.dueDateRequests.find((row) => row.itemId === longer.id && row.status === "pending")!;
+    data = await mutate(adminCookie, { action: "declineDueDateRequest", id: waiting.id, reason: "Split the sandbox work into its own ticket" });
+    assert.equal(data.dueDateRequests.find((row) => row.id === waiting.id)?.status, "declined");
+    assert.equal(data.items.find((item) => item.id === longer.id)?.estimateHours, 2); checks += 2;
+    await mutate(adminCookie, { action: "approveDueDateRequest", id: waiting.id }, 409);
+    // The admin approves 2 of the 3 hours. The estimate grows by 2 and the due date moves by 2 working hours.
+    data = await mutate(developerCookie, ask);
+    waiting = data.dueDateRequests.find((row) => row.itemId === longer.id && row.status === "pending")!;
+    data = await mutate(adminCookie, { action: "approveDueDateRequest", id: waiting.id, hours: 2, note: "Two hours is enough" });
+    const approvedTo = dueDateAfterHours("2099-11-02", 2, getWorkCalendar(data, member.id));
+    assert.ok(approvedTo > "2099-11-02");
+    const approvedItem = data.items.find((item) => item.id === longer.id)!;
+    assert.deepEqual([approvedItem.estimateHours, approvedItem.dueDate, approvedItem.originalDueDate], [4, approvedTo, "2099-11-02"]);
+    assert.deepEqual([data.dueDateRequests.find((row) => row.id === waiting.id)?.status, data.dueDateRequests.find((row) => row.id === waiting.id)?.approvedHours], ["approved", 2]);
+    const approvedMove = data.activities.find((activity) => activity.entityId === longer.id && activity.action === "task.due_changed")!;
+    assert.deepEqual([approvedMove.actorId, approvedMove.reason, approvedMove.payload.addedHours, approvedMove.payload.requestedHours, approvedMove.payload.requestedBy, approvedMove.payload.estimateTo],
+      [data.currentUser.id, "Waiting for the payment sandbox", 2, 3, member.id, 4]); checks += 4;
+    // A request goes stale when the ticket changes after it was asked.
+    data = await mutate(developerCookie, { ...ask, hours: 1 });
+    waiting = data.dueDateRequests.find((row) => row.itemId === longer.id && row.status === "pending")!;
+    await mutate(adminCookie, { action: "updateItem", id: longer.id, patch: { estimateHours: 5 }, reason: "Scope agreed in standup", reasonCategory: "scope_change" });
+    await mutate(adminCookie, { action: "approveDueDateRequest", id: waiting.id }, 409);
+    await mutate(adminCookie, { action: "declineDueDateRequest", id: waiting.id, reason: "The estimate already changed" });
+    // An admin adds hours directly, with a reason and no request.
+    await mutate(adminCookie, { action: "extendTicket", itemId: longer.id, hours: 1, reasonCategory: "scope_change", reason: "" }, 400);
+    data = await mutate(adminCookie, { action: "extendTicket", itemId: longer.id, hours: 1, reasonCategory: "scope_change", reason: "Agreed in standup" });
+    assert.equal(data.items.find((item) => item.id === longer.id)?.estimateHours, 6);
+    assert(!data.dueDateRequests.some((row) => row.itemId === longer.id && row.status === "pending")); checks += 2;
     await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { status: "done" } }, 400);
     await mutate(adminCookie, { action: "updateItem", id: task.id, patch: { estimateHours: 3 } }, 400);
     const [unchanged] = await db.select().from(schema.workItems).where(eq(schema.workItems.id, task.id));
@@ -260,7 +304,7 @@ async function main() {
       const cron = await fetch(`${baseURL}/api/cron/weekly-snapshot`, { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } });
       assert.equal(cron.status, 200); checks++;
     }
-    console.log(`PASS: ${checks} backend checks (projects, primary developers, project timelines and extensions, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable, sign-in by invited work email, ticket requests and approvals). Local session fixtures used; real Microsoft OAuth is not exercised.`);
+    console.log(`PASS: ${checks} backend checks (projects, primary developers, project timelines and extensions, more hours on tickets with approval, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable, sign-in by invited work email, ticket requests and approvals). Local session fixtures used; real Microsoft OAuth is not exercised.`);
   } finally {
     await db.transaction(async (tx) => {
       const testItems = await tx.select({ id: schema.workItems.id }).from(schema.workItems).where(like(schema.workItems.title, `${trace}%`));

@@ -1,8 +1,8 @@
 import { and, desc, eq, inArray, or, isNull, ne, sql } from "drizzle-orm";
 import { headers } from "next/headers";
 import { db } from "@/db";
-import { account, activities, holidays, leaves, memberProfiles, projectMembers, projectPhases, projects, settings, snapshots, ticketRequests, user, workItems } from "@/db/schema";
-import type { DashboardData, Member, TicketRequest, WorkItem } from "@/lib/types";
+import { account, activities, dueDateRequests, holidays, leaves, memberProfiles, projectMembers, projectPhases, projects, settings, snapshots, ticketRequests, user, workItems } from "@/db/schema";
+import type { DashboardData, DueDateRequest, Member, TicketRequest, WorkItem } from "@/lib/types";
 import { DEFAULT_SETTINGS } from "./default-settings";
 import { requireSession } from "./authz";
 import { ADHOC_PROJECT_ID } from "@/lib/project-defaults";
@@ -18,6 +18,10 @@ export function serializeItem(item: typeof workItems.$inferSelect): WorkItem {
     fixedAt: item.fixedAt?.toISOString() ?? null, reportedAt: item.reportedAt.toISOString(),
     blocker: item.blocker, taskId: item.taskId, reopenCount: item.reopenCount,
   };
+}
+
+export function serializeDueDateRequest(request: typeof dueDateRequests.$inferSelect): DueDateRequest {
+  return { ...request, reviewedAt: request.reviewedAt?.toISOString() ?? null, createdAt: request.createdAt.toISOString() };
 }
 
 export function serializeRequest(request: typeof ticketRequests.$inferSelect): TicketRequest {
@@ -44,7 +48,7 @@ export async function getSnapshotSource(): Promise<DashboardData | null> {
 
 async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
   const isAdmin = currentUser.role === "admin";
-  const [itemRows, identities, projectRows, membershipRows, phaseRows, leaveRows, holidayRows, settingRows, snapshotRows, requestRows] = await Promise.all([
+  const [itemRows, identities, projectRows, membershipRows, phaseRows, leaveRows, holidayRows, settingRows, snapshotRows, requestRows, dueDateRows] = await Promise.all([
     db.select().from(workItems).where(isAdmin ? undefined : eq(workItems.assigneeId, currentUser.id)).orderBy(desc(workItems.createdAt)),
     db.select({ identity: user, profile: memberProfiles, microsoftObjectId: account.accountId }).from(user)
       .leftJoin(memberProfiles, eq(memberProfiles.userId, user.id))
@@ -58,6 +62,7 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
     db.select({ userId: snapshots.userId, weekStart: snapshots.weekStart, value: snapshots.value }).from(snapshots).where(isAdmin ? undefined : eq(snapshots.userId, currentUser.id)),
     // Admins review everyone's requests. A developer sees only their own.
     db.select().from(ticketRequests).where(isAdmin ? undefined : eq(ticketRequests.requesterId, currentUser.id)).orderBy(desc(ticketRequests.createdAt)).limit(200),
+    db.select().from(dueDateRequests).where(isAdmin ? undefined : eq(dueDateRequests.requesterId, currentUser.id)).orderBy(desc(dueDateRequests.createdAt)).limit(200),
   ]);
   const itemIds = itemRows.map((item) => item.id);
   if (!isAdmin) {
@@ -97,7 +102,7 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
       return { ...project, memberIds: rows.map((row) => row.userId), primaryMemberId: rows.find((row) => row.isPrimary)?.userId ?? null };
     }),
     phases: phaseRows.filter((phase) => visibleProjectIds.has(phase.projectId)),
-    items: itemRows.map(serializeItem), requests: requestRows.map(serializeRequest), activities: activityRows.map((activity) => ({ ...activity, createdAt: activity.createdAt.toISOString() })),
+    items: itemRows.map(serializeItem), requests: requestRows.map(serializeRequest), dueDateRequests: dueDateRows.map(serializeDueDateRequest), activities: activityRows.map((activity) => ({ ...activity, createdAt: activity.createdAt.toISOString() })),
     leaves: leaveRows, holidays: holidayRows, settings: appSettings, mode: "live", snapshots: snapshotRows,
   };
 }

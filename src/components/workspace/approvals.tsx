@@ -1,15 +1,17 @@
 "use client";
 
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { ArrowUpRight, Bug, CalendarDays, Check, CheckCheck, Clock3, Inbox, ListTodo, MessageSquareText, Plus, X } from 'lucide-react';
-import type { DashboardData, TicketRequest, WorkItem } from '@/lib/types';
+import { AlertTriangle, ArrowUpRight, Bug, CalendarClock, CalendarDays, Check, CheckCheck, Clock3, Inbox, ListTodo, MessageSquareText, Plus, X } from 'lucide-react';
+import type { DashboardData, DueDateRequest, TicketRequest, WorkItem } from '@/lib/types';
 import { Avatar, EmptyState, FormDate, FormField, FormSelect, Modal, Panel, PriorityBadge } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { displayDate, displayDateTime, findMember, firstName, hours, isAdhocProject, projectPhases, today, type MutationFn, type OnAction, type RequestChanges } from './lib';
+import { displayDate, displayDateTime, findMember, findProject, firstName, hours, isAdhocProject, MAX_TICKET_HOURS, projectPhases, ticketExtension, today, type MutationFn, type OnAction, type RequestChanges } from './lib';
+import { daysBetween, reasonLabel } from '@/lib/timeline';
+import { dayCount } from './timeline';
 import { FormChoice, FormFooter } from './forms';
 import { ItemActions, PhaseTag, ProjectTag } from './parts';
 
@@ -30,6 +32,9 @@ function finishedWork(data: DashboardData) {
 function AdminApprovals({ data, onOpen, onAction, mutate, busy }: ApprovalsProps) {
   const [approving, setApproving] = useState<TicketRequest | null>(null);
   const [declining, setDeclining] = useState<TicketRequest | null>(null);
+  const [approvingExtension, setApprovingExtension] = useState<DueDateRequest | null>(null);
+  const [decliningExtension, setDecliningExtension] = useState<DueDateRequest | null>(null);
+  const extensions = data.dueDateRequests.filter(r => r.status === 'pending').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   // Oldest first, so nobody waits longest.
   const pending = data.requests.filter(r => r.status === 'pending').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const reviewed = data.requests.filter(r => r.status !== 'pending').sort((a, b) => (b.reviewedAt ?? '').localeCompare(a.reviewedAt ?? '')).slice(0, 6);
@@ -37,6 +42,7 @@ function AdminApprovals({ data, onOpen, onAction, mutate, busy }: ApprovalsProps
   return <>
     <div className="team-overview-strip approvals-strip">
       <div><span className="mini-metric-icon"><Inbox size={18} /></span><strong>{pending.length}</strong><span>ticket {pending.length === 1 ? 'request' : 'requests'}</span></div>
+      <div><span className="mini-metric-icon"><CalendarClock size={18} /></span><strong>{extensions.length}</strong><span>{extensions.length === 1 ? 'ask' : 'asks'} for more hours</span></div>
       <div><span className="mini-metric-icon"><ListTodo size={18} /></span><strong>{finished.filter(i => i.type === 'task').length}</strong><span>completed tickets to approve</span></div>
       <div><span className="mini-metric-icon"><Bug size={18} /></span><strong>{finished.filter(i => i.type === 'bug').length}</strong><span>fixed bugs to verify</span></div>
     </div>
@@ -49,6 +55,16 @@ function AdminApprovals({ data, onOpen, onAction, mutate, busy }: ApprovalsProps
             <Button size="sm" onClick={() => setApproving(request)} disabled={busy}><Check data-icon="inline-start" />Approve</Button>
           </>} />)}</div>
         : <EmptyState title="No ticket requests" description="When a developer asks for a ticket, it waits here for you." />}
+    </Panel>
+
+    <Panel title="More hours on tickets">
+      <p className="panel-intro">Developers ask for extra hours on a ticket. Approving adds the hours to the estimate, moves the due date by them, and keeps the reason in the ticket’s history.</p>
+      {extensions.length
+        ? <div className="request-list">{extensions.map(request => <ExtensionCard key={request.id} data={data} request={request} onOpen={onOpen} actions={<>
+            <Button variant="outline" size="sm" onClick={() => setDecliningExtension(request)} disabled={busy}><X data-icon="inline-start" />Decline</Button>
+            <Button size="sm" onClick={() => setApprovingExtension(request)} disabled={busy}><Check data-icon="inline-start" />Approve</Button>
+          </>} />)}</div>
+        : <EmptyState title="No extensions to review" description="When a developer asks for more hours on a ticket, it waits here for you." />}
     </Panel>
 
     <Panel title="Finished work to approve">
@@ -65,6 +81,8 @@ function AdminApprovals({ data, onOpen, onAction, mutate, busy }: ApprovalsProps
 
     {approving && <ApproveRequestForm data={data} request={approving} mutate={mutate} busy={busy} onClose={() => setApproving(null)} />}
     {declining && <DeclineRequestForm data={data} request={declining} mutate={mutate} busy={busy} onClose={() => setDeclining(null)} />}
+    {approvingExtension && <ApproveExtensionForm data={data} request={approvingExtension} mutate={mutate} busy={busy} onClose={() => setApprovingExtension(null)} />}
+    {decliningExtension && <DeclineExtensionForm data={data} request={decliningExtension} mutate={mutate} busy={busy} onClose={() => setDecliningExtension(null)} />}
   </>;
 }
 
@@ -72,6 +90,8 @@ function DeveloperApprovals({ data, onOpen, onRequest, mutate, busy }: Approvals
   const [withdrawing, setWithdrawing] = useState<string | null>(null);
   const order = { pending: 0, declined: 1, approved: 2 } as const;
   const mine = [...data.requests].sort((a, b) => order[a.status] - order[b.status] || b.createdAt.localeCompare(a.createdAt));
+  // Waiting extensions first, then the latest decisions.
+  const extensions = [...data.dueDateRequests].sort((a, b) => order[a.status] - order[b.status] || b.createdAt.localeCompare(a.createdAt)).slice(0, 8);
   const finished = finishedWork(data);
   return <>
     <Panel title="Your ticket requests" action={mine.length > 0 && <Button variant="link" size="sm" onClick={onRequest}><Plus data-icon="inline-start" />Request ticket</Button>}>
@@ -87,6 +107,12 @@ function DeveloperApprovals({ data, onOpen, onRequest, mutate, busy }: Approvals
           } />)}</div>
         : <EmptyState title="No requests yet" description="Ask for a ticket when you take on new work. Your admin checks the estimate first." action={<Button onClick={onRequest}><Plus data-icon="inline-start" />Request ticket</Button>} />}
     </Panel>
+
+    {extensions.length > 0 && <Panel title="Your asks for more hours">
+      <div className="request-list">{extensions.map(request => <ExtensionCard key={request.id} data={data} request={request} onOpen={onOpen} mine actions={request.status === 'pending'
+        ? <Button variant="ghost" size="sm" disabled={busy} onClick={() => mutate({ action: 'withdrawDueDateRequest', id: request.id }, 'Extension request withdrawn')}>Withdraw</Button>
+        : undefined} />)}</div>
+    </Panel>}
 
     <Panel title="Waiting for your admin">
       <p className="panel-intro">Tickets you completed and bugs you fixed. Hours count once your admin approves.</p>
@@ -117,6 +143,92 @@ function RequestCard({ data, request, actions, mine = false, compact = false }: 
     {request.reviewNote && <p className="request-review"><CheckCheck size={14} /><span><strong>{request.status === 'declined' ? 'Why it was declined' : 'Admin note'}:</strong> {request.reviewNote}</span></p>}
     {actions && <footer className="request-card-actions">{actions}</footer>}
   </article>;
+}
+
+function ExtensionCard({ data, request, onOpen, actions, mine = false }: { data: DashboardData; request: DueDateRequest; onOpen: (id: string) => void; actions?: ReactNode; mine?: boolean }) {
+  const person = findMember(data, request.requesterId);
+  const item = data.items.find(i => i.id === request.itemId);
+  const project = item ? findProject(data, item.projectId) : undefined;
+  // While it waits, show what approving would do now. The ticket may have changed since it was asked.
+  const unchanged = item && item.dueDate === request.fromDate && item.estimateHours === request.fromEstimate;
+  const preview = request.status === 'pending' && item && unchanged ? ticketExtension(data, item, request.hours) : null;
+  const pastTarget = preview?.dueDate && project && !isAdhocProject(project) && project.targetDate && preview.dueDate > project.targetDate;
+  const category = reasonLabel(request.reasonCategory);
+  const granted = request.status === 'approved' ? request.approvedHours ?? request.hours : null;
+  return <article className={`request-card request-${request.status}`}>
+    <header className="request-card-head">
+      {!mine && <><Avatar member={person} size="small" /><strong>{person?.name ?? 'Former team member'}</strong></>}
+      <span className="request-time">Asked {displayDateTime(request.createdAt)}</span>
+      {(mine || request.status !== 'pending') && <Badge variant="outline" className={`request-status request-status-${request.status}`}><i />{requestStatus[request.status]}</Badge>}
+    </header>
+    <Button variant="ghost" className="request-title request-title-link" disabled={!item} onClick={() => item && onOpen(item.id)}>{item ? <><span className="item-key">{item.key}</span>{item.title}</> : 'Ticket no longer visible'}</Button>
+    <div className="request-facts">
+      {item && <ProjectTag data={data} id={item.projectId} />}
+      <Badge variant="outline" className="extension-hours">+{granted ?? request.hours} h{granted !== null && granted !== request.hours ? ` (asked ${request.hours} h)` : ''}</Badge>
+      {preview
+        ? <><span className="extension-dates"><Clock3 size={13} />{request.fromEstimate} h → <strong>{preview.estimate} h</strong></span>
+            <span className="extension-dates"><CalendarDays size={13} />Due {displayDate(request.fromDate)} → <strong>{displayDate(preview.dueDate)}</strong>{preview.dueDate !== request.fromDate && ` (+${dayCount(daysBetween(request.fromDate, preview.dueDate!))})`}</span></>
+        : <span className="extension-dates"><CalendarDays size={13} />Was due {displayDate(request.fromDate)} with {request.fromEstimate} h</span>}
+      {category && <Badge variant="secondary">{category}</Badge>}
+    </div>
+    <p className="request-note"><MessageSquareText size={14} /><span>{request.reason}</span></p>
+    {pastTarget && <p className="request-warning"><AlertTriangle size={14} /><span>The new due date is after the {project!.name} target date ({displayDate(project!.targetDate)}).</span></p>}
+    {request.status === 'pending' && item && !unchanged && <p className="request-warning"><AlertTriangle size={14} /><span>The ticket’s due date or estimate changed after this was asked. Decline it, and {person ? firstName(person) : 'the developer'} can ask again.</span></p>}
+    {request.reviewNote && <p className="request-review"><CheckCheck size={14} /><span><strong>{request.status === 'declined' ? 'Why it was declined' : 'Admin note'}:</strong> {request.reviewNote}</span></p>}
+    {actions && <footer className="request-card-actions">{actions}</footer>}
+  </article>;
+}
+
+/** Approving adds the hours to the estimate and moves the due date by them. The admin may approve a different number of hours. */
+function ApproveExtensionForm({ data, request, mutate, busy, onClose }: { data: DashboardData; request: DueDateRequest; mutate: MutationFn; busy: boolean; onClose: () => void }) {
+  const person = findMember(data, request.requesterId);
+  const item = data.items.find(i => i.id === request.itemId);
+  const [hoursText, setHoursText] = useState(String(request.hours));
+  const granted = Number(hoursText);
+  const room = item ? MAX_TICKET_HOURS - item.estimateHours : 0;
+  const valid = !!item && granted >= 0.5 && Number.isInteger(granted * 2) && granted <= room;
+  const preview = item && valid ? ticketExtension(data, item, granted) : null;
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const note = String(new FormData(event.currentTarget).get('note') ?? '').trim();
+    const ok = await mutate({ action: 'approveDueDateRequest', id: request.id, ...(granted !== request.hours ? { hours: granted } : {}), ...(note ? { note } : {}) },
+      `Approved +${granted} h. ${item?.key ?? 'The ticket'} is now due ${displayDate(preview?.dueDate ?? null)}.`);
+    if (ok) onClose();
+  }
+  return <Modal title="Approve more hours" subtitle={item ? `${item.key} · ${item.title}` : undefined} onClose={onClose}>
+    <form onSubmit={submit}>
+      <FieldGroup className="modal-form-body">
+        <div className="request-context">
+          <p><strong>{person?.name ?? 'The developer'} asks for {request.hours} more {request.hours === 1 ? 'hour' : 'hours'}</strong>{reasonLabel(request.reasonCategory) ?? 'Other'}</p>
+          <p><strong>Their reason</strong>{request.reason}</p>
+        </div>
+        <FormField>Hours to approve<Input type="number" name="hours" required min={0.5} max={room} step={0.5} value={hoursText} onChange={event => setHoursText(event.target.value)} className="extend-hours-input" />
+          <span className="field-help">{preview
+            ? <>Estimate <strong>{item!.estimateHours} h → {preview.estimate} h</strong>. Due <strong>{displayDate(item!.dueDate)} → {displayDate(preview.dueDate, { weekday: 'short' })}</strong>. You can approve a different number of hours.</>
+            : granted > room ? `A ticket holds up to ${MAX_TICKET_HOURS} h. Approve ${room} h at most.` : 'Enter the hours, in steps of half an hour.'}</span></FormField>
+        <FormField>Note for {person ? firstName(person) : 'the developer'} <span className="optional">optional</span><Textarea name="note" rows={2} placeholder="For example, why you approved fewer hours." /></FormField>
+      </FieldGroup>
+      <FormFooter busy={busy} disabled={!valid} onClose={onClose} label={valid ? `Approve +${granted} h` : 'Enter the hours'} />
+    </form>
+  </Modal>;
+}
+
+function DeclineExtensionForm({ data, request, mutate, busy, onClose }: { data: DashboardData; request: DueDateRequest; mutate: MutationFn; busy: boolean; onClose: () => void }) {
+  const person = findMember(data, request.requesterId);
+  const item = data.items.find(i => i.id === request.itemId);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const reason = String(new FormData(event.currentTarget).get('reason')).trim();
+    if (await mutate({ action: 'declineDueDateRequest', id: request.id, reason }, `Extension declined. ${person ? firstName(person) : 'The developer'} sees your reason.`)) onClose();
+  }
+  return <Modal title="Decline more hours" subtitle={item ? `${item.key} · ${item.title}` : undefined} onClose={onClose}>
+    <form onSubmit={submit}>
+      <FieldGroup className="modal-form-body">
+        <FormField>Why are you declining it?<Textarea name="reason" required minLength={3} maxLength={2000} rows={3} placeholder="For example, the release date cannot move. Let us split the ticket instead." /><span className="field-help">The estimate and due date stay as they are. {person ? firstName(person) : 'The developer'} sees this reason.</span></FormField>
+      </FieldGroup>
+      <FormFooter busy={busy} onClose={onClose} label="Decline" />
+    </form>
+  </Modal>;
 }
 
 function FinishedRow({ data, item, onOpen, action }: { data: DashboardData; item: WorkItem; onOpen: (id: string) => void; action: ReactNode }) {

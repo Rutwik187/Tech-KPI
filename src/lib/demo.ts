@@ -1,4 +1,4 @@
-import type { Activity, DashboardData, Member, Phase, Project, TicketRequest, WorkItem } from './types';
+import type { Activity, DashboardData, DueDateRequest, Member, Phase, Project, TicketRequest, WorkItem } from './types';
 import { dateKey, defaultSettings, getWeekStart, localDate, shiftDate } from './kpi';
 import { ADHOC_PROJECT } from './project-defaults';
 
@@ -165,8 +165,17 @@ export function createDemoData(now = new Date()): DashboardData {
       projectId: projects[3].id, phaseId: null, estimateHours: 30, dueDate: null, priority: 'low', status: 'declined', reviewedById: lead.id, reviewedAt: past(dateAt(-2, '12:00')), reviewNote: 'Too large for one ticket. Split it into the export and the chart work, then request each.', itemId: null, createdAt: past(dateAt(-3, '11:00')) },
   ];
 
+  // One developer asks for 3 more hours. The estimate and due date change only when the admin approves.
+  const lowStock = items.find(item => item.title === 'Add a low-stock alert to the warehouse view' && item.dueDate)!;
+  const dueDateRequests: DueDateRequest[] = [
+    { id: 'demo-extension-1', itemId: lowStock.id, requesterId: lowStock.assigneeId, fromDate: lowStock.dueDate!, fromEstimate: lowStock.estimateHours, hours: 3, approvedHours: null, reasonCategory: 'scope_change',
+      reason: 'The warehouse team added a second alert threshold for slow-moving SKUs.', status: 'pending', reviewedById: null, reviewedAt: null, reviewNote: null, createdAt: past(dateAt(0, '09:40')) },
+  ];
+  activities.push({ id: 'demo-extension-1-asked', entityId: lowStock.id, actorId: lowStock.assigneeId, action: 'task.due_change_requested', reason: dueDateRequests[0].reason,
+    payload: { requestId: 'demo-extension-1', from: dueDateRequests[0].fromDate, hours: 3, reasonCategory: 'scope_change' }, createdAt: dueDateRequests[0].createdAt });
+
   return {
-    currentUser: lead, members: [lead, ...developers], projects, phases, items, requests, activities,
+    currentUser: lead, members: [lead, ...developers], projects, phases, items, requests, dueDateRequests, activities,
     leaves: [
       { id: 'demo-leave-1', userId: developers[2].id, date: shiftDate(week, 1, timezone), type: 'half_day', note: 'Personal appointment' },
       { id: 'demo-leave-2', userId: developers[5].id, date: shiftDate(week, 4, timezone), type: 'full_day', note: 'Planned leave' },

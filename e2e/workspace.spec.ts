@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { createDemoData } from '../src/lib/demo';
-import { dateKey, getWeekStart, shiftDate } from '../src/lib/kpi';
+import { dateKey, dueDateAfterHours, getWeekStart, getWorkCalendar, shiftDate } from '../src/lib/kpi';
+import { daysBetween } from '../src/lib/timeline';
 import { ADHOC_PROJECT } from '../src/lib/project-defaults';
 import type { DashboardData } from '../src/lib/types';
 
@@ -39,7 +40,7 @@ async function pickDate(page: Page, trigger: Locator, iso: string) {
 
 async function readDemoData(page: Page): Promise<DashboardData> {
   return page.evaluate(() => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v6');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v7');
     if (!saved) throw new Error('Demo changes did not persist.');
     return JSON.parse(saved) as DashboardData;
   });
@@ -179,6 +180,44 @@ test('ticket details render creation events that have no changed due-date payloa
   expect(pageErrors).toEqual([]);
 });
 
+test('a ticket without a due date gets one from the table, then gets more hours from the same place with a reason', async ({ page }) => {
+  await openDemo(page, 'tickets');
+  const title = 'Browser verification: due date from the table';
+  await page.locator('.page-actions').getByRole('button', { name: 'New ticket', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: 'Title', exact: true }).fill(title);
+  await chooseOption(page, dialog.getByRole('combobox', { name: 'Owner', exact: true }), 'Aarav Mehta');
+  await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await page.getByRole('textbox', { name: 'Search tickets' }).fill(title);
+  const row = page.getByRole('row').filter({ hasText: title });
+  await expect(row).toContainText('No due date');
+  // Setting the first due date is planning, so no reason is asked.
+  await row.getByRole('button', { name: /^Set a due date for/ }).click();
+  const setDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Set due date', exact: true }) });
+  await expect(setDialog.getByRole('textbox', { name: 'Reason', exact: true })).toHaveCount(0);
+  const day = dateKey(new Date(), 'Asia/Kolkata');
+  const due = shiftDate(day, 7, 'Asia/Kolkata');
+  await setDialog.getByRole('button', { name: /^Set due date to / }).click();
+  await expect(setDialog).toBeHidden();
+  let saved = (await readDemoData(page)).items.find(item => item.title === title);
+  expect(saved).toMatchObject({ dueDate: due, originalDueDate: due });
+  // An extension asks for extra hours, with a reason. The hours join the estimate and the due date moves by them.
+  await row.getByRole('button', { name: /^Extend the due date of/ }).click();
+  const extend = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Give this ticket more time', exact: true }) });
+  await expect(extend.getByRole('spinbutton', { name: 'Extra hours needed', exact: true })).toHaveValue('2');
+  await extend.getByRole('button', { name: '+4 h', exact: true }).click();
+  const data = await readDemoData(page);
+  const moved = dueDateAfterHours(due, 4, getWorkCalendar(data, 'demo-aarav'));
+  await expect(extend.locator('.extend-preview')).toContainText('Estimate 4 h → 8 h');
+  await extend.getByRole('textbox', { name: 'Reason', exact: true }).fill('Waiting for the warehouse API keys.');
+  await extend.getByRole('button', { name: 'Add 4 hours', exact: true }).click();
+  await expect(extend).toBeHidden();
+  saved = (await readDemoData(page)).items.find(item => item.title === title);
+  expect(saved).toMatchObject({ estimateHours: 8, dueDate: moved, originalDueDate: due });
+  await expect(row.locator('.extension-badge')).toHaveText(`+${daysBetween(due, moved)} day${daysBetween(due, moved) === 1 ? '' : 's'}`);
+});
+
 test('a ticket needs only a title, owner and estimate, survives reload, and appears on the board', async ({ page }) => {
   await openDemo(page, 'tickets');
   const title = 'Browser verification: inventory search';
@@ -206,7 +245,7 @@ test('a ticket needs only a title, owner and estimate, survives reload, and appe
   await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click();
   await expect(dialog).toBeHidden();
   const savedDescription = await page.evaluate(title => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v6');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v7');
     if (!saved) throw new Error('Demo ticket did not persist.');
     return (JSON.parse(saved) as { items: { title: string; description: string }[] }).items.find(item => item.title === title)?.description;
   }, title);
@@ -429,7 +468,7 @@ test('logging a linked bug fills its owner and project, then supports fix and ve
   await page.getByRole('textbox', { name: 'Search bugs' }).fill(standaloneTitle);
   await expect(page.getByRole('row').filter({ hasText: standaloneTitle })).toBeVisible();
   const storedTaskId = await page.evaluate(title => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v6');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v7');
     if (!saved) throw new Error('Demo bug did not persist.');
     return (JSON.parse(saved) as { items: { title: string; taskId: string | null }[] }).items.find(item => item.title === title)?.taskId;
   }, standaloneTitle);
@@ -446,7 +485,7 @@ test('working-day buttons save ISO weekdays including Sunday as seven in the dem
   await sunday.click();
   await page.getByRole('button', { name: /^Save settings/ }).click();
   const workingDays = await page.evaluate(() => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v6');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v7');
     if (!saved) throw new Error('Demo settings did not persist.');
     return (JSON.parse(saved) as { settings: { workingDays: number[] } }).settings.workingDays;
   });
@@ -483,7 +522,7 @@ test('mobile navigation and dialogs work at 375 pixels with keyboard focus', asy
   await expect(trigger).toBeFocused();
 });
 
-test('a developer requests a ticket, an admin approves it, and the developer extends and completes it', async ({ page }) => {
+test('a developer requests a ticket, asks for more hours, and completes it after the admin approves both', async ({ page }) => {
   await openDemo(page, 'tickets');
   const viewAs = page.getByRole('combobox', { name: 'View the demo as', exact: true });
   await chooseOption(page, viewAs, 'Aarav Mehta · Developer');
@@ -502,7 +541,6 @@ test('a developer requests a ticket, an admin approves it, and the developer ext
   const title = 'Browser verification: webhook signature check';
   const day = dateKey(new Date(), 'Asia/Kolkata');
   const due = shiftDate(day, 7, 'Asia/Kolkata');
-  const later = shiftDate(day, 10, 'Asia/Kolkata');
   await dialog.getByRole('textbox', { name: 'Title', exact: true }).fill(title);
   await dialog.getByLabel(/^Estimate/).fill('6');
   await pickDate(page, dialog.getByRole('button', { name: /^Due date/ }), due);
@@ -537,27 +575,57 @@ test('a developer requests a ticket, an admin approves it, and the developer ext
   expect(ticket).toMatchObject({ assigneeId: 'demo-aarav', projectId: 'demo-commerce', estimateHours: 5, status: 'todo', dueDate: due });
   expect(data.requests.find(row => row.id === request.id)).toMatchObject({ status: 'approved', itemId: ticket.id, reviewNote: 'Five hours is enough.' });
 
-  // Back as the developer: the request shows as approved, and the ticket can be extended and completed.
+  // Back as the developer: the request shows as approved. More hours on the ticket is a request too.
   await chooseOption(page, viewAs, 'Aarav Mehta · Developer');
   await expect(mine).toContainText('Approved');
   await mine.getByRole('button', { name: /^Open ticket/ }).click();
-  await page.getByRole('dialog').getByRole('button', { name: /^Extend/ }).click();
-  const extend = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Extend due date', exact: true }) });
-  await pickDate(page, extend.getByRole('button', { name: /^New due date/ }), later);
-  await expect(extend).toContainText('Moves the date by 3 days');
+  await page.getByRole('dialog').getByRole('button', { name: /^Ask to extend/ }).click();
+  const extend = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Ask for more time', exact: true }) });
+  await extend.getByRole('spinbutton', { name: 'Extra hours needed', exact: true }).fill('3');
+  await expect(extend.locator('.extend-preview')).toContainText('Estimate 5 h → 8 h');
   await extend.getByRole('radio', { name: 'Took longer', exact: true }).click();
   await extend.getByRole('textbox', { name: 'Reason', exact: true }).fill('Signature keys need a second review.');
-  await extend.getByRole('button', { name: /^Extend to / }).click();
+  await extend.getByRole('button', { name: 'Ask for 3 hours more', exact: true }).click();
   await expect(extend).toBeHidden();
+  // Nothing on the ticket changes until the admin approves.
   data = await readDemoData(page);
-  expect(data.items.find(item => item.id === ticket.id)?.dueDate).toBe(later);
+  expect(data.items.find(item => item.id === ticket.id)).toMatchObject({ estimateHours: 5, dueDate: due });
+  const asked = data.dueDateRequests.find(row => row.itemId === ticket.id);
+  expect(asked).toMatchObject({ requesterId: 'demo-aarav', fromDate: due, fromEstimate: 5, hours: 3, status: 'pending', reasonCategory: 'underestimated' });
+  let drawer = page.getByRole('dialog');
+  await expect(drawer.locator('.extension-waiting')).toHaveText('Asked for 3 more hours · waits for approval');
+  await expect(drawer.getByRole('button', { name: /^Ask to extend/ })).toHaveCount(0);
+  await drawer.getByRole('button', { name: 'Close dialog', exact: true }).click();
+
+  // The admin approves 2 of the 3 hours.
+  await chooseOption(page, viewAs, 'Rohan Desai · Admin');
+  await page.locator('[data-slot="sidebar"]').getByRole('link', { name: /^Approvals/ }).click();
+  const ask = page.locator('.request-card').filter({ hasText: ticket.key });
+  await expect(ask).toContainText('+3 h');
+  await expect(ask).toContainText('5 h → 8 h');
+  await ask.getByRole('button', { name: 'Approve', exact: true }).click();
+  dialog = page.getByRole('dialog');
+  await dialog.getByRole('spinbutton', { name: 'Hours to approve', exact: true }).fill('2');
+  await expect(dialog).toContainText('Estimate 5 h → 7 h');
+  await dialog.getByRole('textbox', { name: /^Note for Aarav/ }).fill('Two hours covers the review.');
+  await dialog.getByRole('button', { name: 'Approve +2 h', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  data = await readDemoData(page);
+  const moved = dueDateAfterHours(due, 2, getWorkCalendar(data, 'demo-aarav'));
+  expect(data.items.find(item => item.id === ticket.id)).toMatchObject({ estimateHours: 7, dueDate: moved, originalDueDate: due });
+  expect(data.dueDateRequests.find(row => row.id === asked!.id)).toMatchObject({ status: 'approved', approvedHours: 2, reviewNote: 'Two hours covers the review.' });
   expect(data.activities.find(activity => activity.entityId === ticket.id && activity.action === 'task.due_changed'))
-    .toMatchObject({ actorId: 'demo-aarav', reason: 'Signature keys need a second review.', payload: { from: due, to: later } });
-  const drawer = page.getByRole('dialog');
-  await expect(drawer.locator('.extension-badge')).toHaveText('+3 days');
+    .toMatchObject({ actorId: 'demo-lead', reason: 'Signature keys need a second review.', payload: { from: due, to: moved, addedHours: 2, requestedHours: 3, estimateFrom: 5, estimateTo: 7, requestedBy: 'demo-aarav' } });
+
+  // Back as the developer: the history shows the hours, who asked, and why.
+  await chooseOption(page, viewAs, 'Aarav Mehta · Developer');
+  await page.locator('.request-card').filter({ hasText: ticket.key }).getByRole('button', { name: new RegExp(ticket.key) }).click();
+  drawer = page.getByRole('dialog');
+  await expect(drawer.locator('.extension-history')).toContainText('+2 h');
+  await expect(drawer.locator('.extension-history')).toContainText('Estimate 5 h → 7 h · asked for 3 h');
   await expect(drawer.locator('.extension-history')).toContainText('Signature keys need a second review.');
   await expect(drawer.locator('.extension-history')).toContainText('Took longer');
-  await expect(drawer.locator('.timeline')).toContainText('extended the due date');
+  await expect(drawer.locator('.extension-history')).toContainText('You asked');
   // Developers complete their own tickets. The ticket then waits for the admin's review.
   await drawer.getByRole('button', { name: /^Complete/ }).click();
   await expect.poll(async () => (await readDemoData(page)).items.find(item => item.id === ticket.id)?.status).toBe('in_review');
@@ -615,15 +683,23 @@ test('an admin extends a project timeline with a reason and the history shows wh
   await expect(card.locator('.extension-badge')).toHaveText('+14 days');
 });
 
-test('moving a ticket past its project target warns before saving', async ({ page }) => {
+test('more hours that push a ticket past its project target warn before saving', async ({ page }) => {
   await openDemo(page, 'tickets');
-  await page.getByRole('button', { name: 'Add retry handling for failed payment callbacks', exact: true }).click();
+  const title = 'Add retry handling for failed payment callbacks';
+  // Demo dates follow today, so find enough hours to cross the Commerce target. Nothing has changed yet, so use the starting data.
+  const data = createDemoData();
+  const item = data.items.find(row => row.title === title)!;
+  const target = data.projects.find(project => project.id === item.projectId)!.targetDate!;
+  const calendar = getWorkCalendar(data, item.assigneeId);
+  const late = [8, 16, 24, 40, 60].find(hours => dueDateAfterHours(item.dueDate!, hours, calendar) > target);
+  if (!late) throw new Error('No hours value crosses the project target.');
+  await page.getByRole('button', { name: title, exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: /^Extend/ }).click();
-  const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Extend due date', exact: true }) });
-  await expect(dialog).toContainText('Moved before');
-  await dialog.getByRole('button', { name: '+1 day', exact: true }).click();
+  const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Give this ticket more time', exact: true }) });
+  await expect(dialog).toContainText('Extended before');
+  await dialog.getByRole('button', { name: '+1 h', exact: true }).click();
   await expect(dialog.locator('.extend-warning')).toHaveCount(0);
-  await dialog.getByRole('button', { name: '+2 weeks', exact: true }).click();
+  await dialog.getByRole('spinbutton', { name: 'Extra hours needed', exact: true }).fill(String(late));
   await expect(dialog.locator('.extend-warning')).toContainText('after the Commerce target date');
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(dialog).toBeHidden();
@@ -778,19 +854,20 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
       await dialog.getByRole('textbox', { name: 'Reason', exact: true }).fill('Additional scope agreed during browser verification');
       await saveLiveForm(page, dialog, 'Revise estimate');
       expect((await readItems()).find((item) => item.id === task.id)?.estimateHours).toBe(3);
-      // The first due date is planning. Moving it is an extension and needs a reason.
+      // The first due date is planning. More hours later is an extension and needs a reason.
       const firstDue = shiftDate(dateKey(new Date(), 'Asia/Kolkata'), 3, 'Asia/Kolkata');
       await page.getByRole('dialog').getByRole('button', { name: /^Set date/ }).click();
       dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Set due date', exact: true }) });
       await pickDate(page, dialog.getByRole('button', { name: /^Due date/ }), firstDue);
-      await saveLiveForm(page, dialog, 'Set due date');
+      await saveLiveForm(page, dialog, /^Set due date to /);
       await page.getByRole('dialog').getByRole('button', { name: /^Extend/ }).click();
-      dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Extend due date', exact: true }) });
-      await dialog.getByRole('button', { name: '+1 week', exact: true }).click();
+      dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Give this ticket more time', exact: true }) });
+      await dialog.getByRole('button', { name: '+8 h', exact: true }).click();
       await dialog.getByRole('textbox', { name: 'Reason', exact: true }).fill('Waiting for the payment sandbox during browser verification');
-      await saveLiveForm(page, dialog, /^Extend to /);
+      await saveLiveForm(page, dialog, 'Add 8 hours');
       const extended = (await readItems()).find((item) => item.id === task.id);
-      expect(extended?.dueDate).toBe(shiftDate(firstDue, 7, 'Asia/Kolkata'));
+      expect(extended?.estimateHours).toBe(11);
+      expect(extended?.dueDate && extended.dueDate > firstDue).toBe(true);
       expect(extended?.originalDueDate).toBe(firstDue);
       await expect(page.getByRole('dialog').locator('.extension-history')).toContainText('Waiting for the payment sandbox');
       await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
