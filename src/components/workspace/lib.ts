@@ -208,7 +208,8 @@ export function ticketExtension(data: DashboardData, item: WorkItem, hours: numb
 /** The largest estimate a ticket can hold. More work than this belongs in a new ticket. */
 export const MAX_TICKET_HOURS = 80;
 /** A ticket due date or a project target that already exists and is being moved. Both need a reason. */
-export type ExtendTarget = { kind: 'ticket'; item: WorkItem } | { kind: 'project'; project: Project };
+/** A ticket opened with `hours` adds hours even without a due date. Without it, a ticket with no due date gets its first one. */
+export type ExtendTarget = { kind: 'ticket'; item: WorkItem; hours?: boolean } | { kind: 'project'; project: Project };
 
 /** Applies a change to demo data in the browser. It follows the server's rules closely enough to try every flow. */
 export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Member): DashboardData {
@@ -219,10 +220,10 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
     next.activities.unshift({ id: crypto.randomUUID(), entityId, actorId: actor.id, action, reason, payload, createdAt: now });
   const nextKey = () => Math.max(0, ...next.items.map(i => Number(i.key.split('-').pop()) || 0)) + 1;
   function extend(item: WorkItem, hours: number, reasonCategory: string, reason: string, request?: DueDateRequest) {
-    if (!item.dueDate) throw new Error('Set a due date first. An extension moves an existing date.');
     if (item.estimateHours + hours > MAX_TICKET_HOURS) throw new Error(`This ticket already has ${item.estimateHours} h. A ticket holds up to ${MAX_TICKET_HOURS} h, so split the extra work into a new ticket.`);
     const { estimate, dueDate } = ticketExtension(next, item, hours);
-    log(item.id, 'task.due_changed', {
+    // With a due date, the date moves too. Without one, only the estimate grows.
+    log(item.id, item.dueDate ? 'task.due_changed' : 'task.hours_added', {
       from: item.dueDate, to: dueDate, addedHours: hours, estimateFrom: item.estimateHours, estimateTo: estimate, reasonCategory,
       ...(request ? { requestId: request.id, requestedBy: request.requesterId, ...(hours !== request.hours ? { requestedHours: request.hours } : {}) } : {}),
     }, reason);
@@ -255,7 +256,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
     }
     case 'extendTicket': {
       const item = next.items.find(i => i.id === mutation.itemId);
-      if (!item?.dueDate) throw new Error('Set a due date first. An extension moves an existing date.');
+      if (!item || item.type !== 'task' || !['todo', 'in_progress', 'blocked'].includes(item.status)) throw new Error('Only an open ticket can get more time.');
       if (actor.role === 'admin') { extend(item, mutation.hours, mutation.reasonCategory, mutation.reason); break; }
       if (item.estimateHours + mutation.hours > MAX_TICKET_HOURS) throw new Error(`This ticket already has ${item.estimateHours} h. A ticket holds up to ${MAX_TICKET_HOURS} h, so split the extra work into a new ticket.`);
       if (next.dueDateRequests.some(r => r.itemId === item.id && r.status === 'pending')) throw new Error('An extension for this ticket already waits for approval.');

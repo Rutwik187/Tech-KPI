@@ -166,6 +166,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
   }
   const addItem = (kind: 'task' | 'bug', assigneeId?: string) => setModal({ type: 'item', kind, assigneeId });
   const extendTicket = (item: WorkItem) => setModal({ type: 'extend', target: { kind: 'ticket', item } });
+  const addHours = (item: WorkItem) => setModal({ type: 'extend', target: { kind: 'ticket', item, hours: true } });
   const extendProject = (project: Project) => setModal({ type: 'extend', target: { kind: 'project', project } });
   // A developer's new work starts as a request that an admin approves.
   const newTicket = <Button onClick={() => addItem('task')}><Plus data-icon="inline-start" size={17} />{isAdmin ? 'New ticket' : 'Request ticket'}</Button>;
@@ -180,7 +181,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
   };
   // Dialogs work on the latest copy of a record, so a refresh never shows stale dates.
   const extendTarget = modal?.type === 'extend' ? modal.target.kind === 'ticket'
-    ? (() => { const item = data.items.find(i => i.id === (modal.target as { item: WorkItem }).item.id); return item ? { kind: 'ticket' as const, item } : null; })()
+    ? (() => { const { item: asked, hours } = modal.target as { item: WorkItem; hours?: boolean }; const item = data.items.find(i => i.id === asked.id); return item ? { kind: 'ticket' as const, item, hours } : null; })()
     : (() => { const project = data.projects.find(p => p.id === (modal.target as { project: Project }).project.id); return project ? { kind: 'project' as const, project } : null; })()
     : null;
 
@@ -231,7 +232,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     {modal?.type === 'holiday' && <HolidayForm mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {extendTarget && <ExtendForm target={extendTarget} data={data} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {selectedProject && !modal && <ProjectDrawer data={data} project={selectedProject} onClose={() => setProjectId(null)} onEdit={() => setModal({ type: 'project', project: selectedProject })} onExtend={() => extendProject(selectedProject)} onOpenItem={id => { setProjectId(null); setSelectedId(id); }} />}
-    {selected && !quickAction && !modal && <ItemDrawer item={selected} data={data} busy={busy} onClose={() => setSelectedId(null)} onAction={act} onRevise={(patch, label) => setQuickAction({ item: selected, patch, label, requireReason: true })} onExtend={() => extendTicket(selected)} mutate={mutate} />}
+    {selected && !quickAction && !modal && <ItemDrawer item={selected} data={data} busy={busy} onClose={() => setSelectedId(null)} onAction={act} onAddHours={() => addHours(selected)} onExtend={() => extendTicket(selected)} mutate={mutate} />}
     {quickAction && <ReasonForm action={quickAction} data={data} busy={busy} mutate={mutate} onClose={() => setQuickAction(null)} />}
   </SidebarProvider>;
 }

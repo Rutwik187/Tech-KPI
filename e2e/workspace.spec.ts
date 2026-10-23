@@ -683,6 +683,52 @@ test('an admin extends a project timeline with a reason and the history shows wh
   await expect(card.locator('.extension-badge')).toHaveText('+14 days');
 });
 
+test('hours are added, never rewritten, on a ticket without a due date', async ({ page }) => {
+  await openDemo(page, 'tickets');
+  const title = 'Browser verification: add hours without a due date';
+  await page.locator('.page-actions').getByRole('button', { name: 'New ticket', exact: true }).click();
+  let dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: 'Title', exact: true }).fill(title);
+  await chooseOption(page, dialog.getByRole('combobox', { name: 'Owner', exact: true }), 'Aarav Mehta');
+  await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await page.getByRole('textbox', { name: 'Search tickets' }).fill(title);
+  await page.getByRole('button', { name: title, exact: true }).click();
+  let drawer = page.getByRole('dialog');
+  await expect(drawer.getByRole('button', { name: /^Revise/ })).toHaveCount(0);
+  await drawer.getByRole('button', { name: 'Add hours', exact: true }).click();
+  dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Give this ticket more time', exact: true }) });
+  await expect(dialog).toContainText('No due date');
+  await dialog.getByRole('button', { name: '+2 h', exact: true }).click();
+  await expect(dialog.locator('.extend-preview')).toContainText('Estimate 4 h → 6 h');
+  await dialog.getByRole('radio', { name: 'Scope grew', exact: true }).click();
+  await dialog.getByRole('textbox', { name: 'Reason', exact: true }).fill('The client added an export button.');
+  await dialog.getByRole('button', { name: 'Add 2 hours', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  let data = await readDemoData(page);
+  const ticket = data.items.find(item => item.title === title)!;
+  expect(ticket).toMatchObject({ estimateHours: 6, dueDate: null });
+  expect(data.activities.find(activity => activity.entityId === ticket.id && activity.action === 'task.hours_added'))
+    .toMatchObject({ reason: 'The client added an export button.', payload: { addedHours: 2, estimateFrom: 4, estimateTo: 6, reasonCategory: 'scope_change' } });
+  drawer = page.getByRole('dialog');
+  await expect(drawer.locator('.timeline')).toContainText('added 2 more hours, so the estimate went from 4 h to 6 h');
+  await drawer.getByRole('button', { name: 'Close dialog', exact: true }).click();
+
+  // The developer asks for hours on the same ticket. It waits for the admin.
+  await chooseOption(page, page.getByRole('combobox', { name: 'View the demo as', exact: true }), 'Aarav Mehta · Developer');
+  await page.getByRole('textbox', { name: 'Search tickets' }).fill(title);
+  await page.getByRole('button', { name: title, exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Ask for hours', exact: true }).click();
+  dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Ask for more time', exact: true }) });
+  await dialog.getByRole('button', { name: '+1 h', exact: true }).click();
+  await dialog.getByRole('textbox', { name: 'Reason', exact: true }).fill('The export needs a CSV and a PDF.');
+  await dialog.getByRole('button', { name: 'Ask for 1 hour more', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  data = await readDemoData(page);
+  expect(data.items.find(item => item.id === ticket.id)?.estimateHours).toBe(6);
+  expect(data.dueDateRequests.find(row => row.itemId === ticket.id)).toMatchObject({ fromDate: null, fromEstimate: 6, hours: 1, status: 'pending' });
+});
+
 test('more hours that push a ticket past its project target warn before saving', async ({ page }) => {
   await openDemo(page, 'tickets');
   const title = 'Add retry handling for failed payment callbacks';
@@ -848,11 +894,13 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
       const row = page.getByRole('row').filter({ hasText: taskTitle });
       await expect(row).toContainText('2 h');
       await row.getByRole('button', { name: taskTitle, exact: true }).click();
-      await page.getByRole('button', { name: 'Revise', exact: true }).click();
-      dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Revise estimate', exact: true }) });
-      await dialog.getByLabel(/New estimate/).fill('3');
+      // Adding hours never rewrites the estimate. It adds to it, with a reason. With no due date, only the estimate changes.
+      await page.getByRole('button', { name: 'Add hours', exact: true }).click();
+      dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Give this ticket more time', exact: true }) });
+      await dialog.getByRole('button', { name: '+1 h', exact: true }).click();
+      await expect(dialog.locator('.extend-preview')).toContainText('only the estimate changes');
       await dialog.getByRole('textbox', { name: 'Reason', exact: true }).fill('Additional scope agreed during browser verification');
-      await saveLiveForm(page, dialog, 'Revise estimate');
+      await saveLiveForm(page, dialog, 'Add 1 hour');
       expect((await readItems()).find((item) => item.id === task.id)?.estimateHours).toBe(3);
       // The first due date is planning. More hours later is an extension and needs a reason.
       const firstDue = shiftDate(dateKey(new Date(), 'Asia/Kolkata'), 3, 'Asia/Kolkata');

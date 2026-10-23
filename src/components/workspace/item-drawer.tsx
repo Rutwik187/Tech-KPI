@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { extensionHistory, reasonLabel, ticketExtendedDays } from '@/lib/timeline';
 import { displayDate, displayDateTime, findMember, findProject, hours, isAdhocProject, kindLabels, pendingExtension, percent, projectMembers, statusLabels, today, type MutationFn, type OnAction, type WorkClassification } from './lib';
-import { canMoveDueDate, ItemActions, PhaseTag, ProjectTag, SeverityBadge } from './parts';
+import { canAddHours, canMoveDueDate, ItemActions, PhaseTag, ProjectTag, SeverityBadge } from './parts';
 import { dayCount, ExtensionHistory, TicketExtendedBadge } from './timeline';
 import { ClassificationFields, FormChoice } from './forms';
 
@@ -37,6 +37,8 @@ function activityText(event: Activity, item: WorkItem) {
     case 'task.due_change_requested': return `asked for ${asked}${category ? ` · ${category}` : ''}`;
     case 'task.due_change_declined': return `declined the ask for ${asked}`;
     case 'task.due_change_withdrawn': return `withdrew the ask for ${asked}`;
+    // Hours added to a ticket with no due date change only the estimate.
+    case 'task.hours_added': return `${typeof event.payload.requestedBy === 'string' ? 'approved' : 'added'} ${event.payload.addedHours} more ${event.payload.addedHours === 1 ? 'hour' : 'hours'}, so the estimate went from ${event.payload.estimateFrom} h to ${event.payload.estimateTo} h${category ? ` · ${category}` : ''}`;
   }
   if (event.action.endsWith('.due_changed')) {
     const from = event.payload.from;
@@ -55,7 +57,7 @@ function activityText(event: Activity, item: WorkItem) {
   return event.action.replaceAll('.', ' ').replaceAll('_', ' ');
 }
 
-export function ItemDrawer({ item, data, busy, onClose, onAction, onRevise, onExtend, mutate }: { item: WorkItem; data: DashboardData; busy: boolean; onClose: () => void; onAction: OnAction; onRevise: (patch: Partial<WorkItem>, label: string) => void; onExtend: () => void; mutate: MutationFn }) {
+export function ItemDrawer({ item, data, busy, onClose, onAction, onAddHours, onExtend, mutate }: { item: WorkItem; data: DashboardData; busy: boolean; onClose: () => void; onAction: OnAction; onAddHours: () => void; onExtend: () => void; mutate: MutationFn }) {
   const [editing, setEditing] = useState(false);
   const admin = data.currentUser.role === 'admin';
   const owner = item.assigneeId === data.currentUser.id;
@@ -97,7 +99,7 @@ export function ItemDrawer({ item, data, busy, onClose, onAction, onRevise, onEx
 
       {item.type === 'task'
         ? <div className="detail-facts">
-            <div><span>Estimate</span><strong>{item.estimateHours} <small>hours</small></strong>{admin && !closed && <Button variant="link" size="sm" onClick={() => onRevise({ estimateHours: item.estimateHours }, 'Revise estimate')}>Revise<Pencil data-icon="inline-end" size={11} /></Button>}</div>
+            <div><span>Estimate</span><strong>{item.estimateHours} <small>hours</small></strong>{canAddHours(item, data) && <Button variant="link" size="sm" onClick={onAddHours}>{admin ? 'Add hours' : 'Ask for hours'}<Plus data-icon="inline-end" size={11} /></Button>}</div>
             <div><span>Due date</span><strong className={clsx(overdue && 'due-overdue')}>{item.dueDate ? displayDate(item.dueDate) : '—'}{overdue && <small> · overdue</small>}</strong>{canMoveDueDate(item, data) && (item.dueDate
               ? <Button variant="link" size="sm" onClick={onExtend}>{admin ? 'Extend' : 'Ask to extend'}<CalendarClock data-icon="inline-end" size={11} /></Button>
               : <Button variant="link" size="sm" onClick={onExtend}>Set date<CalendarDays data-icon="inline-end" size={11} /></Button>)}

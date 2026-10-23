@@ -93,13 +93,13 @@ export const ticketRequests = pgTable("tech_kpi_ticket_request", {
 ]);
 /**
  * A developer's ask for more hours on their ticket. When an admin approves, the hours join the estimate
- * and the due date moves by those working hours. `fromDate` and `fromEstimate` record the ticket as it was asked.
+ * and the due date, if the ticket has one, moves by those working hours. `fromDate` and `fromEstimate` record the ticket as it was asked.
  */
 export const dueDateRequests = pgTable("tech_kpi_due_date_request", {
   id: uuid("id").defaultRandom().primaryKey(),
   itemId: uuid("item_id").notNull().references(() => workItems.id, { onDelete: "cascade" }),
   requesterId: text("requester_id").notNull().references(() => user.id, { onDelete: "cascade" }),
-  fromDate: date("from_date", { mode: "string" }).notNull(), fromEstimate: hours("from_estimate").notNull(),
+  fromDate: date("from_date", { mode: "string" }), fromEstimate: hours("from_estimate").notNull(),
   hours: hours("hours").notNull(), approvedHours: hours("approved_hours"),
   reasonCategory: text("reason_category").$type<"scope_change" | "blocked_dependency" | "underestimated" | "other">().notNull(),
   reason: text("reason").notNull(),

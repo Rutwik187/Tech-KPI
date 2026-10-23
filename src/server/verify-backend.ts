@@ -245,6 +245,17 @@ async function main() {
     data = await mutate(adminCookie, { action: "extendTicket", itemId: longer.id, hours: 1, reasonCategory: "scope_change", reason: "Agreed in standup" });
     assert.equal(data.items.find((item) => item.id === longer.id)?.estimateHours, 6);
     assert(!data.dueDateRequests.some((row) => row.itemId === longer.id && row.status === "pending")); checks += 2;
+    // A ticket with no due date gets hours too. Only the estimate grows.
+    data = await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-no-due`, projectId: project.id, phaseId: buildPhase.id, assigneeId: member.id, estimateHours: 4 });
+    const noDue = data.items.find((item) => item.title === `${trace}-no-due`)!; ids.add(noDue.id);
+    data = await mutate(adminCookie, { action: "extendTicket", itemId: noDue.id, hours: 2, reasonCategory: "scope_change", reason: "The client added an export" });
+    assert.deepEqual([data.items.find((item) => item.id === noDue.id)?.estimateHours, data.items.find((item) => item.id === noDue.id)?.dueDate], [6, null]);
+    assert(data.activities.some((activity) => activity.entityId === noDue.id && activity.action === "task.hours_added" && activity.payload.estimateTo === 6 && activity.reason === "The client added an export")); checks += 2;
+    data = await mutate(developerCookie, { action: "extendTicket", itemId: noDue.id, hours: 1, reasonCategory: "underestimated", reason: "The export needs two formats" });
+    const noDueAsk = data.dueDateRequests.find((row) => row.itemId === noDue.id && row.status === "pending")!;
+    assert.deepEqual([noDueAsk.fromDate, noDueAsk.fromEstimate, noDueAsk.hours], [null, 6, 1]); checks++;
+    data = await mutate(adminCookie, { action: "approveDueDateRequest", id: noDueAsk.id });
+    assert.deepEqual([data.items.find((item) => item.id === noDue.id)?.estimateHours, data.items.find((item) => item.id === noDue.id)?.dueDate], [7, null]); checks++;
     await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { status: "done" } }, 400);
     await mutate(adminCookie, { action: "updateItem", id: task.id, patch: { estimateHours: 3 } }, 400);
     const [unchanged] = await db.select().from(schema.workItems).where(eq(schema.workItems.id, task.id));
