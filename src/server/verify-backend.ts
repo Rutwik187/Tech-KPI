@@ -135,7 +135,10 @@ async function main() {
     await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-bad-phase`, projectId: ADHOC_PROJECT_ID, phaseId: buildPhase.id, assigneeId: member.id, estimateHours: 1 }, 400);
     data = await mutate(adminCookie, { action: "createItem", type: "task", title: trace, projectId: project.id, phaseId: buildPhase.id, assigneeId: member.id, estimateHours: 2 });
     const task = data.items.find((item) => item.title === trace)!; ids.add(task.id);
-    data = await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-admin`, projectId: project.id, assigneeId: data.currentUser.id, estimateHours: 1 });
+    // Admins own no tickets. Another developer's ticket proves a developer cannot touch someone else's work.
+    await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-admin-owned`, projectId: project.id, assigneeId: data.currentUser.id, estimateHours: 1 }, 400);
+    await mutate(adminCookie, { action: "createItem", type: "bug", title: `${trace}-admin-bug`, projectId: ADHOC_PROJECT_ID, assigneeId: data.currentUser.id }, 400);
+    data = await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-admin`, projectId: ADHOC_PROJECT_ID, assigneeId: invited.id, estimateHours: 1 });
     const adminTask = data.items.find((item) => item.title === `${trace}-admin`)!; ids.add(adminTask.id);
     assert.equal(task.phaseId, buildPhase.id); checks++;
     await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { memberIds: [fixture.userId] } }, 400);

@@ -38,9 +38,11 @@ async function leaveDates(tx: Tx, first: string, last: string) {
   return dates;
 }
 async function assertAssignee(tx: Tx, id: string) {
-  const [member] = await tx.select({ id: user.id, banned: user.banned, isActive: memberProfiles.isActive }).from(user)
+  const [member] = await tx.select({ id: user.id, role: user.role, banned: user.banned, isActive: memberProfiles.isActive }).from(user)
     .leftJoin(memberProfiles, eq(memberProfiles.userId, user.id)).where(eq(user.id, id));
   if (!member || member.banned || member.isActive === false) throw new AppError("Choose an active team member.");
+  // Admins manage the work and are not scored, so tickets and bugs belong to developers.
+  if (member.role === "admin") throw new AppError("Tickets and bugs belong to developers. Choose a developer.");
 }
 async function assertProject(tx: Tx, id: string) {
   // Project edits take an update lock, keeping membership stable during a work assignment.

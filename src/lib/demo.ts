@@ -49,7 +49,7 @@ export function createDemoData(now = new Date()): DashboardData {
     const item: WorkItem = {
       id: `demo-task-${sequence}`, key: `UG-${String(sequence).padStart(3, '0')}`, type: 'task', title,
       description: description || 'Confirm the acceptance criteria with the project owner, implement the change, and submit it for review.',
-      projectId: projects[projectIndex].id, phaseId: phaseForTitle(projectIndex, title), assigneeId: developerIndex < 0 ? lead.id : developers[developerIndex].id,
+      projectId: projects[projectIndex].id, phaseId: phaseForTitle(projectIndex, title), assigneeId: developers[developerIndex].id,
       status: status === 'done' && !finished ? 'in_progress' : status, priority: status === 'blocked' ? 'high' : 'medium', severity: 'normal',
       estimateHours: hours, dueDate: day(dueDay + weekOffset * 7), originalDueDate: day(dueDay + weekOffset * 7),
       createdAt: dateAt(0, '10:00', weekOffset), updatedAt: finished && completed ? completed : dateAt(0, '11:00', weekOffset),
@@ -82,8 +82,6 @@ export function createDemoData(now = new Date()): DashboardData {
   addTask('Improve the warehouse pick-list export', 5, 1, 8, 'done', 0);
   addTask('Add campaign brief templates', 6, 2, 10, 'in_review', 1);
   addTask('Improve creator onboarding validation', 6, 2, 8, 'in_progress', 4);
-  addTask('Review the release plan with product owners', -1, 3, 4, 'in_progress', 2);
-  addTask('Approve the inventory import rollout', -1, 1, 3, 'done', 0);
   // Approvals earlier this week, so mid-week scores show a realistic mix rather than all zeros.
   addTask('Add saved card selection at checkout', 0, 0, 10, 'done', 1);
   addTask('Log payment callback failures with order IDs', 0, 0, 6, 'done', 3);

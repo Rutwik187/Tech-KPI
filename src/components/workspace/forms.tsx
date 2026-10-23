@@ -153,7 +153,7 @@ export function MemberForm({ data, editing, mutate, onClose, onLeave, busy }: { 
           <span className="field-help">{editing?.microsoftObjectId ? 'Linked to their Microsoft company account.' : 'Only needed if their Microsoft sign-in name differs from their work email. Find it in Microsoft Entra ID → Users → the person → Overview.'}</span></FormField>
         <FieldGroup className="form-grid">
           <FormField>Role<FormChoice value={role} disabled={own} onValueChange={next => { const value = next as Member['role']; setRole(value); if (!editing) setCapacity(value === 'admin' ? data.settings.defaultLeadCapacityHours : data.settings.defaultDevCapacityHours); }} options={[{ value: 'developer', label: 'Developer' }, { value: 'admin', label: 'Admin' }]} /></FormField>
-          <FormField>Hours per week<Input type="number" min={.5} max={168} step={.5} required value={capacity} onChange={event => setCapacity(Number(event.target.value))} /><span className="field-help">Leave and holidays lower this for that week.</span></FormField>
+          {role === 'developer' && <FormField>Hours per week<Input type="number" min={.5} max={168} step={.5} required value={capacity} onChange={event => setCapacity(Number(event.target.value))} /><span className="field-help">Leave and holidays lower this for that week.</span></FormField>}
         </FieldGroup>
         {editing && editing.isActive && <div className="member-leave-row"><div><strong>Leave</strong><span>{upcomingLeave.length ? `${upcomingLeave.reduce((sum, l) => sum + (l.type === 'half_day' ? .5 : 1), 0)} upcoming day(s) recorded` : 'No upcoming leave'}</span></div><Button type="button" variant="outline" size="sm" onClick={() => onLeave(editing.id)}><CalendarPlus data-icon="inline-start" />Add leave</Button></div>}
         {editing && <FormField className="checkbox-label member-access-control"><FormCheckbox name="isActive" defaultChecked={editing.isActive} disabled={own} />Active workspace access<span className="field-help">Inactive members keep their history and cannot sign in.</span></FormField>}
@@ -273,7 +273,8 @@ export function ProjectForm({ data, editing, mutate, onClose, onExtend, busy }: 
 
 type LeaveLength = 'full_day' | 'half_day' | 'range';
 export function LeaveForm({ data, userId, mutate, onClose, busy }: { data: DashboardData; userId?: string; mutate: MutationFn; onClose: () => void; busy: boolean }) {
-  const people = data.members.filter(m => m.isActive);
+  // Leave lowers tracked hours, and only developers are tracked.
+  const people = data.members.filter(m => m.isActive && m.role === 'developer');
   const day = today(data.settings.timezone);
   const [personId, setPersonId] = useState(userId ?? people[0]?.id ?? '');
   const [length, setLength] = useState<LeaveLength>('full_day');

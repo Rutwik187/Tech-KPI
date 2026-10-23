@@ -59,11 +59,15 @@ export function Team({ data, week, onEdit, onLeave, mutate, onOpen }: TeamProps)
           return <TableRow key={m.id} className={m.isActive ? '' : 'inactive-row'}>
             <TableCell><Button variant="ghost" className="person-cell person-button" onClick={() => setSelectedId(m.id)}><Avatar member={m} /><span className="person-text"><strong>{m.name}</strong><span>{m.email}</span></span></Button></TableCell>
             <TableCell><div className="role-cell"><Badge variant="outline" className={clsx('role-tag', m.role === 'admin' && 'role-admin')}>{m.role === 'admin' ? <ShieldCheck size={12} /> : <UserRound size={12} />}{m.role === 'admin' ? 'Admin' : 'Developer'}</Badge>{!m.isActive && <Badge variant="outline" className="access-tag access-inactive"><i />Inactive</Badge>}{m.isActive && invited(m) && <Badge variant="outline" className="access-tag access-invited" title="Added by email. Their Microsoft account links on first sign-in."><i />Not signed in yet</Badge>}</div></TableCell>
-            <TableCell><strong className="number-cell">{hours(score.weekCapacityHours)} of {m.capacity} h</strong><span className="cell-subtext">{leaveDays ? `${leaveDays} day${leaveDays === 1 ? '' : 's'} leave this week` : 'No leave this week'}</span></TableCell>
-            <TableCell><span className="number-cell">{score.openTasks} tickets · {score.openBugs} bugs</span></TableCell>
-            <TableCell><ScoreBadge score={score.efficiency} band={score.band} /></TableCell>
+            {m.role === 'admin'
+              ? <TableCell colSpan={3}><span className="cell-muted">Manages the team · not scored</span></TableCell>
+              : <>
+                <TableCell><strong className="number-cell">{hours(score.weekCapacityHours)} of {m.capacity} h</strong><span className="cell-subtext">{leaveDays ? `${leaveDays} day${leaveDays === 1 ? '' : 's'} leave this week` : 'No leave this week'}</span></TableCell>
+                <TableCell><span className="number-cell">{score.openTasks} tickets · {score.openBugs} bugs</span></TableCell>
+                <TableCell><ScoreBadge score={score.efficiency} band={score.band} /></TableCell>
+              </>}
             <TableCell><div className="row-actions">
-              {m.isActive && <Button variant="ghost" size="icon" aria-label={`Add leave for ${m.name}`} title="Add leave" onClick={() => onLeave(m.id)}><CalendarPlus size={15} /></Button>}
+              {m.isActive && m.role === 'developer' && <Button variant="ghost" size="icon" aria-label={`Add leave for ${m.name}`} title="Add leave" onClick={() => onLeave(m.id)}><CalendarPlus size={15} /></Button>}
               <Button variant="ghost" size="icon" aria-label={`Edit ${m.name}`} title="Edit member" onClick={() => onEdit(m)}><Pencil size={15} /></Button>
             </div></TableCell>
           </TableRow>;
@@ -113,23 +117,25 @@ function MemberDrawer({ data, member, week, current, onClose, onEdit, onLeave, o
   const upcoming = leave.filter(g => g.end >= day).sort((a, b) => a.start.localeCompare(b.start));
   const recent = leave.filter(g => g.end < day).sort((a, b) => b.start.localeCompare(a.start)).slice(0, 5);
   const openWork = data.items.filter(item => item.assigneeId === member.id && !isDone(item));
+  const scored = member.role === 'developer';
   return <Modal title={member.name} subtitle={`${member.role === 'admin' ? 'Admin' : 'Developer'} · ${member.email}`} onClose={onClose} drawer>
     <div className="member-detail-body">
       <div className="member-detail-top">
         <Avatar member={member} size="large" />
-        <div><h3>{member.name}</h3><p>{member.capacity} h per week</p></div>
+        <div><h3>{member.name}</h3><p>{scored ? `${member.capacity} h per week` : 'Admin · manages the team, not scored'}</p></div>
         <Button variant="outline" onClick={onEdit}>Edit<Pencil data-icon="inline-end" size={13} /></Button>
       </div>
-      <div className="detail-score-grid">
+      {scored && <div className="detail-score-grid">
         <div><span>Efficiency</span><strong>{percent(score.efficiency)}</strong></div>
         <div><span>Ticket hours done</span><strong>{hours(score.creditedHours)} h</strong></div>
         <div><span>Hours at work{current ? ' so far' : ''}</span><strong>{hours(score.capacityHours)} h</strong></div>
-      </div>
-      <h3 className="detail-section-heading">Leave{member.isActive && <Button variant="outline" size="sm" onClick={onLeave}><CalendarPlus data-icon="inline-start" />Add leave</Button>}</h3>
+      </div>}
+      {scored && <><h3 className="detail-section-heading">Leave{member.isActive && <Button variant="outline" size="sm" onClick={onLeave}><CalendarPlus data-icon="inline-start" />Add leave</Button>}</h3>
       {upcoming.length === 0 && recent.length === 0 ? <p className="form-help">No leave recorded.</p> : <>
         {upcoming.length > 0 && <><p className="leave-group-label">Upcoming</p><LeaveList data={data} groups={upcoming} mutate={mutate} showName={false} /></>}
         {recent.length > 0 && <><p className="leave-group-label">Recent</p><LeaveList data={data} groups={recent} mutate={mutate} showName={false} /></>}
-      </>}
+      </>}</>}
+      {scored && <>
       <h3 className="detail-section-heading">Open work</h3>
       <div className="member-open-items">
         {openWork.map(item => <Button variant="outline" key={item.id} onClick={() => onOpen(item.id)}><span className="item-key">{item.key}</span><strong>{item.title}</strong><StatusBadge status={item.status} /><ArrowUpRight data-icon="inline-end" size={15} /></Button>)}
@@ -145,6 +151,7 @@ function MemberDrawer({ data, member, week, current, onClose, onEdit, onLeave, o
           return <TableRow key={start}><TableCell>{displayDate(start)}</TableCell><TableCell>{hours(s.creditedHours)} h</TableCell><TableCell>{hours(s.capacityHours)} h</TableCell><TableCell><ScoreBadge score={s.efficiency} band={s.band} /></TableCell></TableRow>;
         })}</TableBody>
       </Table></div>
+      </>}
     </div>
   </Modal>;
 }

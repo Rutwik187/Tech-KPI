@@ -217,19 +217,14 @@ describe('bug clocks and score attribution', () => {
   });
 });
 
-describe('team and lead scores', () => {
-  it('calculates 70% of team 82 plus 30% of own 80 as 81.4', () => {
-    const fixture = data([task(31), task(8, '2026-10-16T18:00:00', lead.id)]);
+describe('team scores', () => {
+  it('scores developers only; an admin is neither scored nor counted', () => {
+    const fixture = data([task(31)]);
     fixture.members = [{ ...developer, capacity: 40 }, lead];
-    expect(calculateTeamKpi(fixture, week, now)).toMatchObject({ teamEfficiency: 82, leadEfficiency: 81.4 });
-    expect(calculateMemberKpi(lead, fixture, week, now).efficiency).toBe(81.4);
-  });
-
-  it('uses team efficiency directly for a lead on leave all week', () => {
-    const fixture = data([task(30)]);
-    fixture.leaves = [12, 13, 14, 15, 16].map((day) => ({ id: `${day}`, userId: lead.id, date: `2026-10-${day}`, type: 'full_day', note: '' }));
     const kpis = calculateTeamKpi(fixture, week, now);
-    expect(kpis.leadEfficiency).toBe(kpis.teamEfficiency);
+    expect(kpis.members.map((kpi) => kpi.memberId)).toEqual([developer.id]);
+    expect(kpis.developers).toHaveLength(1);
+    expect(kpis.capacityHours).toBe(kpis.developers[0].capacityHours);
   });
 
   it('excludes inactive developers', () => {
@@ -241,7 +236,7 @@ describe('team and lead scores', () => {
   it('does not produce NaN when there are no active developers or no capacity', () => {
     const fixture = data();
     fixture.members = [{ ...lead, capacity: 0 }];
-    expect(calculateTeamKpi(fixture, week, now)).toMatchObject({ teamEfficiency: null, leadEfficiency: null, capacityHours: 0, deliveryScore: 0 });
+    expect(calculateTeamKpi(fixture, week, now)).toMatchObject({ teamEfficiency: null, capacityHours: 0, deliveryScore: 0 });
   });
 });
 
@@ -284,7 +279,7 @@ describe('locked weekly reports', () => {
     const result = calculateTeamKpi(fixture, weekStart, time);
     fixture.snapshots = [...(fixture.snapshots || []), ...result.members.map((member) => ({
       userId: member.memberId, weekStart,
-      value: { ...member, ...(member.member.role === 'admin' ? { teamEfficiency: result.teamEfficiency, teamBand: result.band } : {}) },
+      value: { ...member, teamEfficiency: result.teamEfficiency, teamBand: result.band },
     }))];
     return result;
   }
@@ -307,18 +302,15 @@ describe('locked weekly reports', () => {
     expect(calculateTeamKpi(fixture, week, now).band).toBe('on_target');
   });
 
-  it('preserves historical team membership, developer role and lead weights', () => {
+  it('preserves historical team membership and developer role', () => {
     const fixture = data([task(31), task(8, '2026-10-16T18:00:00', lead.id)]);
     fixture.members = [{ ...developer, capacity: 40 }, lead];
     lock(fixture, week);
     fixture.members = [{ ...developer, role: 'admin', capacity: 90, isActive: false }, lead, { ...developer, id: 'new-developer', joinedOn: '2026-10-19' }];
-    fixture.settings.leadTeamWeight = 30;
-    fixture.settings.leadOwnWeight = 70;
     const historical = calculateTeamKpi(fixture, week, now);
-    expect(historical).toMatchObject({ teamEfficiency: 82, leadEfficiency: 81.4, capacityHours: 40 });
+    expect(historical).toMatchObject({ teamEfficiency: 82, capacityHours: 40 });
     expect(historical.developers).toHaveLength(1);
     expect(historical.developers[0].member).toMatchObject({ role: 'developer', isActive: true });
-    expect(calculateMemberKpi(lead, fixture, week, now).efficiency).toBe(81.4);
   });
 
   it('reads the old user role in locked reports as developer without changing the score', () => {

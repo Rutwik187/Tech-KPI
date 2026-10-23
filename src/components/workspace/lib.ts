@@ -41,7 +41,7 @@ export function projectTeam(data: DashboardData, project: Project) {
 /** Active people who may own new work in a project. A retained owner keeps existing work valid. */
 export function projectMembers(data: DashboardData, projectId: string, retainedId?: string) {
   const selected = findProject(data, projectId);
-  return data.members.filter(m => (m.isActive && (isAdhocProject(selected) || selected?.memberIds.includes(m.id))) || m.id === retainedId);
+  return data.members.filter(m => (m.isActive && m.role === 'developer' && (isAdhocProject(selected) || selected?.memberIds.includes(m.id))) || m.id === retainedId);
 }
 /**
  * Which ticket fields the person has picked by hand. An auto-fill never overwrites a hand pick,
@@ -55,7 +55,7 @@ export function ownerHomeProject(data: DashboardData, ownerId: string) {
 }
 /** Owners to offer. Until a project is picked by hand, anyone active can be picked and the project follows them. */
 export function ownerChoices(data: DashboardData, projectId: string, projectPicked: boolean, retainedId?: string) {
-  return projectPicked ? projectMembers(data, projectId, retainedId) : data.members.filter(m => m.isActive);
+  return projectPicked ? projectMembers(data, projectId, retainedId) : data.members.filter(m => m.isActive && m.role === 'developer');
 }
 /** A project was picked by hand. Its primary developer becomes the owner, unless a hand-picked owner is on the project. */
 export function withProject(data: DashboardData, value: WorkClassification, projectId: string, picked: PickedByHand): WorkClassification {
@@ -316,7 +316,7 @@ export function viewAs(data: DashboardData, viewerId: string | null): DashboardD
   };
 }
 
-export const DEMO_DATA_KEY = 'urban-gabru-kpi-demo-v4';
+export const DEMO_DATA_KEY = 'urban-gabru-kpi-demo-v5';
 const DEMO_VIEWER_KEY = 'urban-gabru-kpi-demo-viewer';
 let demoCacheText: string | null = null;
 let demoCacheData: DashboardData | null = null;

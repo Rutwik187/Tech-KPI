@@ -14,8 +14,9 @@ import { ItemActions, ScoreBadge } from './parts';
 
 export function Standup({ data, week, onOpen, onAction, onAdd, mutate, busy }: { data: DashboardData; week: string; onOpen: (id: string) => void; onAction: OnAction; onAdd: (kind: 'task' | 'bug', assigneeId?: string) => void; mutate: MutationFn; busy: boolean }) {
   const [title, setTitle] = useState('');
-  const people = data.members.filter(m => m.isActive);
-  const [classification, setClassification] = useState<WorkClassification>({ projectId: ADHOC_PROJECT_ID, phaseId: null, assigneeId: people.find(m => m.role === 'developer')?.id ?? data.currentUser.id });
+  // Admins own no tickets, so the standup covers developers only.
+  const people = data.members.filter(m => m.isActive && m.role === 'developer');
+  const [classification, setClassification] = useState<WorkClassification>({ projectId: ADHOC_PROJECT_ID, phaseId: null, assigneeId: people[0]?.id ?? '' });
   const [picked, setPicked] = useState<PickedByHand>({ project: false, owner: false });
   function chooseProject(projectId: string) {
     const next = { ...picked, project: true };
@@ -46,7 +47,7 @@ export function Standup({ data, week, onOpen, onAction, onAdd, mutate, busy }: {
         <Button type="submit" disabled={busy || !classification.assigneeId || title.trim().length < 3}><Plus data-icon="inline-start" />Add</Button>
       </FieldGroup></form>
     </Panel>
-    <div className="section-label"><h2>Who is working on what</h2><span>{people.length} people · {displayDate(new Date(), { weekday: 'long' })}</span></div>
+    <div className="section-label"><h2>Who is working on what</h2><span>{people.length} {people.length === 1 ? 'developer' : 'developers'} · {displayDate(new Date(), { weekday: 'long' })}</span></div>
     <div className="standup-grid">{people.map(person => {
       const score = calculateMemberKpi(person, data, week);
       const tickets = data.items.filter(item => item.assigneeId === person.id && item.type === 'task' && !isDone(item));
