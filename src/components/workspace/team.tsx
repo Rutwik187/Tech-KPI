@@ -4,7 +4,7 @@ import { useState } from 'react';
 import clsx from 'clsx';
 import { ArrowUpRight, CalendarDays, CalendarPlus, Clock3, Coffee, Pencil, Search, ShieldCheck, UserRound, Users, X } from 'lucide-react';
 import type { DashboardData, Member } from '@/lib/types';
-import { calculateMemberKpi, getWeekStart, shiftDate } from '@/lib/kpi';
+import { calculateMemberKpi, getMemberTrend, getWeekStart, shiftDate } from '@/lib/kpi';
 import { Avatar, EmptyState, FormCheckbox, FormField, Modal, Panel, StatusBadge } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,7 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/in
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { displayDate, displayRange, findMember, groupLeaves, hours, isDone, percent, today, type LeaveGroup, type MutationFn } from './lib';
 import { ScoreBadge } from './parts';
+import { TeamEfficiencyChart, TrendChart } from './charts';
 
 type TeamProps = { data: DashboardData; week: string; onEdit: (member: Member) => void; onLeave: (userId?: string) => void; mutate: MutationFn; onOpen: (id: string) => void };
 
@@ -40,6 +41,11 @@ export function Team({ data, week, onEdit, onLeave, mutate, onOpen }: TeamProps)
       <div><span className="mini-metric-icon"><Clock3 size={18} /></span><strong>{hours(developers.reduce((sum, m) => sum + calculateMemberKpi(m, data, week).weekCapacityHours, 0))} h</strong><span>developer hours at work this week</span></div>
       <div><span className="mini-metric-icon"><Coffee size={18} /></span><strong>{awayThisWeek.size}</strong><span>{awayThisWeek.size === 1 ? 'person' : 'people'} on leave this week</span></div>
     </div>
+
+    <Panel title={current ? 'Efficiency this week' : 'Efficiency that week'} action={<span className="panel-note">Select a bar to see the person</span>}>
+      <TeamEfficiencyChart current={current} target={data.settings.bandOnTarget} onSelect={setSelectedId}
+        rows={developers.map(m => { const kpi = calculateMemberKpi(m, data, week); return { id: m.id, name: m.name, efficiency: kpi.efficiency, creditedHours: kpi.creditedHours, capacityHours: kpi.capacityHours }; })} />
+    </Panel>
 
     <Card className="panel">
       <div className="list-toolbar">
@@ -130,6 +136,7 @@ function MemberDrawer({ data, member, week, current, onClose, onEdit, onLeave, o
         {openWork.length === 0 && <p className="form-help">No open work.</p>}
       </div>
       <h3 className="detail-section-heading">Weekly scores</h3>
+      <div className="member-trend"><TrendChart trend={getMemberTrend(member, data, week, 8)} target={data.settings.bandOnTarget} currentWeek={getWeekStart(new Date(), data.settings.timezone)} /></div>
       <div className="table-scroll"><Table className="data-table history-table">
         <TableHeader><TableRow><TableHead>Week of</TableHead><TableHead>Ticket hours</TableHead><TableHead>Hours at work</TableHead><TableHead>Efficiency</TableHead></TableRow></TableHeader>
         <TableBody>{Array.from({ length: 8 }, (_, index) => {

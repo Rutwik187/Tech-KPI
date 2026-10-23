@@ -1,6 +1,6 @@
 "use client";
 
-import { Area, CartesianGrid, ComposedChart, Line, ReferenceLine, XAxis, YAxis, type TooltipContentProps } from 'recharts';
+import { Area, Bar, BarChart, CartesianGrid, ComposedChart, LabelList, Line, ReferenceLine, XAxis, YAxis, type TooltipContentProps } from 'recharts';
 import type { BurnUpPoint } from '@/lib/timeline';
 import { ChartContainer, ChartTooltip } from '@/components/ui/chart';
 import { displayDate, hours, percent } from './lib';
@@ -51,6 +51,39 @@ export function TrendChart({ trend, target, currentWeek }: { trend: TrendPoint[]
     </div>
     <table className="sr-only"><caption>Weekly efficiency. Target {target}%.</caption><thead><tr><th>Week of</th><th>Efficiency</th><th>Ticket hours</th><th>Hours at work</th></tr></thead>
       <tbody>{points.map(point => <tr key={point.weekStart}><td>{displayDate(point.weekStart)}</td><td>{percent(point.efficiency)}</td><td>{hours(point.creditedHours)}</td><td>{hours(point.capacityHours)}</td></tr>)}</tbody></table>
+  </>;
+}
+
+export type MemberScore = { id: string; name: string; efficiency: number | null; creditedHours: number; capacityHours: number };
+
+/** This week's efficiency per developer, best first, against the target. A person with no hours at work has no bar. */
+export function TeamEfficiencyChart({ rows, target, current, onSelect }: { rows: MemberScore[]; target: number; current: boolean; onSelect: (id: string) => void }) {
+  const ranked = [...rows].sort((a, b) => (b.efficiency ?? -1) - (a.efficiency ?? -1) || a.name.localeCompare(b.name))
+    .map(row => ({ ...row, value: row.efficiency === null ? 0 : Math.min(row.efficiency, 100) }));
+  if (!ranked.length) return <div className="chart-empty"><strong>No active developers</strong><p>Add developers on this page to compare their weeks.</p></div>;
+  const max = Math.max(100, ...ranked.map(row => Math.ceil((row.efficiency ?? 0) / 10) * 10));
+  return <>
+    <ChartContainer className="team-chart aspect-auto" style={{ height: ranked.length * 38 + 54 }} config={{ efficiency: { label: 'Efficiency', color: 'var(--primary)' } }}>
+      <BarChart accessibilityLayer layout="vertical" data={ranked} margin={{ top: 22, right: 48, bottom: 0, left: 0 }} barCategoryGap={10}>
+        <CartesianGrid horizontal={false} stroke="var(--border)" />
+        <XAxis type="number" domain={[0, max]} tickFormatter={value => `${value}%`} tickLine={false} axisLine={false} ticks={[0, 50, 100]} />
+        <YAxis type="category" dataKey="name" width={84} tickLine={false} axisLine={false} tickFormatter={value => String(value).split(' ')[0]} />
+        <ChartTooltip cursor={{ fill: 'var(--muted)' }} content={({ active, payload }: TooltipContentProps) => {
+          const row = active ? payload?.[0]?.payload as MemberScore | undefined : undefined;
+          if (!row) return null;
+          return <ChartTip title={row.name} lines={[
+            row.efficiency === null ? 'No hours at work this week' : `${Math.round(row.efficiency)}% efficiency${current ? ' so far' : ''}`,
+            `${hours(row.creditedHours)} of ${hours(row.capacityHours)} h ticket hours`,
+          ]} />;
+        }} />
+        <ReferenceLine x={target} stroke="var(--muted-foreground)" strokeDasharray="4 4" strokeOpacity={0.7} label={{ value: `Target ${target}%`, position: 'top', fontSize: 11, fill: 'var(--muted-foreground)' }} />
+        <Bar dataKey="value" fill="var(--color-efficiency)" radius={[0, 4, 4, 0]} maxBarSize={22} isAnimationActive={false} cursor="pointer" onClick={(entry: { payload?: MemberScore }) => entry.payload && onSelect(entry.payload.id)}>
+          <LabelList dataKey="efficiency" position="right" offset={8} className="team-chart-label" formatter={(value: unknown) => typeof value === 'number' ? `${Math.round(value)}%` : '—'} />
+        </Bar>
+      </BarChart>
+    </ChartContainer>
+    <table className="sr-only"><caption>Efficiency per developer{current ? ' so far this week' : ''}. Target {target}%.</caption><thead><tr><th>Developer</th><th>Efficiency</th><th>Ticket hours</th><th>Hours at work</th></tr></thead>
+      <tbody>{ranked.map(row => <tr key={row.id}><td>{row.name}</td><td>{percent(row.efficiency)}</td><td>{hours(row.creditedHours)}</td><td>{hours(row.capacityHours)}</td></tr>)}</tbody></table>
   </>;
 }
 
