@@ -14,7 +14,7 @@ const lead: Member = { ...developer, id: 'lead', role: 'admin', capacity: 10 };
 
 function data(items: WorkItem[] = []): DashboardData {
   return {
-    currentUser: lead, members: [developer, lead], projects: [], phases: [], items, activities: [], leaves: [], holidays: [],
+    currentUser: lead, members: [developer, lead], projects: [], phases: [], items, requests: [], activities: [], leaves: [], holidays: [],
     settings: { ...defaultSettings, trackingStartDate: '2026-01-01' }, mode: 'demo',
   };
 }

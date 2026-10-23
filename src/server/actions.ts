@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { account, activities, holidays, leaves, memberProfiles, projectMembers, projectPhases, projects, session, settings, user, workItems } from "@/db/schema";
+import { account, activities, holidays, leaves, memberProfiles, projectMembers, projectPhases, projects, session, settings, ticketRequests, user, workItems } from "@/db/schema";
 import type { Member } from "@/lib/types";
 import { requireAdmin } from "./authz";
 import { AppError } from "./errors";
@@ -139,35 +139,93 @@ function statusChange(item: ItemRow, next: string, actor: Member, reason?: strin
 /** Fields a ticket's owner may change. Estimates, owners, and projects stay with the admin because they change the score. */
 const OWNER_FIELDS = new Set(["status", "blocker", "dueDate", "title", "description", "priority"]);
 
+/** What a developer may do. Everything else is an admin's. New work from a developer goes through a request. */
+const DEVELOPER_ACTIONS = new Set<DataAction["action"]>(["updateItem", "requestTicket", "withdrawTicketRequest"]);
+
+type ItemInput = Extract<DataAction, { action: "createItem" }> | (Omit<Extract<DataAction, { action: "createItem" }>, "action">);
+/** Creates a ticket or bug after the same checks every path uses. An approved request passes its developer as the creator. */
+async function insertItem(tx: Tx, actor: Member, input: ItemInput, origin: { createdById?: string; requestId?: string } = {}) {
+  const projectId = input.projectId ?? ADHOC_PROJECT_ID;
+  await assertAssignee(tx, input.assigneeId);
+  await assertProject(tx, projectId);
+  await assertProjectOwner(tx, projectId, input.assigneeId);
+  const task = input.type === "bug" ? await linkedTask(tx, input.taskId, projectId) : null;
+  if (input.type === "task" && input.taskId) throw new AppError("Only a bug can link to a task.");
+  const phaseId = input.phaseId === undefined ? task?.phaseId ?? null : input.phaseId;
+  if (task && task.phaseId !== phaseId) throw new AppError("A linked bug must use its task's phase.");
+  await assertPhase(tx, projectId, phaseId);
+  const estimate = input.type === "task" ? input.estimateHours ?? 1 : 0;
+  if (input.type === "task" && (estimate <= 0 || estimate > 80)) throw new AppError("Task estimates must be between 0.01 and 80 hours.");
+  if (input.type === "bug" && input.estimateHours) throw new AppError("Bug fixes are included in the task estimate.");
+  const [item] = await tx.insert(workItems).values({
+    type: input.type, title: input.title, description: input.description ?? "", projectId, phaseId,
+    assigneeId: input.assigneeId, createdById: origin.createdById ?? actor.id, status: input.type === "task" ? "todo" : "open",
+    priority: input.priority ?? "medium", severity: input.severity ?? "normal",
+    estimateHours: estimate, originalEstimateHours: estimate, dueDate: input.dueDate, originalDueDate: input.dueDate,
+    taskId: input.type === "bug" ? input.taskId : null,
+  }).returning();
+  await audit(tx, actor, item.id, input.type === "task" ? "task.created" : "bug.reported", {
+    estimateHours: estimate, dueDate: item.dueDate, assigneeId: item.assigneeId, severity: item.severity, taskId: item.taskId, projectId, phaseId,
+    ...(origin.requestId ? { requestId: origin.requestId } : {}),
+  });
+  return item;
+}
+async function pendingRequest(tx: Tx, id: string) {
+  const [request] = await tx.select().from(ticketRequests).where(eq(ticketRequests.id, id)).for("update");
+  if (!request) throw new AppError("This request was not found.", 404);
+  if (request.status !== "pending") throw new AppError("This request was already reviewed.", 409);
+  return request;
+}
+
 export async function executeAction(actor: Member, action: DataAction): Promise<void> {
-  const developerTicket = action.action === "createItem" && action.type === "task";
-  if (action.action !== "updateItem" && !developerTicket) requireAdmin(actor);
-  if (action.action === "createItem" && actor.role !== "admin" && action.assigneeId !== actor.id) throw new AppError("Developers can add tickets for themselves only.", 403);
+  if (!DEVELOPER_ACTIONS.has(action.action)) requireAdmin(actor);
   await db.transaction(async (tx) => {
     switch (action.action) {
       case "createItem": {
+        await insertItem(tx, actor, action);
+        break;
+      }
+      case "requestTicket": {
+        if (actor.role === "admin") throw new AppError("Admins add tickets directly. Requests are for developers.");
         const projectId = action.projectId ?? ADHOC_PROJECT_ID;
-        await assertAssignee(tx, action.assigneeId);
+        const phaseId = action.phaseId ?? null;
+        await assertAssignee(tx, actor.id);
         await assertProject(tx, projectId);
-        await assertProjectOwner(tx, projectId, action.assigneeId);
-        const task = action.type === "bug" ? await linkedTask(tx, action.taskId, projectId) : null;
-        if (action.type === "task" && action.taskId) throw new AppError("Only a bug can link to a task.");
-        const phaseId = action.phaseId === undefined ? task?.phaseId ?? null : action.phaseId;
-        if (task && task.phaseId !== phaseId) throw new AppError("A linked bug must use its task's phase.");
+        await assertProjectOwner(tx, projectId, actor.id);
         await assertPhase(tx, projectId, phaseId);
-        const estimate = action.type === "task" ? action.estimateHours ?? 1 : 0;
-        if (action.type === "task" && (estimate <= 0 || estimate > 80)) throw new AppError("Task estimates must be between 0.01 and 80 hours.");
-        if (action.type === "bug" && action.estimateHours) throw new AppError("Bug fixes are included in the task estimate.");
-        const [item] = await tx.insert(workItems).values({
-          type: action.type, title: action.title, description: action.description ?? "", projectId, phaseId,
-          assigneeId: action.assigneeId, createdById: actor.id, status: action.type === "task" ? "todo" : "open",
-          priority: action.priority ?? "medium", severity: action.severity ?? "normal",
-          estimateHours: estimate, originalEstimateHours: estimate, dueDate: action.dueDate, originalDueDate: action.dueDate,
-          taskId: action.type === "bug" ? action.taskId : null,
+        const [request] = await tx.insert(ticketRequests).values({
+          requesterId: actor.id, title: action.title, description: action.description ?? "", note: action.note ?? "",
+          projectId, phaseId, estimateHours: action.estimateHours, dueDate: action.dueDate ?? null, priority: action.priority ?? "medium",
         }).returning();
-        await audit(tx, actor, item.id, action.type === "task" ? "task.created" : "bug.reported", {
-          estimateHours: estimate, dueDate: item.dueDate, assigneeId: item.assigneeId, severity: item.severity, taskId: item.taskId, projectId, phaseId,
-        });
+        await audit(tx, actor, request.id, "ticket_request.created", { estimateHours: request.estimateHours, projectId, phaseId, dueDate: request.dueDate });
+        break;
+      }
+      case "approveTicketRequest": {
+        const request = await pendingRequest(tx, action.id);
+        const patch = action.patch ?? {};
+        // The admin may adjust the request before approving. The ticket belongs to the developer who asked.
+        const item = await insertItem(tx, actor, {
+          type: "task", title: patch.title ?? request.title, description: request.description,
+          projectId: patch.projectId ?? request.projectId, phaseId: patch.phaseId !== undefined ? patch.phaseId : patch.projectId && patch.projectId !== request.projectId ? null : request.phaseId,
+          assigneeId: request.requesterId, priority: patch.priority ?? request.priority, estimateHours: patch.estimateHours ?? request.estimateHours,
+          dueDate: patch.dueDate !== undefined ? patch.dueDate : request.dueDate,
+        }, { createdById: request.requesterId, requestId: request.id });
+        await tx.update(ticketRequests).set({ status: "approved", reviewedById: actor.id, reviewedAt: new Date(), reviewNote: action.note?.trim() || null, itemId: item.id }).where(eq(ticketRequests.id, request.id));
+        const changes = Object.fromEntries(Object.entries(patch).filter(([key, value]) => request[key as keyof typeof request] !== value));
+        await audit(tx, actor, request.id, "ticket_request.approved", { itemId: item.id, changes }, action.note);
+        break;
+      }
+      case "declineTicketRequest": {
+        const request = await pendingRequest(tx, action.id);
+        await tx.update(ticketRequests).set({ status: "declined", reviewedById: actor.id, reviewedAt: new Date(), reviewNote: action.reason }).where(eq(ticketRequests.id, request.id));
+        await audit(tx, actor, request.id, "ticket_request.declined", {}, action.reason);
+        break;
+      }
+      case "withdrawTicketRequest": {
+        const [request] = await tx.select().from(ticketRequests).where(eq(ticketRequests.id, action.id)).for("update");
+        if (!request || request.requesterId !== actor.id) throw new AppError("This request was not found.", 404);
+        if (request.status !== "pending") throw new AppError("This request was already reviewed.", 409);
+        await tx.delete(ticketRequests).where(eq(ticketRequests.id, request.id));
         break;
       }
       case "updateItem": {

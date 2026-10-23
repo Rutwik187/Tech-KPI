@@ -57,8 +57,8 @@ export function WorkList({ data, kind, onOpen, onAction, onAdd, busy }: { data: 
   const empty = <EmptyState
     bug={kind === 'bug'}
     title={ofKind.length ? 'No matches' : kind === 'task' ? 'No tickets yet' : 'No bugs. Nice.'}
-    description={ofKind.length ? 'Try another search or clear your filters.' : kind === 'task' ? admin ? 'Add a ticket with a title, project, owner, and estimate.' : 'Add a ticket for the work you are doing. Your admin can also assign tickets to you.' : admin ? 'Log a bug when you find one. Its fix-by time starts at once.' : 'Bugs assigned to you will appear here.'}
-    action={canAdd && !ofKind.length ? <Button onClick={() => onAdd(kind)}><Plus data-icon="inline-start" size={15} />{kind === 'task' ? 'New ticket' : 'Log bug'}</Button> : undefined}
+    description={ofKind.length ? 'Try another search or clear your filters.' : kind === 'task' ? admin ? 'Add a ticket with a title, project, owner, and estimate.' : 'Request a ticket for new work. Your admin approves it, or assigns tickets to you.' : admin ? 'Log a bug when you find one. Its fix-by time starts at once.' : 'Bugs assigned to you will appear here.'}
+    action={canAdd && !ofKind.length ? <Button onClick={() => onAdd(kind)}><Plus data-icon="inline-start" size={15} />{kind === 'task' ? admin ? 'New ticket' : 'Request ticket' : 'Log bug'}</Button> : undefined}
   />;
 
   return <>

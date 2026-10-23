@@ -1,4 +1,4 @@
-import type { BugStatus, DashboardData, Holiday, Leave, Member, Project, Settings, TaskStatus, WorkItem } from '@/lib/types';
+import type { BugStatus, DashboardData, Holiday, Leave, Member, Project, Settings, TaskStatus, TicketRequest, WorkItem } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
 import { getBugKpi, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
 
@@ -162,9 +162,15 @@ export function leaveDays(data: DashboardData, start: string, end: string) {
 
 export type WorkClassification = { projectId: string; phaseId: string | null; assigneeId: string };
 type ItemInput = Pick<WorkItem, 'type' | 'title' | 'description' | 'projectId' | 'assigneeId' | 'priority' | 'severity' | 'estimateHours' | 'dueDate' | 'taskId' | 'phaseId'>;
+export type RequestInput = Pick<TicketRequest, 'title' | 'description' | 'note' | 'projectId' | 'phaseId' | 'estimateHours' | 'dueDate' | 'priority'>;
+export type RequestChanges = Partial<Pick<TicketRequest, 'title' | 'projectId' | 'phaseId' | 'estimateHours' | 'dueDate' | 'priority'>>;
 export type PhaseDraft = { name: string; description: string };
 export type Mutation =
   | ({ action: 'createItem' } & ItemInput)
+  | ({ action: 'requestTicket' } & RequestInput)
+  | { action: 'approveTicketRequest'; id: string; patch?: RequestChanges; note?: string }
+  | { action: 'declineTicketRequest'; id: string; reason: string }
+  | { action: 'withdrawTicketRequest'; id: string }
   | { action: 'updateItem'; id: string; patch: Partial<WorkItem>; reason?: string; reasonCategory?: string }
   | { action: 'createMember'; name: string; email: string; microsoftObjectId?: string; role: Member['role']; capacity: number }
   | { action: 'updateMember'; id: string; patch: Partial<Member> }
@@ -198,9 +204,37 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
   const id = crypto.randomUUID();
   const log = (entityId: string, action: string, payload: Record<string, unknown> = {}, reason: string | null = null) =>
     next.activities.unshift({ id: crypto.randomUUID(), entityId, actorId: actor.id, action, reason, payload, createdAt: now });
+  const nextKey = () => Math.max(0, ...next.items.map(i => Number(i.key.split('-').pop()) || 0)) + 1;
   switch (mutation.action) {
+    case 'requestTicket':
+      next.requests.unshift({ id, requesterId: actor.id, title: mutation.title, description: mutation.description, note: mutation.note, projectId: mutation.projectId, phaseId: mutation.phaseId,
+        estimateHours: mutation.estimateHours, dueDate: mutation.dueDate, priority: mutation.priority, status: 'pending', reviewedById: null, reviewedAt: null, reviewNote: null, itemId: null, createdAt: now });
+      break;
+    case 'approveTicketRequest': {
+      const request = next.requests.find(r => r.id === mutation.id);
+      if (!request || request.status !== 'pending') throw new Error('This request was already reviewed.');
+      const final = { ...request, ...mutation.patch };
+      next.items.unshift({
+        id, key: `UG-${String(nextKey()).padStart(3, '0')}`, type: 'task', title: final.title, description: final.description,
+        projectId: final.projectId, phaseId: final.phaseId, assigneeId: request.requesterId, status: 'todo',
+        priority: final.priority, severity: 'normal', estimateHours: final.estimateHours, dueDate: final.dueDate, originalDueDate: final.dueDate,
+        createdAt: now, updatedAt: now, startedAt: null, completedAt: null, fixedAt: null, reportedAt: now, blocker: null, taskId: null, reopenCount: 0,
+      });
+      log(id, 'task.created', { estimateHours: final.estimateHours, dueDate: final.dueDate, requestId: request.id });
+      Object.assign(request, { status: 'approved', reviewedById: actor.id, reviewedAt: now, reviewNote: mutation.note?.trim() || null, itemId: id });
+      break;
+    }
+    case 'declineTicketRequest': {
+      const request = next.requests.find(r => r.id === mutation.id);
+      if (!request || request.status !== 'pending') throw new Error('This request was already reviewed.');
+      Object.assign(request, { status: 'declined', reviewedById: actor.id, reviewedAt: now, reviewNote: mutation.reason });
+      break;
+    }
+    case 'withdrawTicketRequest':
+      next.requests = next.requests.filter(r => !(r.id === mutation.id && r.status === 'pending'));
+      break;
     case 'createItem': {
-      const sequence = Math.max(0, ...data.items.map(i => Number(i.key.split('-').pop()) || 0)) + 1;
+      const sequence = nextKey();
       next.items.unshift({
         id, key: `${mutation.type === 'bug' ? 'BUG' : 'UG'}-${String(sequence).padStart(3, '0')}`, type: mutation.type, title: mutation.title, description: mutation.description,
         projectId: mutation.projectId, phaseId: mutation.phaseId, assigneeId: mutation.assigneeId, status: mutation.type === 'task' ? 'todo' : 'open',
@@ -304,19 +338,20 @@ export function viewAs(data: DashboardData, viewerId: string | null): DashboardD
   if (!viewer || viewer.id === data.currentUser.id) return data;
   if (viewer.role === 'admin') return { ...data, currentUser: viewer };
   const items = data.items.filter(item => item.assigneeId === viewer.id);
+  const requests = data.requests.filter(request => request.requesterId === viewer.id);
   const itemIds = new Set(items.map(item => item.id));
-  const history = new Set(items.map(item => item.projectId));
+  const history = new Set([...items, ...requests].map(row => row.projectId));
   const projects = data.projects.filter(p => isAdhocProject(p) || p.memberIds.includes(viewer.id) || history.has(p.id));
   const projectIds = new Set(projects.map(p => p.id));
   return {
-    ...data, currentUser: viewer, members: [viewer], items, projects,
+    ...data, currentUser: viewer, members: [viewer], items, requests, projects,
     phases: data.phases.filter(phase => projectIds.has(phase.projectId)),
     activities: data.activities.filter(a => itemIds.has(a.entityId) || (projectIds.has(a.entityId) && a.action === 'project.target_changed')),
     leaves: data.leaves.filter(l => l.userId === viewer.id),
   };
 }
 
-export const DEMO_DATA_KEY = 'urban-gabru-kpi-demo-v5';
+export const DEMO_DATA_KEY = 'urban-gabru-kpi-demo-v6';
 const DEMO_VIEWER_KEY = 'urban-gabru-kpi-demo-viewer';
 let demoCacheText: string | null = null;
 let demoCacheData: DashboardData | null = null;
