@@ -278,6 +278,25 @@ test('a ticket needs only a title, owner and estimate, survives reload, and appe
   await expect(page.locator('.kanban-column')).toHaveCount(5);
 });
 
+test('estimate presets fill a day count in focused hours', async ({ page }) => {
+  await openDemo(page, 'tickets');
+  const title = 'Browser verification: day estimate';
+  await page.getByRole('button', { name: 'New ticket', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: 'Title', exact: true }).fill(title);
+  const estimate = dialog.getByRole('spinbutton', { name: /^Estimate/ });
+  await dialog.getByRole('button', { name: 'Half day', exact: true }).click();
+  await expect(estimate).toHaveValue('3.25');
+  await dialog.getByRole('button', { name: '2 days', exact: true }).click();
+  await expect(estimate).toHaveValue('13');
+  await dialog.getByRole('button', { name: '1 day', exact: true }).click();
+  await expect(estimate).toHaveValue('6.5');
+  await expect(dialog.getByRole('button', { name: '1 day', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect((await readDemoData(page)).items.find(item => item.title === title)?.estimateHours).toBe(6.5);
+});
+
 test('project members and custom phases can be created on mobile and edited after reload', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await openDemo(page, 'projects');
