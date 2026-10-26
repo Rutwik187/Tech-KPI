@@ -1,0 +1,2 @@
+ALTER TABLE "tech_kpi_holiday" ADD COLUMN "type" text DEFAULT 'full_day' NOT NULL;--> statement-breakpoint
+ALTER TABLE "tech_kpi_holiday" ADD CONSTRAINT "tech_kpi_holiday_type" CHECK ("tech_kpi_holiday"."type" IN ('full_day','half_day'));

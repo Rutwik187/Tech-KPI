@@ -4,9 +4,9 @@ import { useId, useState, type FormEvent, type KeyboardEvent } from 'react';
 import clsx from 'clsx';
 import { toast } from 'sonner';
 import { Activity as ActivityIcon, Bug, CalendarClock, CalendarPlus, Check, ChevronDown, CircleHelp, Clock3, FileText, ListTodo, LoaderCircle, Plus, ShieldCheck, Star, X } from 'lucide-react';
-import type { DashboardData, Leave, Member, Phase, Project, WorkItem } from '@/lib/types';
+import type { DashboardData, Holiday, Leave, Member, Phase, Project, WorkItem } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
-import { addWorkingHours, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
+import { addWorkingHours, getWeekStart, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
 import { Avatar, FormCheckbox, FormDate, FormField, FormSelect, Modal } from '@/components/ui';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -30,13 +30,28 @@ export function FormChoice({ name, value, defaultValue, onValueChange, options, 
 }
 
 /** The estimate in hours, with one-click picks for half a day, a day, and two days. */
-export function EstimateField({ defaultValue }: { defaultValue: number }) {
+export function EstimateField({ defaultValue, label = 'Estimate' }: { defaultValue: number; label?: string }) {
   const [value, setValue] = useState(String(defaultValue));
-  return <FormField>Estimate <span className="optional">hours</span>
+  return <FormField>{label} <span className="optional">hours</span>
     <Input type="number" name="estimateHours" min={.5} max={MAX_TICKET_HOURS} step={.25} required value={value} onChange={event => setValue(event.target.value)} />
     <div className="estimate-presets" role="group" aria-label="Set the estimate in days">{ESTIMATE_PRESETS.map(preset => <Button key={preset.label} type="button" size="sm" variant={Number(value) === preset.hours ? 'secondary' : 'outline'} aria-pressed={Number(value) === preset.hours} onClick={() => setValue(String(preset.hours))}>{preset.label}</Button>)}</div>
     <span className="field-help">A day is {WORKDAY_HOURS} h of focused work.</span>
   </FormField>;
+}
+
+/** A checklist of developers with Select all, for work or leave that applies to several people at once. */
+export function DeveloperPicker({ people, value, onChange, disabled }: { people: Member[]; value: string[]; onChange: (ids: string[]) => void; disabled?: boolean }) {
+  const labelId = useId();
+  const all = people.length > 0 && people.every(m => value.includes(m.id));
+  return <div className="developer-picker">
+    <div className="project-section-heading"><h3 id={labelId}>Developers</h3><div className="developer-picker-actions"><Badge variant="secondary">{value.length} of {people.length} selected</Badge>
+      <Button type="button" variant="link" size="sm" disabled={disabled || !people.length} onClick={() => onChange(all ? [] : people.map(m => m.id))}>{all ? 'Clear all' : 'Select all'}</Button></div></div>
+    <FieldGroup role="group" aria-labelledby={labelId} className="project-member-list">{people.map(m => <div key={m.id} className="project-member-row">
+      <FormField className="project-member-choice"><FormCheckbox checked={value.includes(m.id)} disabled={disabled} onCheckedChange={checked => onChange(checked ? [...value, m.id] : value.filter(id => id !== m.id))} />
+        <span className="project-member-name"><span aria-hidden="true"><Avatar member={m} size="small" /></span>{m.name}</span></FormField>
+    </div>)}</FieldGroup>
+    {!people.length && <p className="field-help">No developers can take work here. Add members to the project, or choose Ad hoc.</p>}
+  </div>;
 }
 
 export function FormFooter({ busy, disabled = false, onClose, label }: { busy: boolean; disabled?: boolean; onClose: () => void; label: string }) {
@@ -300,39 +315,49 @@ export function LeaveForm({ data, userId, mutate, onClose, busy }: { data: Dashb
   // Leave lowers tracked hours, and only developers are tracked.
   const people = data.members.filter(m => m.isActive && m.role === 'developer');
   const day = today(data.settings.timezone);
-  const [personId, setPersonId] = useState(userId ?? people[0]?.id ?? '');
+  const [personIds, setPersonIds] = useState<string[]>(userId ? [userId] : []);
   const [length, setLength] = useState<LeaveLength>('full_day');
   const [start, setStart] = useState(day);
   const [end, setEnd] = useState(shiftDate(day, 4, data.settings.timezone));
-  const person = people.find(m => m.id === personId);
+  const chosen = people.filter(m => personIds.includes(m.id));
   const days = length === 'range' ? leaveDays(data, start, end) : start ? [start] : [];
-  const taken = new Set(data.leaves.filter(l => l.userId === personId).map(l => l.date));
-  const fresh = days.filter(date => !taken.has(date));
   const workingDays = new Set(data.settings.workingDays).size || 1;
   const singleOffDay = length !== 'range' && !!start && !isWorkingDay(start, getWorkCalendar(data));
-  const lostHours = person && !singleOffDay ? person.capacity / workingDays * fresh.length * (length === 'half_day' ? .5 : 1) : 0;
+  // Each person loses only the days they do not already have leave on.
+  const effects = chosen.map(person => {
+    const taken = new Set(data.leaves.filter(l => l.userId === person.id).map(l => l.date));
+    const fresh = days.filter(date => !taken.has(date));
+    return { fresh: fresh.length, lost: singleOffDay ? 0 : person.capacity / workingDays * fresh.length * (length === 'half_day' ? .5 : 1) };
+  });
+  const freshDays = effects.reduce((sum, effect) => sum + effect.fresh, 0);
+  const lostHours = effects.reduce((sum, effect) => sum + effect.lost, 0);
+  const skipped = chosen.length * days.length - freshDays;
+  const whose = chosen.length === 1 ? `${chosen[0].name.split(' ')[0]}’s` : `${chosen.length} developers’`;
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const note = String(new FormData(event.currentTarget).get('note') ?? '').trim();
-    const ok = await mutate({ action: 'addLeave', userId: personId, date: start, ...(length === 'range' ? { endDate: end } : {}), type: (length === 'half_day' ? 'half_day' : 'full_day') as Leave['type'], note }, 'Leave added. Hours at work updated.');
+    const ok = await mutate({ action: 'addLeave', userIds: personIds, date: start, ...(length === 'range' ? { endDate: end } : {}), type: (length === 'half_day' ? 'half_day' : 'full_day') as Leave['type'], note },
+      chosen.length > 1 ? `Leave added for ${chosen.length} developers. Hours at work updated.` : 'Leave added. Hours at work updated.');
     if (ok) onClose();
   }
-  return <Modal title="Add leave" subtitle="Leave lowers hours at work for that week, so the score stays fair." onClose={onClose}>
+  return <Modal title="Add leave" subtitle="Leave lowers hours at work for that week, so the score stays fair. Pick several people for a team day off." onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
-        <FormField>Team member<FormSelect value={personId} onValueChange={setPersonId} required>{people.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</FormSelect></FormField>
+        <DeveloperPicker people={people} value={personIds} onChange={setPersonIds} disabled={busy} />
         <FormField>Length<FormChoice value={length} onValueChange={value => setLength(value as LeaveLength)} options={[{ value: 'full_day', label: 'Full day' }, { value: 'half_day', label: 'Half day' }, { value: 'range', label: 'Several days' }]} /></FormField>
         <FieldGroup className="form-grid">
           <FormField>{length === 'range' ? 'First day' : 'Date'}<FormDate required value={start} onValueChange={next => { setStart(next); if (next > end) setEnd(next); }} /></FormField>
           {length === 'range' && <FormField>Last day<FormDate required value={end} min={start} onValueChange={setEnd} /></FormField>}
         </FieldGroup>
         <Alert className="form-tip"><CircleHelp size={17} /><AlertDescription><p>{
-          fresh.length === 0 ? days.length ? 'Leave is already recorded for these days.' : 'Choose dates to see the effect.'
-          : `${length === 'half_day' ? 'Half a day' : `${fresh.length} working day${fresh.length === 1 ? '' : 's'}`}${length === 'range' ? ` from ${displayDate(start)} to ${displayDate(end)}` : ` on ${displayDate(start, { weekday: 'short' })}`}. Lowers ${person ? `${person.name.split(' ')[0]}’s` : 'their'} hours at work by ${hours(lostHours)} h.${length === 'range' ? ' Weekends and holidays are skipped.' : ''}${singleOffDay ? ' This date is already a day off.' : ''}${days.length > fresh.length ? ` ${days.length - fresh.length} day(s) already recorded will be skipped.` : ''}`
+          !chosen.length ? 'Choose who is on leave.'
+          : !days.length ? 'Choose dates to see the effect.'
+          : freshDays === 0 ? 'Leave is already recorded for these days.'
+          : `${length === 'half_day' ? 'Half a day' : `${days.length} working day${days.length === 1 ? '' : 's'}`}${length === 'range' ? ` from ${displayDate(start)} to ${displayDate(end)}` : ` on ${displayDate(start, { weekday: 'short' })}`}. Lowers ${whose} hours at work by ${hours(lostHours)} h${chosen.length > 1 ? ' in total' : ''}.${length === 'range' ? ' Weekends and holidays are skipped.' : ''}${singleOffDay ? ' This date is already a day off.' : ''}${skipped > 0 ? ` ${skipped} day(s) already recorded will be skipped.` : ''}`
         }</p></AlertDescription></Alert>
         <FormField>Note <span className="optional">optional</span><Input name="note" placeholder="e.g. Family function" maxLength={200} /></FormField>
       </FieldGroup>
-      <FormFooter busy={busy} disabled={!personId || fresh.length === 0 || (length === 'range' && end < start)} onClose={onClose} label="Add leave" />
+      <FormFooter busy={busy} disabled={!chosen.length || freshDays === 0 || (length === 'range' && end < start)} onClose={onClose} label={chosen.length > 1 ? `Add leave for ${chosen.length}` : 'Add leave'} />
     </form>
   </Modal>;
 }
@@ -341,16 +366,77 @@ export function HolidayForm({ mutate, onClose, busy }: { mutate: MutationFn; onC
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const f = new FormData(event.currentTarget);
-    const ok = await mutate({ action: 'addHoliday', date: String(f.get('date')), name: String(f.get('name')) }, 'Holiday added. Hours at work updated.');
+    const ok = await mutate({ action: 'addHoliday', date: String(f.get('date')), name: String(f.get('name')), type: String(f.get('type')) as Holiday['type'] }, 'Holiday added. Hours at work updated.');
     if (ok) onClose();
   }
-  return <Modal title="Add a holiday" subtitle="A day off for the whole team. It lowers everyone’s hours at work." onClose={onClose}>
+  return <Modal title="Add a holiday" subtitle="Time off for the whole team. It lowers everyone’s hours at work." onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
         <FormField>Holiday name<Input name="name" required placeholder="e.g. Diwali" maxLength={100} /></FormField>
-        <FormField>Date<FormDate name="date" required /></FormField>
+        <FieldGroup className="form-grid">
+          <FormField>Date<FormDate name="date" required /></FormField>
+          <FormField>Length<FormChoice name="type" defaultValue="full_day" options={[{ value: 'full_day', label: 'Full day' }, { value: 'half_day', label: 'Half day' }]} /><span className="field-help">On a half day, the office stays open.</span></FormField>
+        </FieldGroup>
       </FieldGroup>
       <FormFooter busy={busy} onClose={onClose} label="Add holiday" />
+    </form>
+  </Modal>;
+}
+
+type TeamTicketKind = 'done' | 'todo';
+/** The same ticket for several developers. An event they already attended is saved as finished work, so the time still counts. */
+export function TeamTicketForm({ data, mutate, onClose, busy }: { data: DashboardData; mutate: MutationFn; onClose: () => void; busy: boolean }) {
+  const day = today(data.settings.timezone);
+  const [kind, setKind] = useState<TeamTicketKind>('done');
+  const [projectId, setProjectId] = useState(ADHOC_PROJECT_ID);
+  const [phaseId, setPhaseId] = useState('');
+  const [assigneeIds, setAssigneeIds] = useState<string[]>(() => projectMembers(data, ADHOC_PROJECT_ID).map(m => m.id));
+  const [doneOn, setDoneOn] = useState(day);
+  const done = kind === 'done';
+  const people = projectMembers(data, projectId);
+  const phases = projectPhases(data, projectId);
+  const count = assigneeIds.length;
+  const developers = `${count} developer${count === 1 ? '' : 's'}`;
+  // A locked weekly report keeps its scores, so an event added to that week changes nothing.
+  const locked = done && !!doneOn && !!data.snapshots?.some(row => row.weekStart === getWeekStart(doneOn, data.settings.timezone));
+  function chooseProject(id: string) {
+    const eligible = new Set(projectMembers(data, id).map(m => m.id));
+    setProjectId(id);
+    setPhaseId('');
+    setAssigneeIds(previous => previous.filter(existing => eligible.has(existing)));
+  }
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const fields = new FormData(event.currentTarget);
+    const ok = await mutate({
+      action: 'createTickets', assigneeIds, title: String(fields.get('title')).trim(), description: String(fields.get('description') ?? '').trim(),
+      projectId, phaseId: phaseId || null, estimateHours: Number(fields.get('estimateHours')),
+      priority: done ? 'medium' : String(fields.get('priority')) as WorkItem['priority'], dueDate: done ? null : String(fields.get('dueDate')) || null, ...(done ? { doneOn } : {}),
+    }, done ? `Recorded for ${developers}. The hours count as finished work.` : `Ticket added for ${developers}.`);
+    if (ok) onClose();
+  }
+  return <Modal title="Team ticket" subtitle="Give the same ticket to several developers at once." onClose={onClose}>
+    <form onSubmit={submit} className="item-form">
+      <FieldGroup className="modal-form-body">
+        <FormField>What is it?<FormChoice value={kind} onValueChange={value => setKind(value as TeamTicketKind)} options={[{ value: 'done', label: 'Event already held' }, { value: 'todo', label: 'Work to do' }]} />
+          <span className="field-help">{done ? 'For a meeting, training, or event. Each developer gets the hours as finished work, so the time does not lower their score.' : 'Each developer gets their own ticket to do, such as a training or a security update.'}</span></FormField>
+        <FormField>Title<Input name="title" placeholder={done ? 'e.g. Quarterly planning meeting' : 'e.g. Complete the security training'} required minLength={3} maxLength={200} autoComplete="off" /></FormField>
+        <FieldGroup className="form-grid">
+          <FormField>Project<FormSelect required value={projectId} onValueChange={chooseProject}>{selectableProjects(data).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect></FormField>
+          <FormField>Phase<FormSelect value={phaseId} disabled={!phases.length} onValueChange={setPhaseId}><option value="">Ad hoc</option>{phases.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect></FormField>
+        </FieldGroup>
+        <DeveloperPicker people={people} value={assigneeIds} onChange={setAssigneeIds} disabled={busy} />
+        <FieldGroup className="form-grid">
+          <EstimateField defaultValue={4} label="Hours each" />
+          {done
+            ? <FormField>Held on<FormDate required value={doneOn} max={day} onValueChange={setDoneOn} /></FormField>
+            : <FormField>Due date <span className="optional">optional</span><FormDate name="dueDate" min={day} placeholder="No due date" /></FormField>}
+          {!done && <FormField>Priority<FormChoice name="priority" defaultValue="medium" options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }, { value: 'urgent', label: 'Urgent' }]} /></FormField>}
+        </FieldGroup>
+        {locked && <Alert className="form-tip extend-warning"><CircleHelp size={17} /><AlertDescription><p>The report for that week is locked. The tickets are saved, but scores for that week stay as they are.</p></AlertDescription></Alert>}
+        <FormField>Description <span className="optional">optional</span><Textarea name="description" placeholder={done ? 'What was it about? Add links to notes or slides.' : 'What does done look like?'} rows={2} /></FormField>
+      </FieldGroup>
+      <FormFooter busy={busy} disabled={!count || (done && !doneOn)} onClose={onClose} label={`Add for ${developers}`} />
     </form>
   </Modal>;
 }

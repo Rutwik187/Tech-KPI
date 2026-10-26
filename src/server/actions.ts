@@ -7,7 +7,7 @@ import { requireAdmin } from "./authz";
 import { AppError } from "./errors";
 import type { DataAction } from "./validation";
 import { DEFAULT_SETTINGS } from "./default-settings";
-import { dueDateAfterHours, isWorkingDay, shiftDate, workingHoursBetween, type WorkCalendar } from "@/lib/kpi/calendar";
+import { dateKey, dueDateAfterHours, isWorkingDay, localDate, shiftDate, workingHoursBetween, type WorkCalendar } from "@/lib/kpi/calendar";
 import { linkMicrosoftAccount } from "./microsoft-accounts";
 import { ADHOC_PROJECT_ID } from "@/lib/project-defaults";
 
@@ -23,15 +23,19 @@ async function assertEmailFree(tx: Tx, email: string) {
 function requireReason(reason?: string) {
   if (!reason || reason.trim().length < 3) throw new AppError("Add a short reason for this change.");
 }
+/** Full-day holidays are days off. A half-day holiday keeps the office open and only lowers hours at work. */
+function daysOff(rows: { date: string; type: string }[]) {
+  return new Set(rows.filter((row) => row.type !== "half_day").map((row) => row.date));
+}
 /** Working days and hours from settings and holidays. With a person, their full days of leave are days off too. */
 async function workCalendar(tx: Tx, userId?: string): Promise<WorkCalendar> {
   const [saved] = await tx.select().from(settings).where(eq(settings.id, 1));
   const config = saved?.value ?? DEFAULT_SETTINGS;
-  const holidayRows = await tx.select({ date: holidays.date }).from(holidays);
+  const holidayRows = await tx.select({ date: holidays.date, type: holidays.type }).from(holidays);
   const leaveRows = userId ? await tx.select({ date: leaves.date }).from(leaves).where(and(eq(leaves.userId, userId), eq(leaves.type, "full_day"))) : [];
   return {
     timezone: config.timezone, workingDays: config.workingDays, workdayStart: config.workdayStart, workdayEnd: config.workdayEnd,
-    holidays: new Set(holidayRows.map((row) => row.date)), ...(userId ? { extraDaysOff: new Set(leaveRows.map((row) => row.date)) } : {}),
+    holidays: daysOff(holidayRows), ...(userId ? { extraDaysOff: new Set(leaveRows.map((row) => row.date)) } : {}),
   };
 }
 /** One leave row per working day. Weekends and holidays are skipped because they already cost no hours. */
@@ -219,6 +223,23 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         await insertItem(tx, actor, action);
         break;
       }
+      case "createTickets": {
+        const { assigneeIds, doneOn, title, description, projectId, phaseId, priority, estimateHours, dueDate } = action;
+        let completedAt: Date | null = null;
+        if (doneOn) {
+          const calendar = await workCalendar(tx);
+          if (doneOn > dateKey(new Date(), calendar.timezone)) throw new AppError("Work that is already done needs a date of today or earlier.");
+          // Done at the end of that workday, or now if the workday has not ended yet.
+          completedAt = new Date(Math.min(Date.now(), localDate(doneOn, calendar.workdayEnd, calendar.timezone).getTime()));
+        }
+        for (const assigneeId of assigneeIds) {
+          const item = await insertItem(tx, actor, { type: "task", title, description, projectId, phaseId, priority, estimateHours, assigneeId, dueDate: doneOn ? null : dueDate });
+          if (!completedAt) continue;
+          await tx.update(workItems).set({ status: "done", startedAt: completedAt, submittedAt: completedAt, completedAt, updatedAt: new Date() }).where(eq(workItems.id, item.id));
+          await audit(tx, actor, item.id, "task.completed", { from: "todo", to: "done", creditedHours: item.estimateHours, completedOn: completedAt.toISOString() });
+        }
+        break;
+      }
       case "requestTicket": {
         if (actor.role === "admin") throw new AppError("Admins add tickets directly. Requests are for developers.");
         const projectId = action.projectId ?? ADHOC_PROJECT_ID;
@@ -379,7 +400,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
             resolutionWorkingHours = Number(workingHoursBetween(item.reportedAt, transition.fixedAt as Date, {
               timezone: calendar.timezone, workingDays: calendar.workingDays,
               workdayStart: calendar.workdayStart, workdayEnd: calendar.workdayEnd,
-              holidays: new Set(holidaysRows.map((holiday) => holiday.date)),
+              holidays: daysOff(holidaysRows),
               extraDaysOff: new Set(leaveRows.filter((leave) => leave.type === "full_day").map((leave) => leave.date)),
             }).toFixed(2));
           }
@@ -506,17 +527,18 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         await audit(tx, actor, "settings", "settings.updated", { settings: action.settings }); break;
       }
       case "addLeave": {
-        await assertAssignee(tx, action.userId);
+        for (const userId of action.userIds) await assertAssignee(tx, userId);
         const dates = await leaveDates(tx, action.date, action.endDate ?? action.date);
-        const saved = await tx.insert(leaves).values(dates.map((date) => ({ userId: action.userId, date, type: action.type, note: action.note ?? "" })))
+        // Days someone already has leave on are skipped, so one form can cover a whole team.
+        const saved = await tx.insert(leaves).values(action.userIds.flatMap((userId) => dates.map((date) => ({ userId, date, type: action.type, note: action.note ?? "" }))))
           .onConflictDoNothing({ target: [leaves.userId, leaves.date] }).returning();
         if (!saved.length) throw new AppError("Leave is already recorded for these days.");
-        for (const leave of saved) await audit(tx, actor, leave.id, "leave.added", { userId: action.userId, date: leave.date, type: action.type });
+        for (const leave of saved) await audit(tx, actor, leave.id, "leave.added", { userId: leave.userId, date: leave.date, type: action.type });
         break;
       }
       case "addHoliday": {
-        const [holiday] = await tx.insert(holidays).values({ date: action.date, name: action.name }).returning();
-        await audit(tx, actor, holiday.id, "holiday.added", { date: action.date, name: action.name }); break;
+        const [holiday] = await tx.insert(holidays).values({ date: action.date, name: action.name, type: action.type }).returning();
+        await audit(tx, actor, holiday.id, "holiday.added", { date: action.date, name: action.name, type: action.type }); break;
       }
       case "deleteLeave": {
         const removed = await tx.delete(leaves).where(inArray(leaves.id, action.ids)).returning();

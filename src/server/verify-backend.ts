@@ -287,16 +287,16 @@ async function main() {
     data = await mutate(adminCookie, { action: "updateItem", id: bug.id, patch: { status: "open" }, reason: "Verification found a regression" });
     const reopened = data.items.find((item) => item.id === bug.id)!;
     assert.equal(reopened.fixedAt, null); assert.equal(reopened.reportedAt, bug.reportedAt); assert.equal(reopened.reopenCount, 1); checks += 3;
-    data = await mutate(adminCookie, { action: "addLeave", userId: member.id, date: "2099-11-02", type: "half_day", note: trace });
+    data = await mutate(adminCookie, { action: "addLeave", userIds: [member.id], date: "2099-11-02", type: "half_day", note: trace });
     const leave = data.leaves.find((leave) => leave.userId === member.id)!; ids.add(leave.id);
     await mutate(adminCookie, { action: "deleteLeave", ids: [leave.id] });
     // 6 to 10 November 2099 is Friday to Tuesday: three working days.
-    data = await mutate(adminCookie, { action: "addLeave", userId: member.id, date: "2099-11-06", endDate: "2099-11-10", type: "full_day", note: trace });
+    data = await mutate(adminCookie, { action: "addLeave", userIds: [member.id], date: "2099-11-06", endDate: "2099-11-10", type: "full_day", note: trace });
     data.leaves.filter((leave) => leave.userId === member.id).forEach((leave) => ids.add(leave.id));
     const rangeLeave = data.leaves.filter((leave) => leave.userId === member.id).map((leave) => leave.date).sort();
     assert.deepEqual(rangeLeave, ["2099-11-06", "2099-11-09", "2099-11-10"]); checks++;
-    await mutate(adminCookie, { action: "addLeave", userId: member.id, date: "2099-11-06", endDate: "2099-11-10", type: "full_day" }, 400);
-    await mutate(developerCookie, { action: "addLeave", userId: member.id, date: "2099-11-12", type: "full_day" }, 403);
+    await mutate(adminCookie, { action: "addLeave", userIds: [member.id], date: "2099-11-06", endDate: "2099-11-10", type: "full_day" }, 400);
+    await mutate(developerCookie, { action: "addLeave", userIds: [member.id], date: "2099-11-12", type: "full_day" }, 403);
     await mutate(adminCookie, { action: "deleteLeave", ids: data.leaves.filter((leave) => leave.userId === member.id).map((leave) => leave.id) });
     await mutate(adminCookie, { action: "saveSettings", settings: { ...data.settings, deliveryWeight: 75 } }, 400);
     const beforeSettingAudits = new Set(data.activities.map((activity) => activity.id));

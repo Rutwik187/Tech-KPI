@@ -13,6 +13,8 @@ const capacity = z.number().min(0.01).max(168).multipleOf(0.01);
 const color = z.string().regex(/^#[a-fA-F0-9]{6}$/, "Use a six digit color code.");
 const description = z.string().trim().max(20_000);
 const memberIds = z.array(z.string().min(1).max(200)).max(250).refine((ids) => new Set(ids).size === ids.length, "Project members must be unique.");
+const developerIds = z.array(z.string().min(1).max(200)).min(1, "Choose at least one developer.").max(250).refine((ids) => new Set(ids).size === ids.length, "Choose each developer once.");
+const dayLength = z.enum(["full_day", "half_day"]);
 const phaseName = z.string().trim().min(1, "Enter a phase name.").max(100)
   .refine((name) => name.replace(/\s+/g, " ").toLowerCase() !== "ad hoc", "Ad hoc is the built-in option for work without a phase.");
 const phaseDescription = z.string().trim().max(2000);
@@ -48,6 +50,10 @@ export const settingsSchema = z.object({
 });
 export const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("createItem"), type: z.enum(["task", "bug"]), ...itemFields }).strict(),
+  // The same ticket for several developers. With doneOn, it records an event they already attended as finished work.
+  z.object({ action: z.literal("createTickets"), assigneeIds: developerIds, title: shortText, description: description.optional(), projectId: uuid.optional(), phaseId: uuid.nullable().optional(),
+    priority: priority.optional(), estimateHours: z.number().gt(0, "Estimate the hours this work needs.").max(80).multipleOf(0.01), dueDate: date.nullable().optional(), doneOn: date.optional() }).strict()
+    .refine((tickets) => !tickets.doneOn || !tickets.dueDate, "Work that is already done has no due date."),
   z.object({ action: z.literal("updateItem"), id: uuid, patch: z.object({ ...itemFields,
     status: z.enum(["todo", "in_progress", "blocked", "in_review", "done", "open", "fixed", "verified"]).optional(),
     blocker: z.string().trim().max(2000).nullable().optional(),
@@ -60,10 +66,10 @@ export const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("createPhase"), projectId: uuid, name: phaseName, description: phaseDescription.optional() }).strict(),
   z.object({ action: z.literal("updatePhase"), id: uuid, name: phaseName.optional(), description: phaseDescription.optional() }).strict(),
   z.object({ action: z.literal("saveSettings"), settings: settingsSchema }).strict(),
-  z.object({ action: z.literal("addLeave"), userId: z.string().min(1), date, endDate: date.optional(), type: z.enum(["full_day", "half_day"]), note: z.string().trim().max(2000).optional() }).strict()
+  z.object({ action: z.literal("addLeave"), userIds: developerIds, date, endDate: date.optional(), type: dayLength, note: z.string().trim().max(2000).optional() }).strict()
     .refine((leave) => !leave.endDate || leave.endDate >= leave.date, "The last day of leave must be on or after the first day.")
     .refine((leave) => !leave.endDate || leave.endDate === leave.date || leave.type === "full_day", "A half day covers one date only."),
-  z.object({ action: z.literal("addHoliday"), date, name: shortText }).strict(),
+  z.object({ action: z.literal("addHoliday"), date, name: shortText, type: dayLength.default("full_day") }).strict(),
   z.object({ action: z.literal("deleteLeave"), ids: z.array(uuid).min(1).max(62) }).strict(),
   z.object({ action: z.literal("deleteHoliday"), id: uuid }).strict(),
   // A developer asks for a ticket. It becomes one only after an admin approves it.

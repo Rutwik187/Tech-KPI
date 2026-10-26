@@ -811,7 +811,8 @@ test('an admin records several days of leave from the team table and sees one ra
   const tuesday = shiftDate(nextMonday, 8, 'Asia/Kolkata');
   await page.getByRole('button', { name: 'Add leave for Ananya Rao', exact: true }).click();
   const dialog = page.getByRole('dialog');
-  await expect(dialog.getByRole('combobox', { name: 'Team member', exact: true })).toHaveText('Ananya Rao');
+  await expect(dialog.getByRole('checkbox', { name: 'Ananya Rao', exact: true })).toBeChecked();
+  await expect(dialog.getByRole('checkbox', { checked: true })).toHaveCount(1);
   await dialog.getByRole('radio', { name: 'Several days', exact: true }).click();
   await pickDate(page, dialog.getByRole('button', { name: /^First day/ }), friday);
   await pickDate(page, dialog.getByRole('button', { name: /^Last day/ }), tuesday);
@@ -993,4 +994,79 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
       } finally { await owner?.dispose(); await fixture?.dispose(); console.log('[live verification] Temporary identity cleanup completed'); }
     }
   });
+});
+
+test('an admin gives every developer the same half day of leave in one step', async ({ page }) => {
+  await openDemo(page, 'team');
+  const nextMonday = shiftDate(getWeekStart(new Date(), 'Asia/Kolkata'), 7, 'Asia/Kolkata');
+  await page.getByRole('button', { name: 'Add leave', exact: true }).first().click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('Choose who is on leave.');
+  await dialog.getByRole('button', { name: 'Select all', exact: true }).click();
+  const developers = createDemoData().members.filter(m => m.isActive && m.role === 'developer');
+  await expect(dialog.getByRole('checkbox', { checked: true })).toHaveCount(developers.length);
+  await dialog.getByRole('radio', { name: 'Half day', exact: true }).click();
+  await pickDate(page, dialog.getByRole('button', { name: /^Date/ }), nextMonday);
+  await expect(dialog).toContainText(`${developers.length} developers’ hours at work`);
+  await dialog.getByRole('button', { name: `Add leave for ${developers.length}`, exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const leaves = (await readDemoData(page)).leaves.filter(leave => leave.date === nextMonday);
+  expect(leaves.map(leave => leave.userId).sort()).toEqual(developers.map(m => m.id).sort());
+  expect(leaves.every(leave => leave.type === 'half_day')).toBe(true);
+});
+
+test('a team event becomes finished work for every chosen developer', async ({ page }) => {
+  await openDemo(page, 'team');
+  const title = 'Browser verification: quarterly planning';
+  await page.getByRole('button', { name: 'Team ticket', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('radio', { name: 'Event already held', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await dialog.getByRole('textbox', { name: 'Title', exact: true }).fill(title);
+  // Every active developer starts selected. One is left out.
+  const developers = createDemoData().members.filter(m => m.isActive && m.role === 'developer');
+  await expect(dialog.getByRole('checkbox', { checked: true })).toHaveCount(developers.length);
+  const [skipped, ...chosen] = developers;
+  await dialog.getByRole('checkbox', { name: skipped.name, exact: true }).click();
+  await dialog.getByRole('button', { name: '1 day', exact: true }).click();
+  await dialog.getByRole('button', { name: `Add for ${chosen.length} developers`, exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const saved = (await readDemoData(page)).items.filter(item => item.title === title);
+  expect(saved.map(item => item.assigneeId).sort()).toEqual(chosen.map(m => m.id).sort());
+  for (const item of saved) {
+    expect(item).toMatchObject({ type: 'task', status: 'done', estimateHours: 6.5, dueDate: null });
+    expect(item.completedAt && new Date(item.completedAt) <= new Date()).toBe(true);
+  }
+});
+
+test('team work to do follows the project members', async ({ page }) => {
+  await openDemo(page, 'team');
+  const title = 'Browser verification: security training';
+  const data = createDemoData();
+  const project = data.projects.find(p => !p.isAdhoc && p.memberIds.length > 1)!;
+  await page.getByRole('button', { name: 'Team ticket', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('radio', { name: 'Work to do', exact: true }).click();
+  await dialog.getByRole('textbox', { name: 'Title', exact: true }).fill(title);
+  await chooseOption(page, dialog.getByRole('combobox', { name: 'Project', exact: true }), project.name);
+  const members = data.members.filter(m => m.isActive && m.role === 'developer' && project.memberIds.includes(m.id));
+  await expect(dialog.getByRole('checkbox')).toHaveCount(members.length);
+  await dialog.getByRole('button', { name: `Add for ${members.length} developer${members.length === 1 ? '' : 's'}`, exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const saved = (await readDemoData(page)).items.filter(item => item.title === title);
+  expect(saved.map(item => item.assigneeId).sort()).toEqual(members.map(m => m.id).sort());
+  expect(saved.every(item => item.status === 'todo' && item.projectId === project.id && item.estimateHours === 4)).toBe(true);
+});
+
+test('a half-day holiday is listed and saved as a half day', async ({ page }) => {
+  await openDemo(page, 'settings');
+  const nextMonday = shiftDate(getWeekStart(new Date(), 'Asia/Kolkata'), 7, 'Asia/Kolkata');
+  await page.getByRole('button', { name: 'Add holiday', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: 'Holiday name', exact: true }).fill('Founders day');
+  await pickDate(page, dialog.getByRole('button', { name: /^Date/ }), nextMonday);
+  await dialog.getByRole('radio', { name: 'Half day', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Add holiday', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect((await readDemoData(page)).holidays).toContainEqual(expect.objectContaining({ name: 'Founders day', date: nextMonday, type: 'half_day' }));
+  await expect(page.locator('.holiday-list')).toContainText('Founders dayHalf day');
 });

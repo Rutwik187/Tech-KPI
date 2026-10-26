@@ -64,6 +64,13 @@
       "when": 1793003600000,
       "tag": "0008_hours_without_due_date",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793007200000,
+      "tag": "0009_half_day_holidays",
+      "breakpoints": true
     }
   ]
 }

@@ -625,6 +625,8 @@
 .project-member-choice [data-slot="field-label"] { width:100%; }
 .project-member-name { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:13px; }
 .project-member-name [data-slot="badge"] { font-size:10px; }
+.developer-picker-actions { display:flex; align-items:center; gap:4px; }
+.developer-picker .project-member-list { margin-bottom:0; max-height:220px; }
 .project-phase-add,.project-phase-editor { display:flex; align-items:center; gap:8px; }
 .project-phase-add>input,.project-phase-editor>input { min-width:0; flex:1; }
 .project-phase-editor-list { display:flex; flex-direction:column; gap:8px; margin:12px 0; }
