@@ -207,6 +207,9 @@ export function ticketExtension(data: DashboardData, item: WorkItem, hours: numb
 }
 /** The largest estimate a ticket can hold. More work than this belongs in a new ticket. */
 export const MAX_TICKET_HOURS = 80;
+/** Focused hours in one working day. The estimate's day presets count in these. */
+export const WORKDAY_HOURS = 6.5;
+export const ESTIMATE_PRESETS = [{ label: 'Half day', hours: WORKDAY_HOURS / 2 }, { label: '1 day', hours: WORKDAY_HOURS }, { label: '2 days', hours: WORKDAY_HOURS * 2 }];
 /** A ticket due date or a project target that already exists and is being moved. Both need a reason. */
 /** A ticket opened with `hours` adds hours even without a due date. Without it, a ticket with no due date gets its first one. */
 export type ExtendTarget = { kind: 'ticket'; item: WorkItem; hours?: boolean } | { kind: 'project'; project: Project };

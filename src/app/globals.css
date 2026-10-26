@@ -794,6 +794,7 @@ button.project-title:hover { color:var(--primary); }
 .extend-quick { padding-bottom:2px; }
 .extend-preview { grid-column:1/-1; margin:0; font-size:12px; color:var(--muted-foreground); }
 .extend-quick { display:flex; gap:6px; flex-wrap:wrap; }
+.estimate-presets { display:flex; gap:6px; flex-wrap:wrap; }
 .extend-preview strong { color:var(--foreground); font-weight:600; }
 .extend-warning { border-color:color-mix(in oklch, var(--warning-foreground) 35%, var(--border)); background:var(--warning); }
 

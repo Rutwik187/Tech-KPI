@@ -16,7 +16,7 @@ import { FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { displayDate, displayDateTime, findProject, hours, isAdhocProject, isDone, leaveDays, ownerChoices, ownerHomeProject, projectMembers, projectPhases, selectableProjects, today, withOwner, withProject, type MutationFn, type PickedByHand, type PhaseDraft, type QuickAction, type WorkClassification } from './lib';
+import { displayDate, displayDateTime, ESTIMATE_PRESETS, findProject, hours, isAdhocProject, isDone, leaveDays, MAX_TICKET_HOURS, ownerChoices, ownerHomeProject, projectMembers, projectPhases, selectableProjects, today, withOwner, withProject, WORKDAY_HOURS, type MutationFn, type PickedByHand, type PhaseDraft, type QuickAction, type WorkClassification } from './lib';
 
 export function FormChoice({ name, value, defaultValue, onValueChange, options, disabled, id, 'aria-labelledby': labelledBy, 'aria-describedby': describedBy }: { name?: string; value?: string; defaultValue?: string; onValueChange?: (value: string) => void; options: { value: string; label: string }[]; disabled?: boolean; id?: string; 'aria-labelledby'?: string; 'aria-describedby'?: string }) {
   const [localValue, setLocalValue] = useState(defaultValue ?? options[0]?.value ?? '');
@@ -27,6 +27,16 @@ export function FormChoice({ name, value, defaultValue, onValueChange, options, 
     </ToggleGroup>
     {name && <Input type="hidden" name={name} value={selected} />}
   </>;
+}
+
+/** The estimate in hours, with one-click picks for half a day, a day, and two days. */
+export function EstimateField({ defaultValue }: { defaultValue: number }) {
+  const [value, setValue] = useState(String(defaultValue));
+  return <FormField>Estimate <span className="optional">hours</span>
+    <Input type="number" name="estimateHours" min={.5} max={MAX_TICKET_HOURS} step={.25} required value={value} onChange={event => setValue(event.target.value)} />
+    <div className="estimate-presets" role="group" aria-label="Set the estimate in days">{ESTIMATE_PRESETS.map(preset => <Button key={preset.label} type="button" size="sm" variant={Number(value) === preset.hours ? 'secondary' : 'outline'} aria-pressed={Number(value) === preset.hours} onClick={() => setValue(String(preset.hours))}>{preset.label}</Button>)}</div>
+    <span className="field-help">A day is {WORKDAY_HOURS} h of focused work.</span>
+  </FormField>;
 }
 
 export function FormFooter({ busy, disabled = false, onClose, label }: { busy: boolean; disabled?: boolean; onClose: () => void; label: string }) {
@@ -121,7 +131,7 @@ export function ItemForm({ data, kind: initialKind, assigneeId, mutate, onClose,
         <ClassificationFields data={data} value={classification} onChange={setClassification} lockProjectPhase={kind === 'bug' && !!taskId} ownerPicked={ownerKnown} />
         <FieldGroup className="form-grid">
           {kind === 'task'
-            ? <><FormField>Estimate <span className="optional">hours</span><Input type="number" name="estimateHours" min={.5} max={80} step={.5} defaultValue={4} required /></FormField>
+            ? <><EstimateField defaultValue={4} />
                 <FormField>Due date <span className="optional">optional</span><FormDate name="dueDate" min={today(data.settings.timezone)} placeholder="No due date" /></FormField></>
             : <><FormField>Severity<FormChoice value={severity} onValueChange={value => setSeverity(value as WorkItem['severity'])} options={[{ value: 'normal', label: 'Normal' }, { value: 'critical', label: 'Critical' }]} /><span className="field-help">Target: {target} working hours.</span></FormField>
                 <Alert className="bug-report-note"><Clock3 /><AlertTitle>Fix by {fixBy ? displayDateTime(fixBy) : '—'}</AlertTitle><AlertDescription>On time earns 100 bug points. Up to twice the target earns 50.</AlertDescription></Alert></>}

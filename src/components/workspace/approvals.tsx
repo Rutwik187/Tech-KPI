@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { displayDate, displayDateTime, findMember, findProject, firstName, hours, isAdhocProject, MAX_TICKET_HOURS, projectPhases, ticketExtension, today, type MutationFn, type OnAction, type RequestChanges } from './lib';
 import { daysBetween, reasonLabel } from '@/lib/timeline';
 import { dayCount } from './timeline';
-import { FormChoice, FormFooter } from './forms';
+import { EstimateField, FormChoice, FormFooter } from './forms';
 import { ItemActions, PhaseTag, ProjectTag } from './parts';
 
 type ApprovalsProps = { data: DashboardData; onOpen: (id: string) => void; onAction: OnAction; onRequest: () => void; mutate: MutationFn; busy: boolean };
@@ -274,7 +274,7 @@ function ApproveRequestForm({ data, request, mutate, busy, onClose }: { data: Da
         <FieldGroup className="form-grid">
           <FormField>Project<FormSelect required value={projectId} onValueChange={value => { setProjectId(value); setPhaseId(''); }}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect></FormField>
           <FormField>Phase<FormSelect value={phaseId} disabled={!phases.length} onValueChange={setPhaseId}><option value="">Ad hoc</option>{phases.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect></FormField>
-          <FormField>Estimate <span className="optional">hours</span><Input type="number" name="estimateHours" min={.5} max={80} step={.5} required defaultValue={request.estimateHours} /></FormField>
+          <EstimateField defaultValue={request.estimateHours} />
           <FormField>Due date <span className="optional">optional</span><FormDate name="dueDate" defaultValue={request.dueDate ?? undefined} min={today(data.settings.timezone)} placeholder="No due date" /></FormField>
           <FormField>Priority<FormChoice name="priority" defaultValue={request.priority} options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }, { value: 'urgent', label: 'Urgent' }]} /></FormField>
         </FieldGroup>
