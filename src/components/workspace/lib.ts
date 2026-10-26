@@ -1,6 +1,6 @@
 import type { BugStatus, DashboardData, DueDateRequest, Holiday, Leave, Member, Project, Settings, TaskStatus, TicketRequest, WorkItem } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
-import { dueDateAfterHours, getBugKpi, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
+import { dateKey, dueDateAfterHours, getBugKpi, getWorkCalendar, isWorkingDay, localDate, shiftDate } from '@/lib/kpi';
 
 /** The database calls a ticket a "task". Everything a person reads says "ticket". */
 export const kindLabels = { task: 'Ticket', bug: 'Bug' } as const;
@@ -162,11 +162,14 @@ export function leaveDays(data: DashboardData, start: string, end: string) {
 
 export type WorkClassification = { projectId: string; phaseId: string | null; assigneeId: string };
 type ItemInput = Pick<WorkItem, 'type' | 'title' | 'description' | 'projectId' | 'assigneeId' | 'priority' | 'severity' | 'estimateHours' | 'dueDate' | 'taskId' | 'phaseId'>;
+/** The same ticket for several developers. With `doneOn`, it records an event they already attended as finished work. */
+export type TeamTicketInput = Pick<WorkItem, 'title' | 'description' | 'projectId' | 'phaseId' | 'priority' | 'estimateHours' | 'dueDate'> & { assigneeIds: string[]; doneOn?: string };
 export type RequestInput = Pick<TicketRequest, 'title' | 'description' | 'note' | 'projectId' | 'phaseId' | 'estimateHours' | 'dueDate' | 'priority'>;
 export type RequestChanges = Partial<Pick<TicketRequest, 'title' | 'projectId' | 'phaseId' | 'estimateHours' | 'dueDate' | 'priority'>>;
 export type PhaseDraft = { name: string; description: string };
 export type Mutation =
   | ({ action: 'createItem' } & ItemInput)
+  | ({ action: 'createTickets' } & TeamTicketInput)
   | ({ action: 'requestTicket' } & RequestInput)
   | { action: 'approveTicketRequest'; id: string; patch?: RequestChanges; note?: string }
   | { action: 'declineTicketRequest'; id: string; reason: string }
@@ -183,7 +186,7 @@ export type Mutation =
   | { action: 'createPhase'; projectId: string; name: string; description: string }
   | { action: 'updatePhase'; id: string; name?: string; description?: string }
   | { action: 'saveSettings'; settings: Settings }
-  | ({ action: 'addLeave'; endDate?: string } & Omit<Leave, 'id'>)
+  | ({ action: 'addLeave'; userIds: string[]; endDate?: string } & Omit<Leave, 'id' | 'userId'>)
   | ({ action: 'addHoliday' } & Omit<Holiday, 'id'>)
   | { action: 'deleteLeave'; ids: string[] }
   | { action: 'deleteHoliday'; id: string };
@@ -196,6 +199,7 @@ export type ModalState =
   | { type: 'project'; project?: Project }
   | { type: 'leave'; userId?: string }
   | { type: 'holiday' }
+  | { type: 'teamTicket' }
   | { type: 'extend'; target: ExtendTarget }
   | null;
 /** What more hours do to a ticket: they join the estimate, and the due date moves by them. The server applies the same rule. */
@@ -294,6 +298,24 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
     case 'withdrawTicketRequest':
       next.requests = next.requests.filter(r => !(r.id === mutation.id && r.status === 'pending'));
       break;
+    case 'createTickets': {
+      const { timezone, workdayEnd } = next.settings;
+      if (mutation.doneOn && mutation.doneOn > dateKey(new Date(), timezone)) throw new Error('Work that is already done needs a date of today or earlier.');
+      // Done at the end of that workday, or now if the workday has not ended yet.
+      const doneAt = mutation.doneOn ? new Date(Math.min(Date.now(), localDate(mutation.doneOn, workdayEnd, timezone).getTime())).toISOString() : null;
+      for (const assigneeId of mutation.assigneeIds) {
+        const ticketId = crypto.randomUUID();
+        next.items.unshift({
+          id: ticketId, key: `UG-${String(nextKey()).padStart(3, '0')}`, type: 'task', title: mutation.title, description: mutation.description,
+          projectId: mutation.projectId, phaseId: mutation.phaseId, assigneeId, status: doneAt ? 'done' : 'todo', priority: mutation.priority, severity: 'normal',
+          estimateHours: mutation.estimateHours, dueDate: doneAt ? null : mutation.dueDate, originalDueDate: doneAt ? null : mutation.dueDate,
+          createdAt: now, updatedAt: now, startedAt: doneAt, completedAt: doneAt, fixedAt: null, reportedAt: now, blocker: null, taskId: null, reopenCount: 0,
+        });
+        log(ticketId, 'task.created', { estimateHours: mutation.estimateHours, dueDate: mutation.dueDate, assigneeId });
+        if (doneAt) log(ticketId, 'task.completed', { from: 'todo', to: 'done', creditedHours: mutation.estimateHours, completedOn: doneAt });
+      }
+      break;
+    }
     case 'createItem': {
       const sequence = nextKey();
       next.items.unshift({
@@ -374,14 +396,18 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       next.settings = mutation.settings;
       break;
     case 'addLeave': {
-      const taken = new Set(next.leaves.filter(l => l.userId === mutation.userId).map(l => l.date));
-      const days = leaveDays(next, mutation.date, mutation.endDate ?? mutation.date).filter(date => !taken.has(date));
-      if (!days.length) throw new Error('Leave is already recorded for these days.');
-      days.forEach(date => next.leaves.push({ id: crypto.randomUUID(), userId: mutation.userId, date, type: mutation.type, note: mutation.note }));
+      const days = leaveDays(next, mutation.date, mutation.endDate ?? mutation.date);
+      // Days someone already has leave on are skipped, so one form can cover a whole team.
+      const fresh = mutation.userIds.flatMap(userId => {
+        const taken = new Set(next.leaves.filter(l => l.userId === userId).map(l => l.date));
+        return days.filter(date => !taken.has(date)).map(date => ({ userId, date }));
+      });
+      if (!fresh.length) throw new Error('Leave is already recorded for these days.');
+      fresh.forEach(({ userId, date }) => next.leaves.push({ id: crypto.randomUUID(), userId, date, type: mutation.type, note: mutation.note }));
       break;
     }
     case 'addHoliday':
-      next.holidays.push({ id, date: mutation.date, name: mutation.name });
+      next.holidays.push({ id, date: mutation.date, name: mutation.name, type: mutation.type });
       break;
     case 'deleteLeave':
       next.leaves = next.leaves.filter(l => !mutation.ids.includes(l.id));

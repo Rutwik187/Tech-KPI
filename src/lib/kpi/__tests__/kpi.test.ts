@@ -62,7 +62,7 @@ describe('weekly delivery and capacity', () => {
 
   it('deducts a Wednesday holiday and pauses bug clocks on that date', () => {
     const fixture = data();
-    fixture.holidays.push({ id: 'holiday', date: '2026-10-14', name: 'Holiday' });
+    fixture.holidays.push({ id: 'holiday', date: '2026-10-14', name: 'Holiday', type: 'full_day' });
     const calendar = getWorkCalendar(fixture);
     expect(calculateCapacity(developer, fixture, week)).toBe(26.4);
     expect(addWorkingHours(instant('2026-10-13T17:00:00'), 4, calendar)).toEqual(instant('2026-10-15T12:00:00'));
@@ -89,14 +89,30 @@ describe('weekly delivery and capacity', () => {
 
   it('does not deduct leave a second time when its date is a holiday', () => {
     const fixture = data();
-    fixture.holidays = [{ id: 'holiday', date: '2026-10-14', name: 'Holiday' }];
+    fixture.holidays = [{ id: 'holiday', date: '2026-10-14', name: 'Holiday', type: 'full_day' }];
     fixture.leaves = [{ id: 'leave', userId: developer.id, date: '2026-10-14', type: 'full_day', note: '' }];
+    expect(calculateCapacity(developer, fixture, week)).toBe(26.4);
+  });
+
+  it('takes half a day for a half-day holiday and keeps the office open', () => {
+    const fixture = data();
+    fixture.holidays = [{ id: 'holiday', date: '2026-10-14', name: 'Half holiday', type: 'half_day' }];
+    expect(calculateCapacity(developer, fixture, week)).toBe(29.7);
+    expect(isWorkingDay('2026-10-14', getWorkCalendar(fixture))).toBe(true);
+  });
+
+  it('takes the whole day when half a day of leave falls on a half-day holiday', () => {
+    const fixture = data();
+    fixture.holidays = [{ id: 'holiday', date: '2026-10-14', name: 'Half holiday', type: 'half_day' }];
+    fixture.leaves = [{ id: 'leave', userId: developer.id, date: '2026-10-14', type: 'half_day', note: '' }];
+    expect(calculateCapacity(developer, fixture, week)).toBe(26.4);
+    fixture.leaves[0].type = 'full_day';
     expect(calculateCapacity(developer, fixture, week)).toBe(26.4);
   });
 
   it('does not deduct leave or holidays on the weekend', () => {
     const fixture = data();
-    fixture.holidays = [{ id: 'holiday', date: '2026-10-17', name: 'Holiday' }];
+    fixture.holidays = [{ id: 'holiday', date: '2026-10-17', name: 'Holiday', type: 'full_day' }];
     fixture.leaves = [{ id: 'leave', userId: developer.id, date: '2026-10-18', type: 'full_day', note: '' }];
     expect(calculateCapacity(developer, fixture, week)).toBe(33);
   });
@@ -308,7 +324,7 @@ describe('locked weekly reports', () => {
     fixture.settings.deliveryWeight = 20;
     fixture.settings.bugWeight = 80;
     fixture.settings.bandOnTarget = 95;
-    fixture.holidays.push({ id: 'holiday', date: '2026-10-14', name: 'New holiday' });
+    fixture.holidays.push({ id: 'holiday', date: '2026-10-14', name: 'New holiday', type: 'full_day' });
     const frozen = calculateMemberKpi(fixture.members[0], fixture, week, now);
     expect(frozen).toMatchObject({
       capacityHours: original.capacityHours, creditedHours: original.creditedHours,

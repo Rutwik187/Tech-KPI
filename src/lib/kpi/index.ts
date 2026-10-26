@@ -92,12 +92,13 @@ export function getWorkCalendar(data: DashboardData, assigneeId?: string): WorkC
     workingDays: data.settings.workingDays,
     workdayStart: data.settings.workdayStart,
     workdayEnd: data.settings.workdayEnd,
-    holidays: new Set(data.holidays.map((holiday) => holiday.date)),
+    // A half-day holiday is still a working day. It lowers hours at work in calculateCapacity instead.
+    holidays: new Set(data.holidays.filter((holiday) => holiday.type !== 'half_day').map((holiday) => holiday.date)),
     extraDaysOff: assigneeId ? new Set(data.leaves.filter((leave) => leave.userId === assigneeId && leave.type === 'full_day').map((leave) => leave.date)) : undefined,
   };
 }
 
-/** Weekly hours minus leave and holidays. With `upTo`, only days on or before that date count. */
+/** Weekly hours minus leave and holidays. A half-day holiday takes half a day. With `upTo`, only days on or before that date count. */
 export function calculateCapacity(member: Member & { joinedOn?: string }, data: DashboardData, weekStart: string, upTo?: string): number {
   const calendar = getWorkCalendar(data);
   const standardDays = new Set(data.settings.workingDays).size;
@@ -111,10 +112,13 @@ export function calculateCapacity(member: Member & { joinedOn?: string }, data: 
       leaveByDate.set(leave.date, Math.max(leaveByDate.get(leave.date) || 0, leave.type === 'full_day' ? 1 : 0.5));
     }
   }
+  const halfHolidays = new Set(data.holidays.filter((holiday) => holiday.type === 'half_day').map((holiday) => holiday.date));
   let availableDays = 0;
   for (let day = 0; day < 7; day++) {
     const date = shiftDate(monday, day, calendar.timezone);
-    if (date >= firstDay && (!upTo || date <= upTo) && isWorkingDay(date, calendar)) availableDays += 1 - (leaveByDate.get(date) || 0);
+    // Half a day of leave on a half-day holiday takes the rest of the day, never more.
+    const off = Math.min(1, (leaveByDate.get(date) || 0) + (halfHolidays.has(date) ? 0.5 : 0));
+    if (date >= firstDay && (!upTo || date <= upTo) && isWorkingDay(date, calendar)) availableDays += 1 - off;
   }
   return roundHours(member.capacity * availableDays / standardDays);
 }

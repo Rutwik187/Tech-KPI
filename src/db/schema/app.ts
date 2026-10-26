@@ -125,7 +125,8 @@ export const leaves = pgTable("tech_kpi_leave", {
 }, (t) => [uniqueIndex("tech_kpi_leave_user_date_idx").on(t.userId, t.date), check("tech_kpi_leave_type", sql`${t.type} IN ('full_day','half_day')`)]);
 export const holidays = pgTable("tech_kpi_holiday", {
   id: uuid("id").defaultRandom().primaryKey(), date: date("date", { mode: "string" }).notNull().unique(), name: text("name").notNull(),
-});
+  type: text("type").$type<"full_day" | "half_day">().notNull().default("full_day"),
+}, (t) => [check("tech_kpi_holiday_type", sql`${t.type} IN ('full_day','half_day')`)]);
 export const settings = pgTable("tech_kpi_settings", {
   id: integer("id").primaryKey().default(1), value: jsonb("value").$type<Settings>().notNull(),
   updatedAt: stamp("updated_at").defaultNow().notNull(),

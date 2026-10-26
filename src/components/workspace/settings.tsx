@@ -5,6 +5,7 @@ import { AlertTriangle, CalendarDays, Check, CircleHelp, LoaderCircle, Plus, Tar
 import type { DashboardData, Settings } from '@/lib/types';
 import { FormDate, FormField, Panel } from '@/components/ui';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { FieldGroup, FieldLabel } from '@/components/ui/field';
@@ -78,7 +79,7 @@ export function SettingsPage({ data, mutate, busy, onHoliday }: { data: Dashboar
       <Panel title="Holidays" action={<Button variant="link" size="sm" onClick={onHoliday}><Plus data-icon="inline-start" size={13} />Add holiday</Button>}>
         {data.holidays.length === 0
           ? <div className="inline-empty"><CalendarDays size={21} /><div><strong>No holidays yet</strong><p>Add company and public holidays here.</p></div></div>
-          : <div className="holiday-list">{[...data.holidays].sort((a, b) => a.date.localeCompare(b.date)).map(h => <div key={h.id}><span className="holiday-date"><CalendarDays size={15} />{displayDate(h.date, { year: 'numeric' })}</span><strong>{h.name}</strong><Button variant="ghost" size="icon" aria-label={`Remove ${h.name}`} onClick={() => void mutate({ action: 'deleteHoliday', id: h.id }, 'Holiday removed')}><X size={14} /></Button></div>)}</div>}
+          : <div className="holiday-list">{[...data.holidays].sort((a, b) => a.date.localeCompare(b.date)).map(h => <div key={h.id}><span className="holiday-date"><CalendarDays size={15} />{displayDate(h.date, { year: 'numeric' })}</span><strong>{h.name}{h.type === 'half_day' && <Badge variant="secondary" className="ml-2">Half day</Badge>}</strong><Button variant="ghost" size="icon" aria-label={`Remove ${h.name}`} onClick={() => void mutate({ action: 'deleteHoliday', id: h.id }, 'Holiday removed')}><X size={14} /></Button></div>)}</div>}
       </Panel>
     </div>
   </>;

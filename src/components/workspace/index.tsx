@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDownToLine, ArrowRight, BellDot, Bug, CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, ClipboardCheck, Coffee, Eye, FolderKanban, LayoutDashboard, ListTodo, Plus, RotateCcw, Settings2, Target, Users } from 'lucide-react';
+import { ArrowDownToLine, ArrowRight, BellDot, Bug, CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, ClipboardCheck, Coffee, Eye, FolderKanban, LayoutDashboard, ListTodo, Plus, RotateCcw, Settings2, Target, Users, UsersRound } from 'lucide-react';
 import type { DashboardData, Project, WorkItem } from '@/lib/types';
 import { calculateTeamKpi, getWeekStart, shiftDate } from '@/lib/kpi';
 import { Avatar, EmptyState, FormSelect, Panel } from '@/components/ui';
@@ -27,7 +27,7 @@ import { Team } from './team';
 import { Projects } from './projects';
 import { SettingsPage } from './settings';
 import { Account } from './account';
-import { HolidayForm, ItemForm, LeaveForm, MemberForm, ProjectForm, ReasonForm } from './forms';
+import { HolidayForm, ItemForm, LeaveForm, MemberForm, ProjectForm, ReasonForm, TeamTicketForm } from './forms';
 import { ItemDrawer } from './item-drawer';
 import { ProjectDrawer } from './project-drawer';
 import { ExtendForm } from './timeline';
@@ -176,7 +176,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     approvals: !isAdmin && newTicket,
     standup: newTicket,
     bugs: isAdmin && <Button onClick={() => addItem('bug')}><Plus data-icon="inline-start" size={17} />Log bug</Button>,
-    team: <><Button variant="outline" onClick={() => setModal({ type: 'leave' })}><CalendarPlus data-icon="inline-start" size={16} />Add leave</Button><Button onClick={() => setModal({ type: 'member' })}><Plus data-icon="inline-start" size={17} />Add member</Button></>,
+    team: <><Button variant="outline" onClick={() => setModal({ type: 'leave' })}><CalendarPlus data-icon="inline-start" size={16} />Add leave</Button><Button variant="outline" onClick={() => setModal({ type: 'teamTicket' })}><UsersRound data-icon="inline-start" size={16} />Team ticket</Button><Button onClick={() => setModal({ type: 'member' })}><Plus data-icon="inline-start" size={17} />Add member</Button></>,
     projects: isAdmin && <Button onClick={() => setModal({ type: 'project' })}><Plus data-icon="inline-start" size={17} />New project</Button>,
   };
   // Dialogs work on the latest copy of a record, so a refresh never shows stale dates.
@@ -230,6 +230,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     {modal?.type === 'project' && <ProjectForm data={data} editing={data.projects.find(p => p.id === modal.project?.id) ?? modal.project} mutate={mutate} onClose={() => setModal(null)} onExtend={extendProject} busy={busy} />}
     {modal?.type === 'leave' && <LeaveForm data={data} userId={modal.userId} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {modal?.type === 'holiday' && <HolidayForm mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
+    {modal?.type === 'teamTicket' && <TeamTicketForm data={data} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {extendTarget && <ExtendForm target={extendTarget} data={data} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {selectedProject && !modal && <ProjectDrawer data={data} project={selectedProject} onClose={() => setProjectId(null)} onEdit={() => setModal({ type: 'project', project: selectedProject })} onExtend={() => extendProject(selectedProject)} onOpenItem={id => { setProjectId(null); setSelectedId(id); }} />}
     {selected && !quickAction && !modal && <ItemDrawer item={selected} data={data} busy={busy} onClose={() => setSelectedId(null)} onAction={act} onAddHours={() => addHours(selected)} onExtend={() => extendTicket(selected)} mutate={mutate} />}
