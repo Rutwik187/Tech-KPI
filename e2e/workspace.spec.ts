@@ -682,6 +682,32 @@ test('an admin declines a ticket request with a reason the developer can read', 
   await expect(mine).toContainText('Use the existing stock alert instead.');
 });
 
+test('an approved request’s ticket is completed from its request card', async ({ page }) => {
+  await openDemo(page, 'approvals');
+  const viewAs = page.getByRole('combobox', { name: 'View the demo as', exact: true });
+  const title = 'Add UPI autopay to checkout';
+  await page.locator('.request-card').filter({ hasText: title }).getByRole('button', { name: 'Approve', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Approve and create ticket', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const itemId = (await readDemoData(page)).requests.find(row => row.id === 'demo-request-1')?.itemId;
+
+  // The developer completes it from their request, so it waits for review.
+  await chooseOption(page, viewAs, 'Aarav Mehta · Developer');
+  const mine = page.locator('.request-card').filter({ hasText: title });
+  await mine.getByRole('button', { name: 'Complete', exact: true }).click();
+  await expect(mine).toContainText('Waiting for review');
+  expect((await readDemoData(page)).items.find(item => item.id === itemId)).toMatchObject({ status: 'in_review' });
+
+  // The admin approves it from the reviewed card.
+  await chooseOption(page, viewAs, 'Rohan Desai · Admin');
+  const reviewed = page.locator('.request-list-compact .request-card').filter({ hasText: title });
+  await reviewed.getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect(reviewed).toContainText('Completed');
+  await expect(reviewed.getByRole('button', { name: /^Open ticket/ })).toBeVisible();
+  expect((await readDemoData(page)).items.find(item => item.id === itemId)).toMatchObject({ status: 'done' });
+});
+
 test('an admin extends a project timeline with a reason and the history shows why', async ({ page }) => {
   await openDemo(page, 'projects');
   const sample = createDemoData().projects.find(project => project.id === 'demo-inventory')!;

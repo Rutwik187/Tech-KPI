@@ -76,7 +76,7 @@ function AdminApprovals({ data, onOpen, onAction, mutate, busy }: ApprovalsProps
 
     {reviewed.length > 0 && <Panel title="Recently reviewed requests">
       <div className="request-list request-list-compact">{reviewed.map(request => <RequestCard key={request.id} data={data} request={request} compact
-        actions={request.itemId && data.items.some(i => i.id === request.itemId) ? <Button variant="ghost" size="sm" onClick={() => onOpen(request.itemId!)}>Open ticket<ArrowUpRight data-icon="inline-end" /></Button> : undefined} />)}</div>
+        actions={ticketActions({ data, request, admin: true, onOpen, onAction, busy })} />)}</div>
     </Panel>}
 
     {approving && <ApproveRequestForm data={data} request={approving} mutate={mutate} busy={busy} onClose={() => setApproving(null)} />}
@@ -86,7 +86,7 @@ function AdminApprovals({ data, onOpen, onAction, mutate, busy }: ApprovalsProps
   </>;
 }
 
-function DeveloperApprovals({ data, onOpen, onRequest, mutate, busy }: ApprovalsProps) {
+function DeveloperApprovals({ data, onOpen, onAction, onRequest, mutate, busy }: ApprovalsProps) {
   const [withdrawing, setWithdrawing] = useState<string | null>(null);
   const order = { pending: 0, declined: 1, approved: 2 } as const;
   const mine = [...data.requests].sort((a, b) => order[a.status] - order[b.status] || b.createdAt.localeCompare(a.createdAt));
@@ -101,9 +101,7 @@ function DeveloperApprovals({ data, onOpen, onRequest, mutate, busy }: Approvals
               ? withdrawing === request.id
                 ? <span className="confirm-inline"><span>Withdraw this request?</span><Button size="sm" variant="destructive" disabled={busy} onClick={async () => { if (await mutate({ action: 'withdrawTicketRequest', id: request.id }, 'Request withdrawn')) setWithdrawing(null); }}>Withdraw</Button><Button size="sm" variant="ghost" onClick={() => setWithdrawing(null)}>Keep</Button></span>
                 : <Button variant="ghost" size="sm" onClick={() => setWithdrawing(request.id)}>Withdraw</Button>
-              : request.status === 'approved' && request.itemId && data.items.some(i => i.id === request.itemId)
-                ? <Button variant="outline" size="sm" onClick={() => onOpen(request.itemId!)}>Open ticket<ArrowUpRight data-icon="inline-end" /></Button>
-                : undefined
+              : ticketActions({ data, request, admin: false, onOpen, onAction, busy })
           } />)}</div>
         : <EmptyState title="No requests yet" description="Ask for a ticket when you take on new work. Your admin checks the estimate first." action={<Button onClick={onRequest}><Plus data-icon="inline-start" />Request ticket</Button>} />}
     </Panel>
@@ -120,6 +118,16 @@ function DeveloperApprovals({ data, onOpen, onRequest, mutate, busy }: Approvals
         ? <div className="finished-list">{finished.map(item => <FinishedRow key={item.id} data={data} item={item} onOpen={onOpen} action={<span className="cell-muted">{item.type === 'task' ? 'Waiting for review' : 'Waiting for verification'}</span>} />)}</div>
         : <EmptyState title="Nothing waiting" description="Complete a ticket and it waits here for approval." />}
     </Panel>
+  </>;
+}
+
+/** An approved request's ticket: open it, or complete it from the card. Nothing when there is no ticket. */
+function ticketActions({ data, request, admin, onOpen, onAction, busy }: { data: DashboardData; request: TicketRequest; admin: boolean; onOpen: (id: string) => void; onAction: OnAction; busy: boolean }) {
+  const item = request.status === 'approved' && request.itemId ? data.items.find(i => i.id === request.itemId) : undefined;
+  if (!item) return undefined;
+  return <>
+    <Button variant="ghost" size="sm" onClick={() => onOpen(item.id)}>Open ticket<ArrowUpRight data-icon="inline-end" /></Button>
+    <ItemActions item={item} admin={admin} onAction={onAction} busy={busy} />
   </>;
 }
 
