@@ -146,6 +146,51 @@ export function FormDate({ value, defaultValue, onValueChange, min, max, placeho
   </span>;
 }
 
+export type FormDateRangeProps = Pick<InputHTMLAttributes<HTMLInputElement>, "id" | "disabled" | "className" | "aria-label" | "aria-labelledby" | "aria-describedby"> & {
+  /** The first day, `YYYY-MM-DD`. */
+  start: string;
+  /** The last day, `YYYY-MM-DD`. The same as `start` for a single day. */
+  end: string;
+  min?: string;
+  max?: string;
+  onValueChange: (start: string, end: string) => void;
+};
+
+/** A shadcn date range picker. The first click picks the first day; the second picks the last day and closes it. */
+export function FormDateRange({ start, end, min, max, onValueChange, disabled, className, ...triggerProps }: FormDateRangeProps) {
+  const [open, setOpen] = useState(false);
+  // The day picked first since the calendar opened. The next click completes the range.
+  const [anchor, setAnchor] = useState<string>();
+  const [from, to] = [toDate(start), toDate(end)];
+  const [fromDate, toDateLimit] = [toDate(min), toDate(max)];
+  function pick(date: Date) {
+    const day = toKey(date);
+    if (!anchor) {
+      setAnchor(day);
+      onValueChange(day, day);
+      return;
+    }
+    setAnchor(undefined);
+    setOpen(false);
+    onValueChange(anchor < day ? anchor : day, anchor < day ? day : anchor);
+  }
+  const label = from && to ? new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" }).formatRange(from, to) : "Pick dates";
+  return <Popover open={open} onOpenChange={next => { setOpen(next); setAnchor(undefined); }}>
+    <PopoverTrigger asChild>
+      <Button {...triggerProps} type="button" variant="outline" disabled={disabled} aria-haspopup="dialog" aria-expanded={open}
+        data-start={start || undefined} data-end={end || undefined} className={cn("form-date-trigger w-full justify-start font-normal", !from && "text-muted-foreground", className)}>
+        <CalendarIcon data-icon="inline-start" aria-hidden="true" /><span className="truncate">{label}</span>
+      </Button>
+    </PopoverTrigger>
+    <PopoverContent className="w-auto p-0" align="start">
+      <Calendar mode="range" numberOfMonths={2} selected={from && to ? { from, to } : undefined} defaultMonth={from ?? fromDate} weekStartsOn={1}
+        disabled={[...(fromDate ? [{ before: fromDate }] : []), ...(toDateLimit ? [{ after: toDateLimit }] : [])]}
+        onSelect={(_, date) => pick(date)} />
+      <p className="border-t px-3 py-2 text-xs text-muted-foreground" aria-live="polite">{anchor ? "Now pick the last day. For one day, pick the same day again." : "Pick the first day, then the last day."}</p>
+    </PopoverContent>
+  </Popover>;
+}
+
 export type FormCheckboxProps = Pick<InputHTMLAttributes<HTMLInputElement>, "id" | "name" | "checked" | "defaultChecked" | "required" | "disabled" | "className" | "form" | "aria-label" | "aria-labelledby" | "aria-describedby" | "aria-invalid"> & {
   value?: string;
   onCheckedChange?: (checked: boolean) => void;
