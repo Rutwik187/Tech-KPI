@@ -5,27 +5,41 @@ import Link from 'next/link';
 import clsx from 'clsx';
 import { ArrowRight, ArrowUpRight, Bug, CalendarClock, ChevronRight, CircleDashed, CircleHelp, Clock3, FolderKanban, Pencil } from 'lucide-react';
 import type { DashboardData, Project } from '@/lib/types';
-import { Avatar, EmptyState, FormCheckbox, FormField, Panel, ProgressBar } from '@/components/ui';
+import { Avatar, EmptyState, FormCheckbox, FormField, FormSelect, Panel, ProgressBar } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { projectTimeline } from '@/lib/timeline';
 import { ExtendedBadge, HealthBadge, plural, TimelineStrip } from './timeline';
-import { firstName, hours, isAdhocProject, isDone, projectPhases, projectTeam, routeFor, today, type MutationFn } from './lib';
+import { findMember, firstName, hours, isAdhocProject, isDone, projectPhases, projectTeam, routeFor, today, type MutationFn } from './lib';
 
 type ProjectActions = { onEdit: (project: Project) => void; onOpen: (id: string) => void; onExtend: (project: Project) => void; mutate: MutationFn };
 
+/** A developer's projects: the ones they are a member of, and any they own work in. Everyone is in Ad hoc, so it counts only with work. */
+function worksOn(data: DashboardData, project: Project, memberId: string) {
+  return (!isAdhocProject(project) && project.memberIds.includes(memberId)) || data.items.some(item => item.projectId === project.id && item.assigneeId === memberId);
+}
+
 export function Projects({ data, onEdit, onOpen, onExtend, mutate }: { data: DashboardData } & ProjectActions) {
   const [showArchived, setShowArchived] = useState(false);
+  const [developerId, setDeveloperId] = useState('all');
   const isAdmin = data.currentUser.role === 'admin';
-  const list = data.projects.filter(p => showArchived || !p.isArchived).sort((a, b) => Number(isAdhocProject(b)) - Number(isAdhocProject(a)) || Number(a.isArchived) - Number(b.isArchived) || a.name.localeCompare(b.name));
+  const developers = data.members.filter(m => m.isActive && m.role === 'developer').sort((a, b) => a.name.localeCompare(b.name));
+  const developer = developerId === 'all' ? undefined : findMember(data, developerId);
+  const list = data.projects.filter(p => (showArchived || !p.isArchived) && (!developer || worksOn(data, p, developer.id)))
+    .sort((a, b) => Number(isAdhocProject(b)) - Number(isAdhocProject(a)) || Number(a.isArchived) - Number(b.isArchived) || a.name.localeCompare(b.name));
   const active = data.projects.filter(p => !p.isArchived && !isAdhocProject(p)).length;
   return <>
     <div className="project-toolbar">
-      <span>{active} active project{active === 1 ? '' : 's'} · Ad hoc holds work outside a project</span>
-      {data.projects.some(p => p.isArchived) && <FormField className="checkbox-label"><FormCheckbox checked={showArchived} onCheckedChange={setShowArchived} />Show archived</FormField>}
+      <span>{developer ? `${list.length} project${list.length === 1 ? '' : 's'} with ${developer.name}` : `${active} active project${active === 1 ? '' : 's'} · Ad hoc holds work outside a project`}</span>
+      <div className="filter-controls">
+        {isAdmin && <FormSelect aria-label="Filter by developer" value={developerId} onValueChange={setDeveloperId}><option value="all">All developers</option>{developers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</FormSelect>}
+        {data.projects.some(p => p.isArchived) && <FormField className="checkbox-label"><FormCheckbox checked={showArchived} onCheckedChange={setShowArchived} />Show archived</FormField>}
+      </div>
     </div>
-    {list.length === 0 ? <Panel><EmptyState title="No projects yet" description={isAdmin ? 'Create a project, choose its team, and add phases if you need them.' : 'Your admin will add you to a project.'} /></Panel>
+    {list.length === 0 ? <Panel>{developer
+        ? <EmptyState title={`No projects with ${firstName(developer)}`} description={`${firstName(developer)} is not on any ${showArchived ? '' : 'active '}project and owns no work in one.`} action={<Button variant="outline" onClick={() => setDeveloperId('all')}>Show all projects</Button>} />
+        : <EmptyState title="No projects yet" description={isAdmin ? 'Create a project, choose its team, and add phases if you need them.' : 'Your admin will add you to a project.'} />}</Panel>
       : <div className="projects-grid">{list.map(project => <ProjectCard key={project.id} data={data} project={project} isAdmin={isAdmin} onEdit={onEdit} onOpen={onOpen} onExtend={onExtend} mutate={mutate} />)}</div>}
     <div className="list-hint"><CircleHelp size={14} />{isAdmin ? 'Open a project to see its progress chart and timeline history. Moving a target date needs a reason, and everyone on the project can read it.' : 'Open a project to see its progress and why its target moved.'}</div>
   </>;

@@ -1110,3 +1110,16 @@ test('a half-day holiday is listed and saved as a half day', async ({ page }) =>
   expect((await readDemoData(page)).holidays).toContainEqual(expect.objectContaining({ name: 'Founders day', date: nextMonday, type: 'half_day' }));
   await expect(page.locator('.holiday-list')).toContainText('Founders dayHalf day');
 });
+
+test('an admin filters projects by developer', async ({ page }) => {
+  await openDemo(page, 'projects');
+  const card = (name: string) => page.locator('.project-card').filter({ has: page.getByRole('button', { name, exact: true }) });
+  await expect(card('Inventory management')).toBeVisible();
+  // Aarav is on Commerce, and not on Inventory management.
+  await chooseOption(page, page.getByRole('combobox', { name: 'Filter by developer', exact: true }), 'Aarav Mehta');
+  await expect(page.locator('.project-toolbar')).toContainText('with Aarav Mehta');
+  await expect(card('Commerce')).toBeVisible();
+  await expect(card('Inventory management')).toHaveCount(0);
+  await chooseOption(page, page.getByRole('combobox', { name: 'Filter by developer', exact: true }), 'All developers');
+  await expect(card('Inventory management')).toBeVisible();
+});
