@@ -24,17 +24,32 @@ async function chooseOption(page: Page, trigger: Locator, label: string) {
   await expect(trigger).toHaveText(label);
 }
 
-/** Picks a calendar day (`YYYY-MM-DD`) in a shadcn date picker, moving month by month. */
-async function pickDate(page: Page, trigger: Locator, iso: string) {
-  await trigger.click();
+/** Clicks a calendar day (`YYYY-MM-DD`) in the open shadcn calendar, moving month by month. */
+async function clickDay(page: Page, iso: string) {
   const calendar = page.locator('[data-slot="popover-content"][data-state="open"] [data-slot="calendar"]');
   for (let step = 0; step < 24; step++) {
     const cell = calendar.locator(`td[data-day="${iso}"]:not([data-outside])`);
-    if (await cell.count()) { await cell.getByRole('button').click(); break; }
+    if (await cell.count()) { await cell.getByRole('button').click(); return; }
     const shown = await calendar.locator('td[data-day]:not([data-outside])').first().getAttribute('data-day');
     await calendar.getByRole('button', { name: (shown ?? '') < iso ? /next month/i : /previous month/i }).click();
   }
+}
+
+/** Picks a calendar day (`YYYY-MM-DD`) in a shadcn date picker. */
+async function pickDate(page: Page, trigger: Locator, iso: string) {
+  await trigger.click();
+  await clickDay(page, iso);
   await expect(trigger).toHaveAttribute('data-value', iso);
+  await expect(page.locator('[data-slot="popover-content"]')).toHaveCount(0);
+}
+
+/** Picks the first and last day in a shadcn date range picker. The same day twice picks one day. */
+async function pickDateRange(page: Page, trigger: Locator, start: string, end: string) {
+  await trigger.click();
+  await clickDay(page, start);
+  await clickDay(page, end);
+  await expect(trigger).toHaveAttribute('data-start', start);
+  await expect(trigger).toHaveAttribute('data-end', end);
   await expect(page.locator('[data-slot="popover-content"]')).toHaveCount(0);
 }
 
@@ -813,9 +828,8 @@ test('an admin records several days of leave from the team table and sees one ra
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('checkbox', { name: 'Ananya Rao', exact: true })).toBeChecked();
   await expect(dialog.getByRole('checkbox', { checked: true })).toHaveCount(1);
-  await dialog.getByRole('radio', { name: 'Several days', exact: true }).click();
-  await pickDate(page, dialog.getByRole('button', { name: /^First day/ }), friday);
-  await pickDate(page, dialog.getByRole('button', { name: /^Last day/ }), tuesday);
+  await pickDateRange(page, dialog.getByRole('button', { name: /^Dates/ }), friday, tuesday);
+  await expect(dialog.getByRole('radio', { name: 'Half day', exact: true })).toBeDisabled();
   // Friday to Tuesday skips the weekend: three working days.
   await expect(dialog).toContainText('3 working days');
   await dialog.getByRole('button', { name: 'Add leave', exact: true }).click();
@@ -1005,8 +1019,8 @@ test('an admin gives every developer the same half day of leave in one step', as
   await dialog.getByRole('button', { name: 'Select all', exact: true }).click();
   const developers = createDemoData().members.filter(m => m.isActive && m.role === 'developer');
   await expect(dialog.getByRole('checkbox', { checked: true })).toHaveCount(developers.length);
+  await pickDateRange(page, dialog.getByRole('button', { name: /^Dates/ }), nextMonday, nextMonday);
   await dialog.getByRole('radio', { name: 'Half day', exact: true }).click();
-  await pickDate(page, dialog.getByRole('button', { name: /^Date/ }), nextMonday);
   await expect(dialog).toContainText(`${developers.length} developers’ hours at work`);
   await dialog.getByRole('button', { name: `Add leave for ${developers.length}`, exact: true }).click();
   await expect(dialog).toBeHidden();

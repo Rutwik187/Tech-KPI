@@ -7,7 +7,7 @@ import { Activity as ActivityIcon, Bug, CalendarClock, CalendarPlus, Check, Chev
 import type { DashboardData, Holiday, Leave, Member, Phase, Project, WorkItem } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
 import { addWorkingHours, getWeekStart, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
-import { Avatar, FormCheckbox, FormDate, FormField, FormSelect, Modal } from '@/components/ui';
+import { Avatar, FormCheckbox, FormDate, FormDateRange, FormField, FormSelect, Modal } from '@/components/ui';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -18,12 +18,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { displayDate, displayDateTime, ESTIMATE_PRESETS, findProject, hours, isAdhocProject, isDone, leaveDays, MAX_TICKET_HOURS, ownerChoices, ownerHomeProject, projectMembers, projectPhases, selectableProjects, today, withOwner, withProject, WORKDAY_HOURS, type MutationFn, type PickedByHand, type PhaseDraft, type QuickAction, type WorkClassification } from './lib';
 
-export function FormChoice({ name, value, defaultValue, onValueChange, options, disabled, id, 'aria-labelledby': labelledBy, 'aria-describedby': describedBy }: { name?: string; value?: string; defaultValue?: string; onValueChange?: (value: string) => void; options: { value: string; label: string }[]; disabled?: boolean; id?: string; 'aria-labelledby'?: string; 'aria-describedby'?: string }) {
+export function FormChoice({ name, value, defaultValue, onValueChange, options, disabled, id, 'aria-labelledby': labelledBy, 'aria-describedby': describedBy }: { name?: string; value?: string; defaultValue?: string; onValueChange?: (value: string) => void; options: { value: string; label: string; disabled?: boolean }[]; disabled?: boolean; id?: string; 'aria-labelledby'?: string; 'aria-describedby'?: string }) {
   const [localValue, setLocalValue] = useState(defaultValue ?? options[0]?.value ?? '');
   const selected = value ?? localValue;
   return <>
     <ToggleGroup id={id} aria-labelledby={labelledBy} aria-describedby={describedBy} type="single" variant="outline" disabled={disabled} value={selected} onValueChange={next => { if (next) { setLocalValue(next); onValueChange?.(next); } }} className="choice-group">
-      {options.map(option => <ToggleGroupItem key={option.value} value={option.value}>{option.label}</ToggleGroupItem>)}
+      {options.map(option => <ToggleGroupItem key={option.value} value={option.value} disabled={option.disabled}>{option.label}</ToggleGroupItem>)}
     </ToggleGroup>
     {name && <Input type="hidden" name={name} value={selected} />}
   </>;
@@ -310,19 +310,27 @@ export function ProjectForm({ data, editing, mutate, onClose, onExtend, busy }: 
   </Modal>;
 }
 
-type LeaveLength = 'full_day' | 'half_day' | 'range';
 export function LeaveForm({ data, userId, mutate, onClose, busy }: { data: DashboardData; userId?: string; mutate: MutationFn; onClose: () => void; busy: boolean }) {
   // Leave lowers tracked hours, and only developers are tracked.
   const people = data.members.filter(m => m.isActive && m.role === 'developer');
   const day = today(data.settings.timezone);
   const [personIds, setPersonIds] = useState<string[]>(userId ? [userId] : []);
-  const [length, setLength] = useState<LeaveLength>('full_day');
+  const [length, setLength] = useState<Leave['type']>('full_day');
   const [start, setStart] = useState(day);
-  const [end, setEnd] = useState(shiftDate(day, 4, data.settings.timezone));
+  const [end, setEnd] = useState(day);
+  const oneDay = start === end;
+  // The server records up to two months of leave at a time.
+  const tooLong = end > shiftDate(start, 61, data.settings.timezone);
   const chosen = people.filter(m => personIds.includes(m.id));
-  const days = length === 'range' ? leaveDays(data, start, end) : start ? [start] : [];
+  const days = tooLong ? [] : leaveDays(data, start, end);
   const workingDays = new Set(data.settings.workingDays).size || 1;
-  const singleOffDay = length !== 'range' && !!start && !isWorkingDay(start, getWorkCalendar(data));
+  const singleOffDay = oneDay && !isWorkingDay(start, getWorkCalendar(data));
+  function chooseDates(first: string, last: string) {
+    setStart(first);
+    setEnd(last);
+    // A half day covers one date only.
+    if (first !== last) setLength('full_day');
+  }
   // Each person loses only the days they do not already have leave on.
   const effects = chosen.map(person => {
     const taken = new Set(data.leaves.filter(l => l.userId === person.id).map(l => l.date));
@@ -336,7 +344,7 @@ export function LeaveForm({ data, userId, mutate, onClose, busy }: { data: Dashb
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const note = String(new FormData(event.currentTarget).get('note') ?? '').trim();
-    const ok = await mutate({ action: 'addLeave', userIds: personIds, date: start, ...(length === 'range' ? { endDate: end } : {}), type: (length === 'half_day' ? 'half_day' : 'full_day') as Leave['type'], note },
+    const ok = await mutate({ action: 'addLeave', userIds: personIds, date: start, ...(oneDay ? {} : { endDate: end }), type: length, note },
       chosen.length > 1 ? `Leave added for ${chosen.length} developers. Hours at work updated.` : 'Leave added. Hours at work updated.');
     if (ok) onClose();
   }
@@ -344,20 +352,19 @@ export function LeaveForm({ data, userId, mutate, onClose, busy }: { data: Dashb
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
         <DeveloperPicker people={people} value={personIds} onChange={setPersonIds} disabled={busy} />
-        <FormField>Length<FormChoice value={length} onValueChange={value => setLength(value as LeaveLength)} options={[{ value: 'full_day', label: 'Full day' }, { value: 'half_day', label: 'Half day' }, { value: 'range', label: 'Several days' }]} /></FormField>
-        <FieldGroup className="form-grid">
-          <FormField>{length === 'range' ? 'First day' : 'Date'}<FormDate required value={start} onValueChange={next => { setStart(next); if (next > end) setEnd(next); }} /></FormField>
-          {length === 'range' && <FormField>Last day<FormDate required value={end} min={start} onValueChange={setEnd} /></FormField>}
-        </FieldGroup>
+        <FormField>Dates<FormDateRange start={start} end={end} onValueChange={chooseDates} /></FormField>
+        <FormField>Length<FormChoice value={length} onValueChange={value => setLength(value as Leave['type'])} options={[{ value: 'full_day', label: 'Full day' }, { value: 'half_day', label: 'Half day', disabled: !oneDay }]} />
+          {!oneDay && <span className="field-help">A half day covers one date only.</span>}</FormField>
         <Alert className="form-tip"><CircleHelp size={17} /><AlertDescription><p>{
-          !chosen.length ? 'Choose who is on leave.'
-          : !days.length ? 'Choose dates to see the effect.'
+          tooLong ? 'Record up to two months of leave at a time.'
+          : !chosen.length ? 'Choose who is on leave.'
+          : !days.length ? 'These dates are weekends or holidays. No leave is needed.'
           : freshDays === 0 ? 'Leave is already recorded for these days.'
-          : `${length === 'half_day' ? 'Half a day' : `${days.length} working day${days.length === 1 ? '' : 's'}`}${length === 'range' ? ` from ${displayDate(start)} to ${displayDate(end)}` : ` on ${displayDate(start, { weekday: 'short' })}`}. Lowers ${whose} hours at work by ${hours(lostHours)} h${chosen.length > 1 ? ' in total' : ''}.${length === 'range' ? ' Weekends and holidays are skipped.' : ''}${singleOffDay ? ' This date is already a day off.' : ''}${skipped > 0 ? ` ${skipped} day(s) already recorded will be skipped.` : ''}`
+          : `${length === 'half_day' ? 'Half a day' : `${days.length} working day${days.length === 1 ? '' : 's'}`}${oneDay ? ` on ${displayDate(start, { weekday: 'short' })}` : ` from ${displayDate(start)} to ${displayDate(end)}`}. Lowers ${whose} hours at work by ${hours(lostHours)} h${chosen.length > 1 ? ' in total' : ''}.${oneDay ? '' : ' Weekends and holidays are skipped.'}${singleOffDay ? ' This date is already a day off.' : ''}${skipped > 0 ? ` ${skipped} day(s) already recorded will be skipped.` : ''}`
         }</p></AlertDescription></Alert>
         <FormField>Note <span className="optional">optional</span><Input name="note" placeholder="e.g. Family function" maxLength={200} /></FormField>
       </FieldGroup>
-      <FormFooter busy={busy} disabled={!chosen.length || freshDays === 0 || (length === 'range' && end < start)} onClose={onClose} label={chosen.length > 1 ? `Add leave for ${chosen.length}` : 'Add leave'} />
+      <FormFooter busy={busy} disabled={!chosen.length || freshDays === 0} onClose={onClose} label={chosen.length > 1 ? `Add leave for ${chosen.length}` : 'Add leave'} />
     </form>
   </Modal>;
 }

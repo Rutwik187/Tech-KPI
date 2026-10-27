@@ -13,7 +13,7 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Progress } from "@/components/ui/progress";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
-export { FormField, FormSelect, FormCheckbox, FormDate } from "./form-select";
+export { FormField, FormSelect, FormCheckbox, FormDate, FormDateRange } from "./form-select";
 export type { FormSelectProps, FormCheckboxProps, FormDateProps } from "./form-select";
 
 export function initials(name: string) {
