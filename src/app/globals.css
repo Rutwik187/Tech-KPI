@@ -279,10 +279,13 @@
 .item-key { font-size:11px; font-family:ui-monospace,monospace; font-weight:400; color:var(--muted-foreground); }
 .list-summary { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:20px; }
 .summary-dot { width:5px; height:5px; border-radius:50%; }
-.list-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:20px 24px; }
+.list-toolbar { display:flex; flex-wrap:wrap; align-items:flex-start; justify-content:space-between; gap:16px; padding:20px 24px; }
 .search-control { width:300px; flex-shrink:0; }
-.filter-controls { display:flex; align-items:center; gap:8px; }
-.filter-controls [data-slot="select-trigger"] { max-width:170px; }
+.filter-controls { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:8px; }
+.list-toolbar>.filter-controls { flex:1 1 560px; }
+.filter-controls>.form-select { flex:none; }
+.filter-controls .form-select-trigger { max-width:170px; }
+.filter-controls>.form-date-trigger { width:auto; }
 .filter-meta { display:flex; align-items:center; flex-wrap:wrap; gap:20px; padding:0 24px 18px; color:var(--muted-foreground); font-size:12px; }
 .filter-meta>span { flex:1; }
 .filter-meta strong { color:var(--foreground); font-weight:500; }
@@ -493,7 +496,7 @@
 .spin { animation:spin 1s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 @media (min-width:1600px) { .main-content { padding:36px 48px 0; } .topbar { padding-inline:48px; } }
-@media (max-width:1280px) { .main-content { padding-inline:24px; } .topbar { padding-inline:24px; } .metrics-grid { gap:12px; } .metric-card { padding:18px; } .metric-sparkline { right:18px; width:50px; } .metric-card:has(.metric-sparkline) .metric-detail { padding-right:58px; } .list-toolbar { flex-wrap:wrap; } .filter-controls { flex-wrap:wrap; } .projects-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .standup-quick-form { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); } .standup-title-field { grid-column:span 2; } .standup-quick-form>[data-slot="button"] { align-self:end; } }
+@media (max-width:1280px) { .main-content { padding-inline:24px; } .topbar { padding-inline:24px; } .metrics-grid { gap:12px; } .metric-card { padding:18px; } .metric-sparkline { right:18px; width:50px; } .metric-card:has(.metric-sparkline) .metric-detail { padding-right:58px; } .projects-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .standup-quick-form { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); } .standup-title-field { grid-column:span 2; } .standup-quick-form>[data-slot="button"] { align-self:end; } }
 @media (max-width:1024px) { .metrics-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .dashboard-middle { grid-template-columns:minmax(0,1fr); gap:0; } .settings-row { grid-template-columns:minmax(0,1fr); gap:16px; } .settings-section-intro p { max-width:650px; } .account-layout { grid-template-columns:minmax(0,1fr); } .account-profile { align-items:center; } .account-profile .profile-fact { max-width:480px; } .account-profile [data-slot="button"] { max-width:480px; } .standup-grid { grid-template-columns:minmax(0,1fr); } .my-task-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:767px) {
   .topbar { padding-inline:16px; height:60px; }
@@ -532,8 +535,9 @@
   .team-table-footer>div { flex-wrap:wrap; }
   .list-toolbar { padding:18px; gap:12px; }
   .search-control { width:100%; }
-  .filter-controls { width:100%; flex-wrap:wrap; }
-  .filter-controls>[data-slot="select-trigger"] { flex:1 1 40%; max-width:none; }
+  .filter-controls { width:100%; justify-content:flex-start; }
+  .filter-controls>.form-select { flex:1 1 40%; }
+  .filter-controls .form-select-trigger { max-width:none; }
   .filter-meta { padding-inline:18px; gap:14px; }
   .filter-meta>span { flex-basis:100%; }
   .pagination { padding:16px 18px; }
