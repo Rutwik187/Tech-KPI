@@ -234,7 +234,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     {extendTarget && <ExtendForm target={extendTarget} data={data} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {selectedProject && !modal && <ProjectDrawer data={data} project={selectedProject} onClose={() => setProjectId(null)} onEdit={() => setModal({ type: 'project', project: selectedProject })} onExtend={() => extendProject(selectedProject)} onOpenItem={id => { setProjectId(null); setSelectedId(id); }} />}
     {selected && !quickAction && !modal && <ItemDrawer item={selected} data={data} busy={busy} onClose={() => setSelectedId(null)} onAction={act} onAddHours={() => addHours(selected)} onExtend={() => extendTicket(selected)} mutate={mutate} />}
-    {quickAction && <ReasonForm action={quickAction} data={data} busy={busy} mutate={mutate} onClose={() => setQuickAction(null)} />}
+    {quickAction && <ReasonForm action={quickAction} busy={busy} mutate={mutate} onClose={() => setQuickAction(null)} />}
   </SidebarProvider>;
 }
 

@@ -43,7 +43,7 @@ export function Standup({ data, week, onOpen, onAction, onAdd, mutate, busy }: {
         <FormField>Project<FormSelect name="projectId" required value={classification.projectId} onValueChange={chooseProject}>{selectableProjects(data).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect></FormField>
         <FormField>Phase<FormSelect value={classification.phaseId ?? ''} disabled={classification.projectId === ADHOC_PROJECT_ID} onValueChange={phaseId => setClassification({ ...classification, phaseId: phaseId || null })}><option value="">Ad hoc</option>{projectPhases(data, classification.projectId).map(phase => <option key={phase.id} value={phase.id}>{phase.name}</option>)}</FormSelect></FormField>
         <FormField>Hours<Input type="number" name="estimateHours" defaultValue={4} min={.5} max={80} step={.5} required /></FormField>
-        <FormField>Date<FormDate name="dueDate" required defaultValue={today(data.settings.timezone)} min={today(data.settings.timezone)} /></FormField>
+        <FormField>Date<FormDate name="dueDate" required defaultValue={today(data.settings.timezone)} /></FormField>
         <Button type="submit" disabled={busy || !classification.assigneeId || title.trim().length < 3}><Plus data-icon="inline-start" />Add</Button>
       </FieldGroup></form>
     </Panel>
