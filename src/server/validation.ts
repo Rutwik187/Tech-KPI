@@ -53,7 +53,7 @@ export const actionSchema = z.discriminatedUnion("action", [
   // The same ticket for several developers. With doneOn, it records an event they already attended as finished work.
   z.object({ action: z.literal("createTickets"), assigneeIds: developerIds, title: shortText, description: description.optional(), projectId: uuid.optional(), phaseId: uuid.nullable().optional(),
     priority: priority.optional(), estimateHours: z.number().gt(0, "Estimate the hours this work needs.").max(80).multipleOf(0.01), dueDate: date.nullable().optional(), doneOn: date.optional() }).strict()
-    .refine((tickets) => !tickets.doneOn || !tickets.dueDate, "Work that is already done has no due date."),
+    .refine((tickets) => !tickets.doneOn || !tickets.dueDate, "Work that is already done has no date."),
   z.object({ action: z.literal("updateItem"), id: uuid, patch: z.object({ ...itemFields,
     status: z.enum(["todo", "in_progress", "blocked", "in_review", "done", "open", "fixed", "verified"]).optional(),
     blocker: z.string().trim().max(2000).nullable().optional(),

@@ -37,16 +37,16 @@ function activityText(event: Activity, item: WorkItem) {
     case 'task.due_change_requested': return `asked for ${asked}${category ? ` · ${category}` : ''}`;
     case 'task.due_change_declined': return `declined the ask for ${asked}`;
     case 'task.due_change_withdrawn': return `withdrew the ask for ${asked}`;
-    // Hours added to a ticket with no due date change only the estimate.
+    // Hours added to a ticket with no date change only the estimate.
     case 'task.hours_added': return `${typeof event.payload.requestedBy === 'string' ? 'approved' : 'added'} ${event.payload.addedHours} more ${event.payload.addedHours === 1 ? 'hour' : 'hours'}, so the estimate went from ${event.payload.estimateFrom} h to ${event.payload.estimateTo} h${category ? ` · ${category}` : ''}`;
   }
   if (event.action.endsWith('.due_changed')) {
     const from = event.payload.from;
-    if (typeof from !== 'string') return `set the due date to ${date(event.payload.to)}`;
+    if (typeof from !== 'string') return `set the date to ${date(event.payload.to)}`;
     const moved = `from ${date(from)} to ${date(event.payload.to)}${category ? ` · ${category}` : ''}`;
     // An extension in hours names them. An older one only moved the date.
-    if (typeof event.payload.addedHours === 'number') return `${typeof event.payload.requestedBy === 'string' ? 'approved' : 'added'} ${event.payload.addedHours} more ${event.payload.addedHours === 1 ? 'hour' : 'hours'}, so the due date moved ${moved}`;
-    return `${String(event.payload.to) > from ? 'extended the due date' : 'moved the due date'} ${moved}`;
+    if (typeof event.payload.addedHours === 'number') return `${typeof event.payload.requestedBy === 'string' ? 'approved' : 'added'} ${event.payload.addedHours} more ${event.payload.addedHours === 1 ? 'hour' : 'hours'}, so the date moved ${moved}`;
+    return `${String(event.payload.to) > from ? 'extended the date' : 'moved the date'} ${moved}`;
   }
   if (event.action.endsWith('status_changed')) {
     const to = event.payload.to as WorkItem['status'];
@@ -100,13 +100,13 @@ export function ItemDrawer({ item, data, busy, onClose, onAction, onAddHours, on
       {item.type === 'task'
         ? <div className="detail-facts">
             <div><span>Estimate</span><strong>{item.estimateHours} <small>hours</small></strong>{canAddHours(item, data) && <Button variant="link" size="sm" onClick={onAddHours}>{admin ? 'Add hours' : 'Ask for hours'}<Plus data-icon="inline-end" size={11} /></Button>}</div>
-            <div><span>Due date</span><strong className={clsx(overdue && 'due-overdue')}>{item.dueDate ? displayDate(item.dueDate) : '—'}{overdue && <small> · overdue</small>}</strong>{canMoveDueDate(item, data) && (item.dueDate
+            <div><span>Date</span><strong className={clsx(overdue && 'due-overdue')}>{item.dueDate ? displayDate(item.dueDate) : '—'}{overdue && <small> · carried over</small>}</strong>{canMoveDueDate(item, data) && (item.dueDate
               ? <Button variant="link" size="sm" onClick={onExtend}>{admin ? 'Extend' : 'Ask to extend'}<CalendarClock data-icon="inline-end" size={11} /></Button>
               : <Button variant="link" size="sm" onClick={onExtend}>Set date<CalendarDays data-icon="inline-end" size={11} /></Button>)}
               {waitingExtension && <small className="extension-waiting">Asked for {waitingExtension.hours} more {waitingExtension.hours === 1 ? 'hour' : 'hours'} · waits for approval</small>}</div>
             {item.completedAt
               ? <div><span>Approved on</span><strong>{displayDate(item.completedAt)}</strong><small>{item.estimateHours} h credited</small></div>
-              : <div><span>Extended</span><strong>{extendedDays ? `+${dayCount(extendedDays)}` : extensionCount ? 'Moved' : 'No'}</strong><small>{extensionCount ? `${extensionCount} time${extensionCount === 1 ? '' : 's'} · reasons below` : item.dueDate ? 'On its first due date' : 'No due date yet'}</small></div>}
+              : <div><span>Extended</span><strong>{extendedDays ? `+${dayCount(extendedDays)}` : extensionCount ? 'Moved' : 'No'}</strong><small>{extensionCount ? `${extensionCount} time${extensionCount === 1 ? '' : 's'} · reasons below` : item.dueDate ? 'On its first date' : 'No date yet'}</small></div>}
           </div>
         : <div className="detail-facts">
             <div><span>Reported</span><strong>{displayDate(item.reportedAt)}</strong><small>{displayDateTime(item.reportedAt)}</small></div>
@@ -114,9 +114,9 @@ export function ItemDrawer({ item, data, busy, onClose, onAction, onAddHours, on
             <div><span>{closed ? 'Bug points' : 'Time left'}</span><strong>{closed ? percent(bugKpi?.score ?? null) : bugKpi && bugKpi.overdueHours > 0 ? `${hours(bugKpi.overdueHours)} h late` : `${hours(bugKpi?.hoursRemaining ?? 0)} h`}</strong><small>{closed ? `${hours(bugKpi?.resolutionWorkingHours ?? 0)} working h to fix` : 'Working hours only'}</small></div>
           </div>}
 
-      {pastProjectTarget && <Alert className="detail-blocker"><CalendarClock /><AlertTitle>Due after the project target</AlertTitle><AlertDescription>{project!.name} targets {displayDate(project!.targetDate)}. {admin ? 'Extend the project if the whole project slips.' : 'Your admin may need to extend the project.'}</AlertDescription></Alert>}
+      {pastProjectTarget && <Alert className="detail-blocker"><CalendarClock /><AlertTitle>Dated after the project target</AlertTitle><AlertDescription>{project!.name} targets {displayDate(project!.targetDate)}. {admin ? 'Extend the project if the whole project slips.' : 'Your admin may need to extend the project.'}</AlertDescription></Alert>}
       {!editing && <div className="detail-description"><h3 className="detail-section-heading">Details</h3><p>{item.description || 'No details yet.'}</p></div>}
-      {item.type === 'task' && item.dueDate && <div className="drawer-section"><h3 className="detail-section-heading">Due date history <span>{extensionCount}</span></h3><ExtensionHistory data={data} entityId={item.id} empty={`Still on its first due date, ${displayDate(item.originalDueDate ?? item.dueDate)}.`} /></div>}
+      {item.type === 'task' && item.dueDate && <div className="drawer-section"><h3 className="detail-section-heading">Date history <span>{extensionCount}</span></h3><ExtensionHistory data={data} entityId={item.id} empty={`Still on its first date, ${displayDate(item.originalDueDate ?? item.dueDate)}.`} /></div>}
       {linkedTicket && <div className="linked-task"><Link2 size={14} /><span>Linked ticket</span><strong>{linkedTicket.key} · {linkedTicket.title}</strong></div>}
       {linkedBugs.length > 0 && <div className="linked-bugs"><h3 className="detail-section-heading">Linked bugs</h3>{linkedBugs.map(b => <div key={b.id}><Bug size={14} /><span>{b.title}</span><StatusBadge status={b.status} /></div>)}</div>}
       <Attachments data={data} itemId={item.id} />

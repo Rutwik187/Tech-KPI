@@ -50,8 +50,8 @@ export function ProjectDrawer({ data, project, onClose, onEdit, onExtend, onOpen
       </section>
 
       {lateTickets.length > 0 && <section className="drawer-section">
-        <h3 className="detail-section-heading">Due after the target <span>{lateTickets.length}</span></h3>
-        <div className="member-open-items">{lateTickets.map(item => <Button variant="outline" key={item.id} onClick={() => onOpenItem(item.id)}><span className="item-key">{item.key}</span><strong>{item.title}</strong><span className="cell-muted">Due {displayDate(item.dueDate)}</span><ArrowUpRight data-icon="inline-end" size={15} /></Button>)}</div>
+        <h3 className="detail-section-heading">Dated after the target <span>{lateTickets.length}</span></h3>
+        <div className="member-open-items">{lateTickets.map(item => <Button variant="outline" key={item.id} onClick={() => onOpenItem(item.id)}><span className="item-key">{item.key}</span><strong>{item.title}</strong><span className="cell-muted">{displayDate(item.dueDate)}</span><ArrowUpRight data-icon="inline-end" size={15} /></Button>)}</div>
       </section>}
 
       <section className="drawer-section">

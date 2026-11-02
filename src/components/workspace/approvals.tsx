@@ -3,13 +3,14 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { AlertTriangle, ArrowUpRight, Bug, CalendarClock, CalendarDays, Check, CheckCheck, Clock3, Inbox, ListTodo, MessageSquareText, Plus, X } from 'lucide-react';
 import type { DashboardData, DueDateRequest, TicketRequest, WorkItem } from '@/lib/types';
+import { dateKey } from '@/lib/kpi';
 import { Avatar, EmptyState, FormDate, FormField, FormSelect, Modal, Panel, PriorityBadge } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { displayDate, displayDateTime, findMember, findProject, firstName, hours, isAdhocProject, MAX_TICKET_HOURS, projectPhases, ticketExtension, today, type MutationFn, type OnAction, type RequestChanges } from './lib';
+import { displayDate, displayDateTime, findMember, findProject, firstName, hours, isAdhocProject, MAX_TICKET_HOURS, projectPhases, ticketExtension, type MutationFn, type OnAction, type RequestChanges } from './lib';
 import { daysBetween, reasonLabel } from '@/lib/timeline';
 import { dayCount } from './timeline';
 import { EstimateField, FormChoice, FormFooter } from './forms';
@@ -58,7 +59,7 @@ function AdminApprovals({ data, onOpen, onAction, mutate, busy }: ApprovalsProps
     </Panel>
 
     <Panel title="More hours on tickets">
-      <p className="panel-intro">Developers ask for extra hours on a ticket. Approving adds the hours to the estimate, moves the due date by them, and keeps the reason in the ticket’s history.</p>
+      <p className="panel-intro">Developers ask for extra hours on a ticket. Approving adds the hours to the estimate, moves the date by them, and keeps the reason in the ticket’s history.</p>
       {extensions.length
         ? <div className="request-list">{extensions.map(request => <ExtensionCard key={request.id} data={data} request={request} onOpen={onOpen} actions={<>
             <Button variant="outline" size="sm" onClick={() => setDecliningExtension(request)} disabled={busy}><X data-icon="inline-start" />Decline</Button>
@@ -143,7 +144,7 @@ function RequestCard({ data, request, actions, mine = false, compact = false }: 
     <div className="request-facts">
       <ProjectTag data={data} id={request.projectId} /><PhaseTag data={data} id={request.phaseId} />
       <span><Clock3 size={13} />{hours(request.estimateHours)} h</span>
-      <span><CalendarDays size={13} />{request.dueDate ? `Due ${displayDate(request.dueDate)}` : 'No due date'}</span>
+      <span><CalendarDays size={13} />{displayDate(request.dueDate ?? request.createdAt)}</span>
       <PriorityBadge priority={request.priority} />
     </div>
     {!compact && request.description && <p className="request-description">{request.description}</p>}
@@ -176,14 +177,14 @@ function ExtensionCard({ data, request, onOpen, actions, mine = false }: { data:
       {preview
         ? <><span className="extension-dates"><Clock3 size={13} />{request.fromEstimate} h → <strong>{preview.estimate} h</strong></span>
             {request.fromDate && preview.dueDate
-              ? <span className="extension-dates"><CalendarDays size={13} />Due {displayDate(request.fromDate)} → <strong>{displayDate(preview.dueDate)}</strong>{preview.dueDate !== request.fromDate && ` (+${dayCount(daysBetween(request.fromDate, preview.dueDate))})`}</span>
-              : <span className="extension-dates"><CalendarDays size={13} />No due date</span>}</>
-        : <span className="extension-dates"><CalendarDays size={13} />{request.fromDate ? `Was due ${displayDate(request.fromDate)}` : 'No due date'} with {request.fromEstimate} h</span>}
+              ? <span className="extension-dates"><CalendarDays size={13} />{displayDate(request.fromDate)} → <strong>{displayDate(preview.dueDate)}</strong>{preview.dueDate !== request.fromDate && ` (+${dayCount(daysBetween(request.fromDate, preview.dueDate))})`}</span>
+              : <span className="extension-dates"><CalendarDays size={13} />No date</span>}</>
+        : <span className="extension-dates"><CalendarDays size={13} />{request.fromDate ? `Was dated ${displayDate(request.fromDate)}` : 'No date'} with {request.fromEstimate} h</span>}
       {category && <Badge variant="secondary">{category}</Badge>}
     </div>
     <p className="request-note"><MessageSquareText size={14} /><span>{request.reason}</span></p>
-    {pastTarget && <p className="request-warning"><AlertTriangle size={14} /><span>The new due date is after the {project!.name} target date ({displayDate(project!.targetDate)}).</span></p>}
-    {request.status === 'pending' && item && !unchanged && <p className="request-warning"><AlertTriangle size={14} /><span>The ticket’s due date or estimate changed after this was asked. Decline it, and {person ? firstName(person) : 'the developer'} can ask again.</span></p>}
+    {pastTarget && <p className="request-warning"><AlertTriangle size={14} /><span>The new date is after the {project!.name} target date ({displayDate(project!.targetDate)}).</span></p>}
+    {request.status === 'pending' && item && !unchanged && <p className="request-warning"><AlertTriangle size={14} /><span>The ticket’s date or estimate changed after this was asked. Decline it, and {person ? firstName(person) : 'the developer'} can ask again.</span></p>}
     {request.reviewNote && <p className="request-review"><CheckCheck size={14} /><span><strong>{request.status === 'declined' ? 'Why it was declined' : 'Admin note'}:</strong> {request.reviewNote}</span></p>}
     {actions && <footer className="request-card-actions">{actions}</footer>}
   </article>;
@@ -202,7 +203,7 @@ function ApproveExtensionForm({ data, request, mutate, busy, onClose }: { data: 
     event.preventDefault();
     const note = String(new FormData(event.currentTarget).get('note') ?? '').trim();
     const ok = await mutate({ action: 'approveDueDateRequest', id: request.id, ...(granted !== request.hours ? { hours: granted } : {}), ...(note ? { note } : {}) },
-      `Approved +${granted} h.${preview?.dueDate ? ` ${item?.key ?? 'The ticket'} is now due ${displayDate(preview.dueDate)}.` : ''}`);
+      `Approved +${granted} h.${preview?.dueDate ? ` ${item?.key ?? 'The ticket'} is now dated ${displayDate(preview.dueDate)}.` : ''}`);
     if (ok) onClose();
   }
   return <Modal title="Approve more hours" subtitle={item ? `${item.key} · ${item.title}` : undefined} onClose={onClose}>
@@ -214,7 +215,7 @@ function ApproveExtensionForm({ data, request, mutate, busy, onClose }: { data: 
         </div>
         <FormField>Hours to approve<Input type="number" name="hours" required min={0.5} max={room} step={0.5} value={hoursText} onChange={event => setHoursText(event.target.value)} className="extend-hours-input" />
           <span className="field-help">{preview
-            ? <>Estimate <strong>{item!.estimateHours} h → {preview.estimate} h</strong>.{preview.dueDate ? <> Due <strong>{displayDate(item!.dueDate)} → {displayDate(preview.dueDate, { weekday: 'short' })}</strong>.</> : ' No due date to move.'} You can approve a different number of hours.</>
+            ? <>Estimate <strong>{item!.estimateHours} h → {preview.estimate} h</strong>.{preview.dueDate ? <> Date <strong>{displayDate(item!.dueDate)} → {displayDate(preview.dueDate, { weekday: 'short' })}</strong>.</> : ' No date to move.'} You can approve a different number of hours.</>
             : granted > room ? `A ticket holds up to ${MAX_TICKET_HOURS} h. Approve ${room} h at most.` : 'Enter the hours, in steps of half an hour.'}</span></FormField>
         <FormField>Note for {person ? firstName(person) : 'the developer'} <span className="optional">optional</span><Textarea name="note" rows={2} placeholder="For example, why you approved fewer hours." /></FormField>
       </FieldGroup>
@@ -234,7 +235,7 @@ function DeclineExtensionForm({ data, request, mutate, busy, onClose }: { data: 
   return <Modal title="Decline more hours" subtitle={item ? `${item.key} · ${item.title}` : undefined} onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
-        <FormField>Why are you declining it?<Textarea name="reason" required minLength={3} maxLength={2000} rows={3} placeholder="For example, the release date cannot move. Let us split the ticket instead." /><span className="field-help">The estimate and due date stay as they are. {person ? firstName(person) : 'The developer'} sees this reason.</span></FormField>
+        <FormField>Why are you declining it?<Textarea name="reason" required minLength={3} maxLength={2000} rows={3} placeholder="For example, the release date cannot move. Let us split the ticket instead." /><span className="field-help">The estimate and date stay as they are. {person ? firstName(person) : 'The developer'} sees this reason.</span></FormField>
       </FieldGroup>
       <FormFooter busy={busy} onClose={onClose} label="Decline" />
     </form>
@@ -283,7 +284,7 @@ function ApproveRequestForm({ data, request, mutate, busy, onClose }: { data: Da
           <FormField>Project<FormSelect required value={projectId} onValueChange={value => { setProjectId(value); setPhaseId(''); }}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect></FormField>
           <FormField>Phase<FormSelect value={phaseId} disabled={!phases.length} onValueChange={setPhaseId}><option value="">Ad hoc</option>{phases.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect></FormField>
           <EstimateField defaultValue={request.estimateHours} />
-          <FormField>Due date <span className="optional">optional</span><FormDate name="dueDate" defaultValue={request.dueDate ?? undefined} min={today(data.settings.timezone)} placeholder="No due date" /></FormField>
+          <FormField>Date<FormDate name="dueDate" required defaultValue={request.dueDate ?? dateKey(request.createdAt, data.settings.timezone)} /></FormField>
           <FormField>Priority<FormChoice name="priority" defaultValue={request.priority} options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }, { value: 'urgent', label: 'Urgent' }]} /></FormField>
         </FieldGroup>
         {(request.description || request.note) && <div className="request-context">

@@ -72,7 +72,7 @@ export function Highlights({ data, week, scores }: { data: DashboardData; week: 
       ? { icon: <Zap />, label: 'Fastest bug fix', value: `${hours(fixes[0].kpi.resolutionWorkingHours)} h`, member: own ? undefined : findMember(data, fixes[0].item.assigneeId), detail: `${fixes[0].item.title}` }
       : { icon: <Zap />, label: 'Fastest bug fix', value: '—', detail: 'No bugs fixed this week' },
     dated.length
-      ? { icon: <Gauge />, label: 'On-time tickets', value: `${Math.round(onTime.length / dated.length * 100)}%`, detail: `${onTime.length} of ${dated.length} approved by their due date` }
+      ? { icon: <Gauge />, label: 'On-time tickets', value: `${Math.round(onTime.length / dated.length * 100)}%`, detail: `${onTime.length} of ${dated.length} approved by their date` }
       : { icon: <Gauge />, label: 'On-time tickets', value: '—', detail: 'No dated tickets approved yet' },
   ];
   return <div className="highlights" aria-label="This week’s highlights">{items.map(item => <div className="highlight" key={item.label}>

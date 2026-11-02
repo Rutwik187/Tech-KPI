@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type CSSProperties } from 'react';
+import clsx from 'clsx';
 import { useSearchParams } from 'next/navigation';
 import { CalendarDays, ChevronLeft, ChevronRight, CircleHelp, Clock3, Columns3, List, Plus, Search, X } from 'lucide-react';
 import type { DashboardData, WorkItem } from '@/lib/types';
@@ -25,11 +26,14 @@ function presetRange(preset: DatePreset, day: string, timezone: string): [string
   return [day, day];
 }
 
-/** A ticket's date: the day it was done, or the day it was added while it is still open. */
-function ticketDate(item: WorkItem, timezone: string) {
-  return isDone(item) && item.completedAt
-    ? { label: 'Done', day: dateKey(item.completedAt, timezone) }
-    : { label: 'Added', day: dateKey(item.createdAt, timezone) };
+/** The day a ticket's work is for. Tickets made before tickets had a date use the day they were added. */
+function plannedDay(item: WorkItem, timezone: string) {
+  return item.dueDate ?? dateKey(item.createdAt, timezone);
+}
+
+/** The day a done ticket earned its hours, or null while it is open. */
+function doneDay(item: WorkItem, timezone: string) {
+  return isDone(item) && item.completedAt ? dateKey(item.completedAt, timezone) : null;
 }
 
 export function WorkList({ data, kind, onOpen, onAction, onExtend, onAdd, busy }: { data: DashboardData; kind: 'task' | 'bug'; onOpen: (id: string) => void; onAction: OnAction; onExtend: (item: WorkItem) => void; onAdd: (kind: 'task' | 'bug') => void; busy: boolean }) {
@@ -51,9 +55,11 @@ export function WorkList({ data, kind, onOpen, onAction, onExtend, onAdd, busy }
   const statuses = kind === 'task' ? ticketStatuses : bugStatuses;
   const timezone = data.settings.timezone;
   const tickets = kind === 'task';
-  // A ticket belongs to the picked dates when it was open on any of them, or was done on one of them.
-  const inDates = (item: WorkItem) => dateKey(item.createdAt, timezone) <= dateEnd
-    && (!isDone(item) || !item.completedAt || dateKey(item.completedAt, timezone) >= dateStart);
+  // A ticket belongs to the picked dates from the day it was added until the day it is done. Open work carries over.
+  const inDates = (item: WorkItem) => {
+    const done = doneDay(item, timezone);
+    return dateKey(item.createdAt, timezone) <= dateEnd && (!done || done >= dateStart);
+  };
   const ofKind = data.items.filter(item => item.type === kind && (!tickets || inDates(item)));
   const fixBy = (item: WorkItem) => getBugKpi(item, data).deadline1.toISOString();
   const activePreset = (['today', 'week', 'month'] as const).find(preset => presetRange(preset, day, timezone).join() === `${dateStart},${dateEnd}`) ?? '';
@@ -72,7 +78,7 @@ export function WorkList({ data, kind, onOpen, onAction, onExtend, onAdd, busy }
   const currentPage = Math.min(page, pageCount);
   const shown = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
   // Performance for the picked dates. A ticket earns its hours on the day it is done.
-  const done = filtered.filter(item => tickets && isDone(item) && item.completedAt && ticketDate(item, timezone).day >= dateStart && ticketDate(item, timezone).day <= dateEnd);
+  const done = filtered.filter(item => { const day = tickets && doneDay(item, timezone); return !!day && day >= dateStart && day <= dateEnd; });
   const earnedHours = done.reduce((sum, item) => sum + item.estimateHours, 0);
   const filtering = (tickets && (dateStart !== day || dateEnd !== day)) || search || status !== 'all' || assignee !== 'all' || projectId !== 'all' || phaseFilter !== 'all' || attentionOnly;
   function changeFilter(change: () => void) { change(); setPage(1); }
@@ -135,7 +141,7 @@ export function WorkList({ data, kind, onOpen, onAction, onExtend, onAdd, busy }
                   {admin && <TableCell><div className="owner-cell"><Avatar member={findMember(data, item.assigneeId)} size="small" /><span>{firstName(findMember(data, item.assigneeId))}</span></div></TableCell>}
                   <TableCell><div className="project-phase-cell"><ProjectTag data={data} id={item.projectId} /><PhaseTag data={data} id={item.phaseId} /></div></TableCell>
                   <TableCell>{kind === 'task' ? <span className="estimate-cell"><Clock3 size={12} />{item.estimateHours} h</span> : <SeverityBadge item={item} />}</TableCell>
-                  <TableCell>{kind === 'task' ? <TicketDate item={item} timezone={timezone} /> : <FixBy item={item} data={data} />}</TableCell>
+                  <TableCell>{kind === 'task' ? <TicketDate item={item} day={day} timezone={timezone} /> : <FixBy item={item} data={data} />}</TableCell>
                   <TableCell><ItemActions item={item} admin={admin} onAction={onAction} busy={busy} /></TableCell>
                 </TableRow>)}</TableBody>
               </Table></div>}
@@ -155,7 +161,9 @@ export function WorkList({ data, kind, onOpen, onAction, onExtend, onAdd, busy }
   </>;
 }
 
-function TicketDate({ item, timezone }: { item: WorkItem; timezone: string }) {
-  const { label, day } = ticketDate(item, timezone);
-  return <span className="due-date"><CalendarDays size={12} />{label} {displayDate(day)}</span>;
+/** A done ticket shows the day it was done. Open work from an earlier day shows in red, because it carried over. */
+function TicketDate({ item, day, timezone }: { item: WorkItem; day: string; timezone: string }) {
+  const [planned, done] = [plannedDay(item, timezone), doneDay(item, timezone)];
+  const late = !done && planned < day;
+  return <span className={clsx('due-date', late && 'due-overdue')}><CalendarDays size={12} />{done ? `Done ${displayDate(done)}` : displayDate(planned)}{late && <span className="sr-only"> Not done yet</span>}</span>;
 }
