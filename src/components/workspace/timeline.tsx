@@ -108,7 +108,7 @@ export function ExtendForm({ target, data, mutate, onClose, busy }: { target: Ex
       : await mutate({ action: 'updateProject', id: target.project.id, patch: { targetDate: date }, reason, reasonCategory }, `${target.project.name} now targets ${displayDate(date)}. The reason is in the history.`);
     if (ok) onClose();
   }
-  const valid = setting ? !!date && date >= day : addingHours ? hoursValid : shift > 0;
+  const valid = setting ? !!date : addingHours ? hoursValid : shift > 0;
   const hoursLabel = `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
   return <Modal title={setting ? 'Set date' : requesting ? 'Ask for more time' : ticket ? 'Give this ticket more time' : 'Extend project timeline'} subtitle={ticket ? `${target.item.key} · ${target.item.title}` : target.project.name} onClose={onClose}>
     <form onSubmit={submit}>
@@ -132,9 +132,9 @@ export function ExtendForm({ target, data, mutate, onClose, busy }: { target: Ex
             : room < 0.5 ? `This ticket already has ${MAX_TICKET_HOURS} h. Split the extra work into a new ticket.`
             : hours > room ? `A ticket holds up to ${MAX_TICKET_HOURS} h. Ask for ${room} h at most, or split the work into a new ticket.` : 'Enter the extra hours, in steps of half an hour.'}</p>
         </div> : <div className="extend-date-row">
-          <FormField>{setting ? 'Date' : `New ${ticket ? 'date' : 'target date'}`}<FormDate name="date" required value={date} min={setting ? day : addDays(current, 1)} onValueChange={setDate} /></FormField>
+          <FormField>{setting ? 'Date' : `New ${ticket ? 'date' : 'target date'}`}<FormDate name="date" required value={date} min={setting ? undefined : addDays(current, 1)} onValueChange={setDate} /></FormField>
           <div className="extend-quick" role="group" aria-label="Move the date by">{QUICK_SHIFTS.map(option => <Button key={option.days} type="button" size="sm" variant={shift === option.days ? 'secondary' : 'outline'} aria-pressed={shift === option.days} onClick={() => setDate(addDays(current, option.days))}>{option.label}</Button>)}</div>
-          <p className="field-help extend-preview" aria-live="polite">{setting ? (valid ? <>Dated <strong>{displayDate(date, { weekday: 'short' })}</strong>, {shift === 0 ? 'today' : `in ${dayCount(shift)}`}.</> : 'Choose today or a later date.') : shift > 0 ? <>Moves the date by <strong>{dayCount(shift)}</strong>, from {displayDate(current)} to {displayDate(date, { weekday: 'short' })}.</> : 'Choose a date after the current one.'}</p>
+          <p className="field-help extend-preview" aria-live="polite">{setting ? (valid ? <>Dated <strong>{displayDate(date, { weekday: 'short' })}</strong>, {shift === 0 ? 'today' : shift > 0 ? `in ${dayCount(shift)}` : `${dayCount(shift)} ago`}.</> : 'Choose a date.') : shift > 0 ? <>Moves the date by <strong>{dayCount(shift)}</strong>, from {displayDate(current)} to {displayDate(date, { weekday: 'short' })}.</> : 'Choose a date after the current one.'}</p>
         </div>}
         {pastProjectTarget && <Alert className="form-tip extend-warning"><AlertTriangle size={17} /><AlertDescription><p>This is after the <strong>{project!.name}</strong> target date ({displayDate(project!.targetDate)}). {admin ? 'Extend the project too if the whole project slips.' : 'Tell your admin, as the project may need more time too.'}</p></AlertDescription></Alert>}
         {ticketsAfter ? <Alert className="form-tip"><CircleHelp size={17} /><AlertDescription><p>{plural(ticketsAfter, 'open ticket')} {ticketsAfter === 1 ? 'is' : 'are'} still dated after this date.</p></AlertDescription></Alert> : null}
