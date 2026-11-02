@@ -195,9 +195,18 @@ test('ticket details render creation events that have no changed due-date payloa
   expect(pageErrors).toEqual([]);
 });
 
-test('a ticket without a due date gets one from the table, then gets more hours from the same place with a reason', async ({ page }) => {
+test('the ticket list shows today by default, with the work done and hours earned for the picked dates', async ({ page }) => {
   await openDemo(page, 'tickets');
-  const title = 'Browser verification: due date from the table';
+  const day = dateKey(new Date(), 'Asia/Kolkata');
+  const dates = page.getByRole('button', { name: 'Filter by date', exact: true });
+  await expect(dates).toHaveAttribute('data-start', day);
+  await expect(dates).toHaveAttribute('data-end', day);
+  await expect(page.getByRole('radio', { name: 'Today', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('.filter-meta')).toContainText(/\d+ done · [\d.]+ h earned on /);
+  await expect(page.getByRole('columnheader', { name: 'Date', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Due date', exact: true })).toHaveCount(0);
+
+  const title = 'Browser verification: ticket dated today';
   await page.locator('.page-actions').getByRole('button', { name: 'New ticket', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('textbox', { name: 'Title', exact: true }).fill(title);
@@ -206,9 +215,31 @@ test('a ticket without a due date gets one from the table, then gets more hours 
   await expect(dialog).toBeHidden();
   await page.getByRole('textbox', { name: 'Search tickets' }).fill(title);
   const row = page.getByRole('row').filter({ hasText: title });
-  await expect(row).toContainText('No due date');
+  await expect(row).toContainText('Added');
+
+  // A ticket added today is not part of an earlier week.
+  const weekBefore = shiftDate(getWeekStart(day, 'Asia/Kolkata'), -7, 'Asia/Kolkata');
+  await pickDateRange(page, dates, weekBefore, shiftDate(weekBefore, 6, 'Asia/Kolkata'));
+  await expect(page.getByRole('radio', { name: 'Today', exact: true })).toHaveAttribute('aria-checked', 'false');
+  await expect(row).toHaveCount(0);
+  await page.getByRole('radio', { name: 'This week', exact: true }).click();
+  await expect(dates).toHaveAttribute('data-start', getWeekStart(day, 'Asia/Kolkata'));
+  await expect(row).toBeVisible();
+});
+
+test('a ticket without a due date gets one from its details, then gets more hours from the same place with a reason', async ({ page }) => {
+  await openDemo(page, 'tickets');
+  const title = 'Browser verification: due date from the details';
+  await page.locator('.page-actions').getByRole('button', { name: 'New ticket', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: 'Title', exact: true }).fill(title);
+  await chooseOption(page, dialog.getByRole('combobox', { name: 'Owner', exact: true }), 'Aarav Mehta');
+  await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await page.getByRole('textbox', { name: 'Search tickets' }).fill(title);
+  await page.getByRole('row').filter({ hasText: title }).getByRole('button', { name: title, exact: true }).click();
   // Setting the first due date is planning, so no reason is asked.
-  await row.getByRole('button', { name: /^Set a due date for/ }).click();
+  await page.getByRole('button', { name: 'Set date', exact: true }).click();
   const setDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Set due date', exact: true }) });
   await expect(setDialog.getByRole('textbox', { name: 'Reason', exact: true })).toHaveCount(0);
   const day = dateKey(new Date(), 'Asia/Kolkata');
@@ -218,7 +249,7 @@ test('a ticket without a due date gets one from the table, then gets more hours 
   let saved = (await readDemoData(page)).items.find(item => item.title === title);
   expect(saved).toMatchObject({ dueDate: due, originalDueDate: due });
   // An extension asks for extra hours, with a reason. The hours join the estimate and the due date moves by them.
-  await row.getByRole('button', { name: /^Extend the due date of/ }).click();
+  await page.getByRole('button', { name: 'Extend', exact: true }).click();
   const extend = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Give this ticket more time', exact: true }) });
   await expect(extend.getByRole('spinbutton', { name: 'Extra hours needed', exact: true })).toHaveValue('2');
   await extend.getByRole('button', { name: '+4 h', exact: true }).click();
@@ -230,7 +261,7 @@ test('a ticket without a due date gets one from the table, then gets more hours 
   await expect(extend).toBeHidden();
   saved = (await readDemoData(page)).items.find(item => item.title === title);
   expect(saved).toMatchObject({ estimateHours: 8, dueDate: moved, originalDueDate: due });
-  await expect(row.locator('.extension-badge')).toHaveText(`+${daysBetween(due, moved)} day${daysBetween(due, moved) === 1 ? '' : 's'}`);
+  expect(daysBetween(due, moved)).toBeGreaterThan(0);
 });
 
 test('a ticket needs only a title, owner and estimate, survives reload, and appears on the board', async ({ page }) => {
@@ -879,8 +910,8 @@ test.describe('date-only labels in other browser timezones', () => {
     const expected = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })
       .format(new Date(`${dueDate}T12:00:00Z`));
     await openDemo(page, 'tickets');
-    const row = page.getByRole('row').filter({ hasText: title });
-    await expect(row.locator('.due-date')).toHaveText(expected);
+    await page.getByRole('row').filter({ hasText: title }).getByRole('button', { name: title, exact: true }).click();
+    await expect(page.locator('.detail-facts > div').filter({ has: page.getByText('Due date', { exact: true }) }).locator('strong')).toHaveText(new RegExp(`^${expected}`));
   });
 });
 

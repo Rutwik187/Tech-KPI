@@ -2,10 +2,10 @@
 
 import { useState, type CSSProperties } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { ChevronLeft, ChevronRight, CircleHelp, Clock3, Columns3, List, Plus, Search, X } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, CircleHelp, Clock3, Columns3, List, Plus, Search, X } from 'lucide-react';
 import type { DashboardData, WorkItem } from '@/lib/types';
-import { getBugKpi } from '@/lib/kpi';
-import { Avatar, EmptyState, FormCheckbox, FormField, FormSelect, PriorityBadge, StatusBadge } from '@/components/ui';
+import { dateKey, getBugKpi, getWeekStart } from '@/lib/kpi';
+import { Avatar, EmptyState, FormCheckbox, FormDateRange, FormField, FormSelect, PriorityBadge, StatusBadge } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
@@ -13,10 +13,24 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/in
 import { Pagination, PaginationContent, PaginationItem } from '@/components/ui/pagination';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { attentionReason, bugStatuses, findMember, findProject, firstName, kindLabels, priorities, statusLabels, ticketStatuses, today, type OnAction } from './lib';
-import { DueDate, FixBy, ItemActions, PhaseTag, ProjectTag, SeverityBadge, TicketCard } from './parts';
+import { attentionReason, bugStatuses, displayDate, findMember, findProject, firstName, hours, isDone, kindLabels, priorities, statusLabels, ticketStatuses, today, type OnAction } from './lib';
+import { FixBy, ItemActions, PhaseTag, ProjectTag, SeverityBadge, TicketCard } from './parts';
 
 const PAGE_SIZE = 12;
+
+type DatePreset = 'today' | 'week' | 'month';
+function presetRange(preset: DatePreset, day: string, timezone: string): [string, string] {
+  if (preset === 'week') return [getWeekStart(day, timezone), day];
+  if (preset === 'month') return [`${day.slice(0, 7)}-01`, day];
+  return [day, day];
+}
+
+/** A ticket's date: the day it was done, or the day it was added while it is still open. */
+function ticketDate(item: WorkItem, timezone: string) {
+  return isDone(item) && item.completedAt
+    ? { label: 'Done', day: dateKey(item.completedAt, timezone) }
+    : { label: 'Added', day: dateKey(item.createdAt, timezone) };
+}
 
 export function WorkList({ data, kind, onOpen, onAction, onExtend, onAdd, busy }: { data: DashboardData; kind: 'task' | 'bug'; onOpen: (id: string) => void; onAction: OnAction; onExtend: (item: WorkItem) => void; onAdd: (kind: 'task' | 'bug') => void; busy: boolean }) {
   const query = useSearchParams();
@@ -29,13 +43,20 @@ export function WorkList({ data, kind, onOpen, onAction, onExtend, onAdd, busy }
   const [view, setView] = useState<'list' | 'board'>('list');
   const [sort, setSort] = useState('recent');
   const [page, setPage] = useState(1);
+  const day = today(data.settings.timezone);
+  const [[dateStart, dateEnd], setDates] = useState<[string, string]>([day, day]);
   const admin = data.currentUser.role === 'admin';
   const canAdd = kind === 'task' || admin;
   const noun = kindLabels[kind].toLowerCase();
   const statuses = kind === 'task' ? ticketStatuses : bugStatuses;
-  const day = today(data.settings.timezone);
-  const ofKind = data.items.filter(item => item.type === kind);
-  const deadline = (item: WorkItem) => item.type === 'bug' ? getBugKpi(item, data).deadline1.toISOString() : item.dueDate ?? '9999';
+  const timezone = data.settings.timezone;
+  const tickets = kind === 'task';
+  // A ticket belongs to the picked dates when it was open on any of them, or was done on one of them.
+  const inDates = (item: WorkItem) => dateKey(item.createdAt, timezone) <= dateEnd
+    && (!isDone(item) || !item.completedAt || dateKey(item.completedAt, timezone) >= dateStart);
+  const ofKind = data.items.filter(item => item.type === kind && (!tickets || inDates(item)));
+  const fixBy = (item: WorkItem) => getBugKpi(item, data).deadline1.toISOString();
+  const activePreset = (['today', 'week', 'month'] as const).find(preset => presetRange(preset, day, timezone).join() === `${dateStart},${dateEnd}`) ?? '';
 
   const filtered = ofKind.filter(item =>
     (status === 'all' || item.status === status)
@@ -44,15 +65,18 @@ export function WorkList({ data, kind, onOpen, onAction, onExtend, onAdd, busy }
     && (phaseFilter === 'all' || (phaseFilter === 'adhoc' ? item.phaseId === null : item.phaseId === phaseFilter))
     && (!attentionOnly || attentionReason(item, data, day) !== null)
     && `${item.title} ${item.key} ${item.description}`.toLowerCase().includes(search.trim().toLowerCase()),
-  ).sort((a, b) => sort === 'due' ? deadline(a).localeCompare(deadline(b))
+  ).sort((a, b) => sort === 'due' && !tickets ? fixBy(a).localeCompare(fixBy(b))
     : sort === 'priority' ? priorities.indexOf(b.priority) - priorities.indexOf(a.priority)
     : b.createdAt.localeCompare(a.createdAt));
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const shown = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-  const filtering = search || status !== 'all' || assignee !== 'all' || projectId !== 'all' || phaseFilter !== 'all' || attentionOnly;
+  // Performance for the picked dates. A ticket earns its hours on the day it is done.
+  const done = filtered.filter(item => tickets && isDone(item) && item.completedAt && ticketDate(item, timezone).day >= dateStart && ticketDate(item, timezone).day <= dateEnd);
+  const earnedHours = done.reduce((sum, item) => sum + item.estimateHours, 0);
+  const filtering = (tickets && (dateStart !== day || dateEnd !== day)) || search || status !== 'all' || assignee !== 'all' || projectId !== 'all' || phaseFilter !== 'all' || attentionOnly;
   function changeFilter(change: () => void) { change(); setPage(1); }
-  function clearFilters() { setSearch(''); setStatus('all'); setAssignee('all'); setProjectId('all'); setPhaseFilter('all'); setAttentionOnly(false); setPage(1); }
+  function clearFilters() { setSearch(''); setStatus('all'); setAssignee('all'); setProjectId('all'); setPhaseFilter('all'); setAttentionOnly(false); setDates([day, day]); setPage(1); }
 
   const empty = <EmptyState
     bug={kind === 'bug'}
@@ -73,12 +97,19 @@ export function WorkList({ data, kind, onOpen, onAction, onExtend, onAdd, busy }
             {admin && <FormSelect aria-label="Filter by owner" value={assignee} onValueChange={value => changeFilter(() => setAssignee(value))}><option value="all">Everyone</option>{data.members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</FormSelect>}
             <FormSelect aria-label="Filter by project" value={projectId} onValueChange={value => changeFilter(() => { setProjectId(value); setPhaseFilter('all'); })}><option value="all">All projects</option>{data.projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</FormSelect>
             <FormSelect aria-label="Filter by phase" value={phaseFilter} onValueChange={value => changeFilter(() => setPhaseFilter(value))}><option value="all">All phases</option><option value="adhoc">Ad hoc</option>{data.phases.filter(phase => projectId === 'all' || phase.projectId === projectId).map(phase => <option key={phase.id} value={phase.id}>{projectId === 'all' ? `${findProject(data, phase.projectId)?.name} · ` : ''}{phase.name}</option>)}</FormSelect>
-            <FormSelect aria-label={`Sort ${noun}s`} value={sort} onValueChange={setSort}><option value="recent">Newest first</option><option value="due">{kind === 'task' ? 'Due date' : 'Fix-by time'}</option><option value="priority">Priority</option></FormSelect>
+            {tickets && <>
+              <ToggleGroup type="single" variant="outline" spacing={0} value={activePreset} onValueChange={value => { if (value) changeFilter(() => setDates(presetRange(value as DatePreset, day, timezone))); }} aria-label="Pick a period">
+                <ToggleGroupItem value="today">Today</ToggleGroupItem><ToggleGroupItem value="week">This week</ToggleGroupItem><ToggleGroupItem value="month">This month</ToggleGroupItem>
+              </ToggleGroup>
+              <FormDateRange aria-label="Filter by date" start={dateStart} end={dateEnd} max={day} onValueChange={(start, end) => changeFilter(() => setDates([start, end]))} />
+            </>}
+            <FormSelect aria-label={`Sort ${noun}s`} value={sort} onValueChange={setSort}><option value="recent">Newest first</option>{!tickets && <option value="due">Fix-by time</option>}<option value="priority">Priority</option></FormSelect>
             <ToggleGroup type="single" variant="outline" spacing={0} value={view} onValueChange={value => { if (value) setView(value as 'list' | 'board'); }} aria-label="Choose view"><ToggleGroupItem value="list" aria-label="List view"><List /></ToggleGroupItem><ToggleGroupItem value="board" aria-label="Board view"><Columns3 /></ToggleGroupItem></ToggleGroup>
           </div>
         </div>
         <div className="filter-meta">
           <span><strong>{filtered.length}</strong> {noun}{filtered.length === 1 ? '' : 's'}{status !== 'all' && ` · ${statusLabels[status as WorkItem['status']]}`}</span>
+          {tickets && <span><strong>{done.length}</strong> done · <strong>{hours(earnedHours)} h</strong> earned {dateStart === dateEnd ? `on ${displayDate(dateStart, { weekday: 'short' })}` : `from ${displayDate(dateStart)} to ${displayDate(dateEnd)}`}</span>}
           <FormField className="checkbox-label"><FormCheckbox checked={attentionOnly} onCheckedChange={checked => changeFilter(() => setAttentionOnly(checked))} />Needs attention only</FormField>
           {filtering && <Button variant="link" size="sm" onClick={clearFilters}>Clear filters<X data-icon="inline-end" size={12} /></Button>}
         </div>
@@ -96,7 +127,7 @@ export function WorkList({ data, kind, onOpen, onAction, onExtend, onAdd, busy }
             : <div className="table-scroll"><Table className="data-table work-table">
                 <TableHeader><TableRow>
                   <TableHead>{kindLabels[kind]}</TableHead><TableHead>Status</TableHead>{admin && <TableHead>Owner</TableHead>}<TableHead>Project · phase</TableHead>
-                  <TableHead>{kind === 'task' ? 'Estimate' : 'Severity'}</TableHead><TableHead>{kind === 'task' ? 'Due date' : 'Fix by'}</TableHead><TableHead>Next step</TableHead>
+                  <TableHead>{kind === 'task' ? 'Estimate' : 'Severity'}</TableHead><TableHead>{kind === 'task' ? 'Date' : 'Fix by'}</TableHead><TableHead>Next step</TableHead>
                 </TableRow></TableHeader>
                 <TableBody>{shown.map(item => <TableRow key={item.id}>
                   <TableCell><div className="work-name-cell"><span className="item-key">{item.key}</span><Button variant="ghost" className="item-name" onClick={() => onOpen(item.id)}>{item.title}</Button><PriorityBadge priority={item.priority} /></div></TableCell>
@@ -104,7 +135,7 @@ export function WorkList({ data, kind, onOpen, onAction, onExtend, onAdd, busy }
                   {admin && <TableCell><div className="owner-cell"><Avatar member={findMember(data, item.assigneeId)} size="small" /><span>{firstName(findMember(data, item.assigneeId))}</span></div></TableCell>}
                   <TableCell><div className="project-phase-cell"><ProjectTag data={data} id={item.projectId} /><PhaseTag data={data} id={item.phaseId} /></div></TableCell>
                   <TableCell>{kind === 'task' ? <span className="estimate-cell"><Clock3 size={12} />{item.estimateHours} h</span> : <SeverityBadge item={item} />}</TableCell>
-                  <TableCell>{kind === 'task' ? <DueDate item={item} data={data} onExtend={onExtend} /> : <FixBy item={item} data={data} />}</TableCell>
+                  <TableCell>{kind === 'task' ? <TicketDate item={item} timezone={timezone} /> : <FixBy item={item} data={data} />}</TableCell>
                   <TableCell><ItemActions item={item} admin={admin} onAction={onAction} busy={busy} /></TableCell>
                 </TableRow>)}</TableBody>
               </Table></div>}
@@ -119,7 +150,12 @@ export function WorkList({ data, kind, onOpen, onAction, onExtend, onAdd, busy }
       </CardFooter>}
     </Card>
     <div className="list-hint"><CircleHelp size={14} />{kind === 'task'
-      ? 'Open a ticket to see its history, extend its due date with a reason, or mark it blocked. A ticket earns its estimated hours when the admin approves it.'
+      ? 'Pick a day, week, or month to see the tickets worked on then and the hours earned. Open a ticket to see its history, add hours with a reason, or mark it blocked. A ticket earns its estimated hours when the admin approves it.'
       : `Bug points: fixed by the fix-by time earns 100, up to twice the target earns 50, later earns 0. Bug points are ${data.settings.bugWeight}% of the score. Bugs add no ticket hours.`}</div>
   </>;
+}
+
+function TicketDate({ item, timezone }: { item: WorkItem; timezone: string }) {
+  const { label, day } = ticketDate(item, timezone);
+  return <span className="due-date"><CalendarDays size={12} />{label} {displayDate(day)}</span>;
 }
