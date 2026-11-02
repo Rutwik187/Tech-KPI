@@ -147,7 +147,7 @@ export function ItemForm({ data, kind: initialKind, assigneeId, mutate, onClose,
         <FieldGroup className="form-grid">
           {kind === 'task'
             ? <><EstimateField defaultValue={4} />
-                <FormField>Due date <span className="optional">optional</span><FormDate name="dueDate" min={today(data.settings.timezone)} placeholder="No due date" /></FormField></>
+                <FormField>Date<FormDate name="dueDate" required defaultValue={today(data.settings.timezone)} min={today(data.settings.timezone)} /><span className="field-help">The day this work is for.</span></FormField></>
             : <><FormField>Severity<FormChoice value={severity} onValueChange={value => setSeverity(value as WorkItem['severity'])} options={[{ value: 'normal', label: 'Normal' }, { value: 'critical', label: 'Critical' }]} /><span className="field-help">Target: {target} working hours.</span></FormField>
                 <Alert className="bug-report-note"><Clock3 /><AlertTitle>Fix by {fixBy ? displayDateTime(fixBy) : '—'}</AlertTitle><AlertDescription>On time earns 100 bug points. Up to twice the target earns 50.</AlertDescription></Alert></>}
           <FormField>Priority<FormChoice name="priority" defaultValue="medium" options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }, { value: 'urgent', label: 'Urgent' }]} /></FormField>
@@ -436,8 +436,8 @@ export function TeamTicketForm({ data, mutate, onClose, busy }: { data: Dashboar
         <FieldGroup className="form-grid">
           <EstimateField defaultValue={4} label="Hours each" />
           {done
-            ? <FormField>Held on<FormDate required value={doneOn} max={day} onValueChange={setDoneOn} /></FormField>
-            : <FormField>Due date <span className="optional">optional</span><FormDate name="dueDate" min={day} placeholder="No due date" /></FormField>}
+            ? <FormField>Held on<FormDate key="doneOn" required value={doneOn} max={day} onValueChange={setDoneOn} /></FormField>
+            : <FormField>Date<FormDate key="dueDate" name="dueDate" required defaultValue={day} min={day} /></FormField>}
           {!done && <FormField>Priority<FormChoice name="priority" defaultValue="medium" options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }, { value: 'urgent', label: 'Urgent' }]} /></FormField>}
         </FieldGroup>
         {locked && <Alert className="form-tip extend-warning"><CircleHelp size={17} /><AlertDescription><p>The report for that week is locked. The tickets are saved, but scores for that week stay as they are.</p></AlertDescription></Alert>}
@@ -448,7 +448,7 @@ export function TeamTicketForm({ data, mutate, onClose, busy }: { data: Dashboar
   </Modal>;
 }
 
-/** Changes that need a reason: blocking, sending back, or reopening. Also sets a first due date. More hours on a ticket uses ExtendForm. */
+/** Changes that need a reason: blocking, sending back, or reopening. Also sets a first date. More hours on a ticket uses ExtendForm. */
 export function ReasonForm({ action, data, mutate, onClose, busy }: { action: QuickAction; data: DashboardData; mutate: MutationFn; onClose: () => void; busy: boolean }) {
   const due = action.patch.dueDate !== undefined;
   const firstDue = due && !action.item.dueDate;
@@ -461,14 +461,14 @@ export function ReasonForm({ action, data, mutate, onClose, busy }: { action: Qu
     const patch = { ...action.patch };
     if (due) patch.dueDate = String(f.get('dueDate'));
     if (blocked) patch.blocker = reason;
-    const message = blocked ? 'Blocker saved. Your admin can see it.' : firstDue ? 'Due date set' : 'Saved. The reason is in the timeline.';
+    const message = blocked ? 'Blocker saved. Your admin can see it.' : firstDue ? 'Date set' : 'Saved. The reason is in the timeline.';
     const ok = await mutate({ action: 'updateItem', id: action.item.id, patch, ...(reason ? { reason } : {}) }, message);
     if (ok) onClose();
   }
   return <Modal title={action.label} subtitle={`${action.item.key} · ${action.item.title}`} onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
-        {firstDue && <FormField>Due date<FormDate name="dueDate" required min={day} /></FormField>}
+        {firstDue && <FormField>Date<FormDate name="dueDate" required min={day} /></FormField>}
         {!firstDue && <FormField>{blocked ? 'What is blocking this ticket?' : 'Reason'}<Textarea name="reason" required minLength={3} rows={3} placeholder={blocked ? 'Name the person or thing you are waiting for.' : 'A short explanation for the team.'} /></FormField>}
         {!firstDue && <div className="form-help"><ActivityIcon size={13} />This reason appears in the ticket timeline.</div>}
       </FieldGroup>

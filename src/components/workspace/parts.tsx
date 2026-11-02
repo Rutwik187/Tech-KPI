@@ -57,7 +57,7 @@ export function ItemActions({ item, admin, onAction, busy }: { item: WorkItem; a
 }
 
 /**
- * The owner or an admin may change an open ticket's due date. Setting the first one is planning.
+ * The owner or an admin may change an open ticket's date. Setting the first one is planning.
  * An admin extends directly with a reason; a developer asks, and may not ask again while one request waits.
  */
 export function canMoveDueDate(item: WorkItem, data: DashboardData) {
@@ -83,15 +83,9 @@ export function PendingExtensionBadge({ data, item }: { data: DashboardData; ite
 function DueDateButton({ item, data, onExtend }: { item: WorkItem; data: DashboardData; onExtend: (item: WorkItem) => void }) {
   // A developer's extension is a request, so the button says so.
   const label = !item.dueDate ? 'Set date' : data.currentUser.role === 'admin' ? 'Extend' : 'Ask to extend';
-  return <Button variant="ghost" size="sm" type="button" className="due-action" aria-label={`${item.dueDate ? 'Extend the due date of' : 'Set a due date for'} ${item.key}`} onClick={() => onExtend(item)}>
+  return <Button variant="ghost" size="sm" type="button" className="due-action" aria-label={`${item.dueDate ? 'Extend the date of' : 'Set a date for'} ${item.key}`} onClick={() => onExtend(item)}>
     <CalendarClock data-icon="inline-start" />{label}
   </Button>;
-}
-
-export function DueDate({ item, data, onExtend }: { item: WorkItem; data: DashboardData; onExtend?: (item: WorkItem) => void }) {
-  const overdue = !!item.dueDate && item.dueDate < today(data.settings.timezone) && !isDone(item);
-  return <span className="due-cell"><span className={clsx('due-date', overdue && 'due-overdue')}><CalendarDays size={12} />{item.dueDate ? displayDate(item.dueDate) : 'No due date'}</span>{overdue && <span className="sr-only">Overdue</span>}<TicketExtendedBadge data={data} item={item} /><PendingExtensionBadge data={data} item={item} />
-    {onExtend && canMoveDueDate(item, data) && <DueDateButton item={item} data={data} onExtend={onExtend} />}</span>;
 }
 
 /** A bug earns full points when fixed by its fix-by time, half within twice the target, none after that. */
@@ -123,7 +117,7 @@ export function TicketCard({ item, data, onOpen, onAction, onExtend, busy }: { i
     {item.type === 'bug' && <div className="task-card-meta"><SeverityBadge item={item} /><FixBy item={item} data={data} /></div>}
       {item.type === 'task' && <span className="task-card-facts">
         <span title="Estimate"><Clock3 size={12} aria-hidden="true" />{item.estimateHours} h</span>
-        {item.dueDate && <span className={clsx(overdue && 'due-overdue')} title={overdue ? 'Overdue' : 'Due date'}><CalendarDays size={12} aria-hidden="true" />{displayDate(item.dueDate)}{overdue && <span className="sr-only"> overdue</span>}</span>}
+        {item.dueDate && <span className={clsx(overdue && 'due-overdue')} title={overdue ? 'Carried over: not done on its date' : 'Date'}><CalendarDays size={12} aria-hidden="true" />{displayDate(item.dueDate)}{overdue && <span className="sr-only"> carried over</span>}</span>}
         <TicketExtendedBadge data={data} item={item} /><PendingExtensionBadge data={data} item={item} />
         {onExtend && canMoveDueDate(item, data) && <DueDateButton item={item} data={data} onExtend={onExtend} />}
       </span>}

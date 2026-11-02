@@ -15,7 +15,7 @@ const TIMEZONE = 'Asia/Kolkata';
 export function isDone(item: WorkItem) { return item.type === 'task' ? item.status === 'done' : item.status === 'verified'; }
 export function today(tz = TIMEZONE) { return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); }
 export function displayDate(date: string | Date | null, options?: Intl.DateTimeFormatOptions) {
-  if (!date) return 'No due date';
+  if (!date) return 'No date';
   const parsed = typeof date === 'string' ? new Date(date.length === 10 ? `${date}T12:00:00+05:30` : date) : date;
   if (Number.isNaN(parsed.getTime())) return 'Date unavailable';
   return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: TIMEZONE, ...options }).format(parsed);
@@ -110,10 +110,10 @@ export function attentionReason(item: WorkItem, data: DashboardData, day = today
     if (item.severity === 'critical') return `Critical · fix by ${displayDateTime(kpi.deadline1)}`;
     return null;
   }
-  if (item.dueDate && item.dueDate < day) return `Overdue · was due ${displayDate(item.dueDate)}`;
+  if (item.dueDate && item.dueDate < day) return `Carried over from ${displayDate(item.dueDate)}`;
   const returned = sentBack(item, data);
   if (returned && !admin) return returned.reason ? `Sent back: ${returned.reason}` : 'Sent back for changes';
-  if (!admin && item.dueDate === day) return 'Due today';
+  if (!admin && item.dueDate === day) return 'For today';
   return null;
 }
 export function attentionItems(data: DashboardData) {
@@ -214,8 +214,8 @@ export const MAX_TICKET_HOURS = 80;
 /** Focused hours in one working day. The estimate's day presets count in these. */
 export const WORKDAY_HOURS = 6.5;
 export const ESTIMATE_PRESETS = [{ label: 'Half day', hours: WORKDAY_HOURS / 2 }, { label: '1 day', hours: WORKDAY_HOURS }, { label: '2 days', hours: WORKDAY_HOURS * 2 }];
-/** A ticket due date or a project target that already exists and is being moved. Both need a reason. */
-/** A ticket opened with `hours` adds hours even without a due date. Without it, a ticket with no due date gets its first one. */
+/** A ticket date or a project target that already exists and is being moved. Both need a reason. */
+/** A ticket opened with `hours` adds hours even without a date. Without it, a ticket with no date gets its first one. */
 export type ExtendTarget = { kind: 'ticket'; item: WorkItem; hours?: boolean } | { kind: 'project'; project: Project };
 
 /** Applies a change to demo data in the browser. It follows the server's rules closely enough to try every flow. */
@@ -275,7 +275,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       const request = next.dueDateRequests.find(r => r.id === mutation.id);
       const item = next.items.find(i => i.id === request?.itemId);
       if (!request || request.status !== 'pending' || !item) throw new Error('This request was already reviewed.');
-      if (item.dueDate !== request.fromDate || item.estimateHours !== request.fromEstimate) throw new Error('The ticket\'s due date or estimate changed after this request. Decline it, and the developer can ask again.');
+      if (item.dueDate !== request.fromDate || item.estimateHours !== request.fromEstimate) throw new Error('The ticket\'s date or estimate changed after this request. Decline it, and the developer can ask again.');
       const hours = mutation.hours ?? request.hours;
       extend(item, hours, request.reasonCategory, request.reason, request);
       Object.assign(request, { status: 'approved', approvedHours: hours, reviewedById: actor.id, reviewedAt: now, reviewNote: mutation.note?.trim() || null });

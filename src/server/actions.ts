@@ -293,7 +293,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         const request = await pendingDueDateRequest(tx, action.id);
         const [item] = await tx.select().from(workItems).where(eq(workItems.id, request.itemId)).for("update");
         if (!item || !OPEN_TICKET.includes(item.status)) throw new AppError("This ticket is no longer open. Decline the request instead.", 409);
-        if (item.dueDate !== request.fromDate || item.estimateHours !== request.fromEstimate) throw new AppError("The ticket's due date or estimate changed after this request. Decline it, and the developer can ask again.", 409);
+        if (item.dueDate !== request.fromDate || item.estimateHours !== request.fromEstimate) throw new AppError("The ticket's date or estimate changed after this request. Decline it, and the developer can ask again.", 409);
         const hours = action.hours ?? request.hours;
         assertExtendable(item, hours);
         await applyExtension(tx, actor, item, hours, request.reasonCategory, request.reason, request);
@@ -360,8 +360,8 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
           if (action.reasonCategory && action.reasonCategory !== "scope_change") throw new AppError("Estimate revisions need a scope change reason.");
         }
         if (patch.dueDate !== undefined && patch.dueDate !== item.dueDate) {
-          if (item.type === "bug") throw new AppError("Bugs use their fix-by time instead of a due date.");
-          if (item.status === "done") throw new AppError("Reopen this ticket before changing its due date.");
+          if (item.type === "bug") throw new AppError("Bugs use their fix-by time instead of a date.");
+          if (item.status === "done") throw new AppError("Reopen this ticket before changing its date.");
           // Setting the first due date is planning. Moving an existing one is an extension: an admin's needs a reason,
           // and a developer asks for it, so the date moves only after an admin approves.
           if (item.dueDate && actor.role !== "admin") throw new AppError("Use Extend to ask for more hours. Your admin approves it.", 403);
