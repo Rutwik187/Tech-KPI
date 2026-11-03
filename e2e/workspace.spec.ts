@@ -1170,3 +1170,65 @@ test('an admin filters projects by developer', async ({ page }) => {
   await chooseOption(page, page.getByRole('combobox', { name: 'Filter by developer', exact: true }), 'All developers');
   await expect(card('Inventory management')).toBeVisible();
 });
+
+test('search finds a ticket by its number and opens it at an address that can be shared', async ({ page }) => {
+  await openDemo(page, 'tickets');
+  await page.keyboard.press('ControlOrMeta+k');
+  const search = page.getByRole('combobox', { name: 'Search the workspace', exact: true });
+  await expect(search).toBeFocused();
+  // The number alone finds UG-007.
+  await search.fill('7');
+  await expect(page.getByRole('option').first()).toContainText('UG-007');
+  await search.press('Enter');
+  const title = 'Finish creator payout reconciliation';
+  const drawer = page.getByRole('dialog');
+  await expect(drawer.getByRole('heading', { name: title, exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/[?&]open=UG-007/);
+  // The same address opens the same ticket after a reload.
+  await page.reload();
+  await expect(page.getByRole('dialog').getByRole('heading', { name: title, exact: true })).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await expect(page).not.toHaveURL(/open=/);
+  await expect(page.getByRole('textbox', { name: 'Search tickets' })).toBeVisible();
+});
+
+test('a blocked ticket is unblocked from its details and goes back to in progress', async ({ page }) => {
+  await openDemo(page, 'tickets?open=UG-007');
+  const drawer = page.getByRole('dialog');
+  await expect(drawer.getByRole('heading', { name: 'Finish creator payout reconciliation', exact: true })).toBeVisible();
+  await drawer.getByRole('button', { name: 'Unblock', exact: true }).click();
+  await expect.poll(async () => (await readDemoData(page)).items.find(item => item.key === 'UG-007')).toMatchObject({ status: 'in_progress', blocker: null });
+  await expect(drawer.getByRole('button', { name: 'Mark blocked', exact: true })).toBeVisible();
+  await expect(drawer.locator('.timeline')).toContainText('unblocked it');
+});
+
+test('shortcuts search the list and add a ticket, and the chosen grouping stays after a reload', async ({ page }) => {
+  await openDemo(page, 'tickets');
+  await page.keyboard.press('/');
+  await expect(page.getByRole('textbox', { name: 'Search tickets' })).toBeFocused();
+  await page.getByRole('heading', { level: 1 }).click();
+  await page.keyboard.press('c');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: 'New ticket', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await chooseOption(page, page.getByRole('combobox', { name: 'Group tickets', exact: true }), 'Owner');
+  await expect(page.locator('.work-group-label').first()).toHaveText('Aarav Mehta');
+  await page.reload();
+  await expect(page.getByRole('combobox', { name: 'Group tickets', exact: true })).toHaveText('Owner');
+  await expect(page.locator('.work-group-label').first()).toHaveText('Aarav Mehta');
+  // Grouped by owner, the owner column would repeat the heading, so it hides. Status shows instead.
+  await expect(page.getByRole('columnheader', { name: 'Owner', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('columnheader', { name: 'Status', exact: true })).toBeVisible();
+});
+
+test('a developer’s overview starts with their own work, with what needs them first', async ({ page }) => {
+  await openDemo(page);
+  await chooseOption(page, page.getByRole('combobox', { name: 'View the demo as', exact: true }), 'Vivaan Shah · Developer');
+  const work = page.locator('.my-work-panel');
+  await expect(work.getByRole('heading', { name: /^My work/ })).toBeVisible();
+  const attention = work.getByRole('region', { name: 'Needs attention', exact: true });
+  await expect(attention).toContainText('Finish creator payout reconciliation');
+  await expect(attention).toContainText('Blocked: Waiting for the finance team');
+  await expect(work.getByRole('button', { name: /^Complete/ }).first()).toBeVisible();
+});

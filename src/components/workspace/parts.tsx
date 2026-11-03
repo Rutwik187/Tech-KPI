@@ -2,23 +2,25 @@
 
 import type { CSSProperties, ReactNode } from 'react';
 import clsx from 'clsx';
-import { AlertTriangle, ArrowRight, CalendarClock, CalendarDays, Check, CheckCheck, Clock3 } from 'lucide-react';
+import { toast } from 'sonner';
+import { AlertTriangle, ArrowDown, CalendarClock, CalendarDays, Check, CheckCheck, CircleDot, Clock3, Flag, Link2, MoreHorizontal, PanelRightOpen, Plus, RotateCcw } from 'lucide-react';
 import type { DashboardData, WorkItem } from '@/lib/types';
 import { getBugKpi, type MemberKpi } from '@/lib/kpi';
-import { Avatar, PriorityBadge } from '@/components/ui';
+import { Avatar, PriorityMark } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { bands, displayDate, displayDateTime, findMember, findProject, firstName, hours, isDone, pendingExtension, percent, phaseName, today, type OnAction } from './lib';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { bands, displayDate, displayDateTime, findMember, findProject, firstName, hours, isDone, itemLink, pendingExtension, percent, phaseName, today, type OnAction } from './lib';
 import { TicketExtendedBadge } from './timeline';
 
 export function ProjectTag({ data, id }: { data: DashboardData; id: string }) {
   const project = findProject(data, id);
-  return <Badge variant="outline" className="project-tag"><i style={{ background: project?.color ?? '#87958a' }} />{project?.name ?? 'Unknown project'}</Badge>;
+  return <span className="project-tag" title={project?.name}><i style={{ background: project?.color ?? 'var(--muted-foreground)' }} aria-hidden="true" /><span>{project?.name ?? 'Unknown project'}</span></span>;
 }
 export function PhaseTag({ data, id }: { data: DashboardData; id: string | null }) {
   const description = id ? data.phases.find(phase => phase.id === id)?.description : '';
-  return <Badge variant="secondary" className="phase-tag" title={description || undefined}>{phaseName(data, id)}</Badge>;
+  return <span className={clsx('phase-tag', !id && 'phase-tag-adhoc')} title={description || undefined}>{phaseName(data, id)}</span>;
 }
 export function ScoreBadge({ score, band }: { score: number | null; band: keyof typeof bands }) {
   const variant = band === 'on_target' ? 'success' : band === 'below_target' ? 'warning' : band === 'needs_attention' ? 'destructive' : 'secondary';
@@ -26,7 +28,7 @@ export function ScoreBadge({ score, band }: { score: number | null; band: keyof 
 }
 export function SeverityBadge({ item }: { item: WorkItem }) {
   const critical = item.severity === 'critical';
-  return <Badge variant={critical ? 'destructive' : 'outline'} className={clsx('severity-badge', critical && 'severity-critical')}>{critical ? 'Critical' : 'Normal'}</Badge>;
+  return <Badge variant={critical ? 'destructive' : 'outline'} className={clsx('severity-badge', critical && 'severity-critical')}>{critical && <AlertTriangle aria-hidden="true" />}{critical ? 'Critical' : 'Normal'}</Badge>;
 }
 export function MetricCard({ label, value, detail, icon, primary, children }: { label: string; value: ReactNode; detail: ReactNode; icon: ReactNode; primary?: boolean; children?: ReactNode }) {
   return <Card className={clsx('metric-card', primary && 'metric-primary')}>
@@ -39,21 +41,23 @@ export function MetricCard({ label, value, detail, icon, primary, children }: { 
 export function ItemActions({ item, admin, onAction, busy }: { item: WorkItem; admin: boolean; onAction: OnAction; busy: boolean }) {
   let status: WorkItem['status'] | null = null;
   let label = '';
-  let Icon = ArrowRight;
+  let Icon = Check;
   if (item.type === 'task') {
     // One step to finish. A developer's ticket then waits for review; an admin approves as they complete.
-    if (['todo', 'in_progress', 'blocked'].includes(item.status)) { status = admin ? 'done' : 'in_review'; label = 'Complete'; Icon = Check; }
-    else if (item.status === 'in_review' && admin) { status = 'done'; label = 'Approve'; Icon = Check; }
+    if (['todo', 'in_progress', 'blocked'].includes(item.status)) { status = admin ? 'done' : 'in_review'; label = 'Complete'; }
+    else if (item.status === 'in_review' && admin) { status = 'done'; label = 'Approve'; }
   } else {
-    if (item.status === 'open' || item.status === 'in_progress') { status = 'fixed'; label = 'Mark fixed'; Icon = Check; }
+    if (item.status === 'open' || item.status === 'in_progress') { status = 'fixed'; label = 'Mark fixed'; }
     else if (item.status === 'fixed' && admin) { status = 'verified'; label = 'Verify'; Icon = CheckCheck; }
   }
   if (!status) {
     const waiting = item.status === 'in_review' ? 'Waiting for review' : item.status === 'fixed' ? 'Waiting for verification' : 'Completed';
-    return <span className="cell-muted">{waiting}</span>;
+    return <span className={clsx('cell-muted next-step-note', isDone(item) && 'next-step-done')}>{waiting}</span>;
   }
   const next = status;
-  return <Button variant={next === 'done' || next === 'verified' ? 'secondary' : 'outline'} size="sm" type="button" disabled={busy} onClick={() => onAction(item, next)}>{label}<Icon data-icon="inline-end" size={13} /></Button>;
+  // An admin's decision on someone's finished work stands out. Everything else is a quiet step.
+  const decision = next === 'done' && item.status === 'in_review' || next === 'verified';
+  return <Button variant={decision ? 'default' : 'outline'} size="sm" type="button" className={clsx('next-step', decision && 'next-step-decision')} disabled={busy} onClick={() => onAction(item, next)}>{label}<Icon data-icon="inline-end" size={13} /></Button>;
 }
 
 /**
@@ -89,7 +93,7 @@ function DueDateButton({ item, data, onExtend }: { item: WorkItem; data: Dashboa
 }
 
 /** A bug earns full points when fixed by its fix-by time, half within twice the target, none after that. */
-export function FixBy({ item, data }: { item: WorkItem; data: DashboardData }) {
+export function FixBy({ item, data, label = false }: { item: WorkItem; data: DashboardData; label?: boolean }) {
   const kpi = getBugKpi(item, data);
   const closed = item.status === 'fixed' || item.status === 'verified';
   if (closed) {
@@ -97,33 +101,83 @@ export function FixBy({ item, data }: { item: WorkItem; data: DashboardData }) {
     return <span className="fix-by"><Badge variant={kpi.score === 100 ? 'success' : kpi.score === 50 ? 'warning' : 'destructive'}>{label} · {kpi.score ?? 0} pts</Badge><small>{hours(kpi.resolutionWorkingHours)} working h to fix</small></span>;
   }
   const late = kpi.overdueHours > 0;
-  return <span className={clsx('fix-by', late && 'fix-by-late')}><span className="bug-clock"><Clock3 size={12} />Fix by {displayDateTime(kpi.deadline1)}</span><small>{late ? `${hours(kpi.overdueHours)} working h late` : `${hours(kpi.hoursRemaining)} working h left`}</small></span>;
+  return <span className={clsx('fix-by', late && 'fix-by-late')}><span className="bug-clock"><Clock3 size={12} />{label && 'Fix by '}{displayDateTime(kpi.deadline1)}</span><small>{late ? `${hours(kpi.overdueHours)} working h late` : `${hours(kpi.hoursRemaining)} working h left`}</small></span>;
 }
 
-/** Shared ticket card for the board and personal work grid. */
-export function TicketCard({ item, data, onOpen, onAction, onExtend, busy }: { item: WorkItem; data: DashboardData; onOpen: (id: string) => void; onAction: OnAction; onExtend?: (item: WorkItem) => void; busy: boolean }) {
+/** A ticket from an earlier day that is still open. It carried over, so it shows in red. */
+export function isCarriedOver(item: WorkItem, data: DashboardData) {
+  return item.type === 'task' && !!item.dueDate && item.dueDate < today(data.settings.timezone) && !isDone(item);
+}
+
+/** Small signals next to a title: extensions, more time asked, and, where no column shows it, a critical bug. */
+export function ItemFlags({ item, data, severity = false }: { item: WorkItem; data: DashboardData; severity?: boolean }) {
+  return <span className="item-flags">
+    {item.type === 'task' && <TicketExtendedBadge data={data} item={item} />}
+    {item.type === 'task' && <PendingExtensionBadge data={data} item={item} />}
+    {severity && item.type === 'bug' && item.severity === 'critical' && !isDone(item) && item.status !== 'fixed' && <span className="flag flag-critical"><AlertTriangle aria-hidden="true" />Critical</span>}
+  </span>;
+}
+
+export async function copyItemLink(data: DashboardData, item: WorkItem) {
+  try { await navigator.clipboard.writeText(itemLink(data, item)); toast.success(`Link to ${item.key} copied`); }
+  catch { toast.error('Could not copy the link.'); }
+}
+
+/** Every other step for an item, in one menu. The same rules as the details panel decide what shows. */
+export function ItemMenu({ item, data, onOpen, onAction, onExtend, onAddHours, busy, align = 'end' }: { item: WorkItem; data: DashboardData; onOpen?: (id: string) => void; onAction: OnAction; onExtend?: (item: WorkItem) => void; onAddHours?: (item: WorkItem) => void; busy: boolean; align?: 'start' | 'end' }) {
+  const admin = data.currentUser.role === 'admin';
+  const ticket = item.type === 'task';
+  const canBlock = ticket && ['todo', 'in_progress'].includes(item.status);
+  const canUnblock = ticket && item.status === 'blocked';
+  const moveDate = !!onExtend && canMoveDueDate(item, data);
+  const addHours = !!onAddHours && canAddHours(item, data);
+  const sendBack = admin && item.status === 'in_review';
+  const reopen = admin && (item.status === 'done' || item.status === 'fixed' || item.status === 'verified');
+  const steps = canBlock || canUnblock || moveDate || addHours || sendBack || reopen;
+  // Not modal, so a dialog opened from the menu gets focus and clicks straight away.
+  return <DropdownMenu modal={false}>
+    <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" type="button" className="item-menu-trigger" aria-label={`More actions for ${item.key}`}><MoreHorizontal /></Button></DropdownMenuTrigger>
+    <DropdownMenuContent align={align} className="item-menu">
+      {onOpen && <DropdownMenuItem onSelect={() => onOpen(item.id)}><PanelRightOpen />Open details</DropdownMenuItem>}
+      <DropdownMenuItem onSelect={() => void copyItemLink(data, item)}><Link2 />Copy link</DropdownMenuItem>
+      {steps && <DropdownMenuSeparator />}
+      {canBlock && <DropdownMenuItem disabled={busy} onSelect={() => onAction(item, 'blocked')}><Flag />Mark blocked</DropdownMenuItem>}
+      {canUnblock && <DropdownMenuItem disabled={busy} onSelect={() => onAction(item, 'in_progress')}><CircleDot />Unblock</DropdownMenuItem>}
+      {moveDate && <DropdownMenuItem onSelect={() => onExtend!(item)}>{item.dueDate ? <CalendarClock /> : <CalendarDays />}{!item.dueDate ? 'Set date' : admin ? 'Extend date' : 'Ask to extend'}</DropdownMenuItem>}
+      {addHours && <DropdownMenuItem onSelect={() => onAddHours!(item)}><Plus />{admin ? 'Add hours' : 'Ask for hours'}</DropdownMenuItem>}
+      {sendBack && <DropdownMenuItem disabled={busy} onSelect={() => onAction(item, 'in_progress')}><ArrowDown />Send back</DropdownMenuItem>}
+      {reopen && <DropdownMenuItem disabled={busy} onSelect={() => onAction(item, ticket ? 'in_progress' : 'open')}><RotateCcw />Reopen</DropdownMenuItem>}
+    </DropdownMenuContent>
+  </DropdownMenu>;
+}
+
+/** Shared ticket card for the board. Identity, title, context, facts, then one clear next step. */
+export function TicketCard({ item, data, onOpen, onAction, onExtend, onAddHours, busy }: { item: WorkItem; data: DashboardData; onOpen: (id: string) => void; onAction: OnAction; onExtend?: (item: WorkItem) => void; onAddHours?: (item: WorkItem) => void; busy: boolean }) {
   const project = findProject(data, item.projectId);
   const owner = findMember(data, item.assigneeId);
   const phase = item.phaseId ? phaseName(data, item.phaseId) : null;
-  const overdue = item.type === 'task' && !!item.dueDate && item.dueDate < today(data.settings.timezone) && !isDone(item);
+  const overdue = isCarriedOver(item, data);
+  const admin = data.currentUser.role === 'admin';
   return <Card className={clsx('task-card', overdue && 'task-card-overdue', isDone(item) && 'task-card-done')} size="sm" style={{ '--project-color': project?.color ?? 'var(--border)' } as CSSProperties}>
     <div className="task-card-top">
       <span className="item-key">{item.key}</span>
-      {item.priority !== 'medium' && <PriorityBadge priority={item.priority} />}
+      <PriorityMark priority={item.priority} />
+      <ItemMenu item={item} data={data} onOpen={onOpen} onAction={onAction} onExtend={onExtend} onAddHours={onAddHours} busy={busy} />
     </div>
     <Button variant="ghost" className="task-card-title" onClick={() => onOpen(item.id)}>{item.title}</Button>
     <div className="task-card-context"><span className="task-card-project" title={project?.name}><i aria-hidden="true" /><span>{project?.name ?? 'Unknown project'}</span></span>{phase && <span className="task-card-phase" title={phase}>{phase}</span>}</div>
     {item.status === 'blocked' && item.blocker && <p className="task-card-blocker"><AlertTriangle size={12} aria-hidden="true" />{item.blocker}</p>}
-    {item.type === 'bug' && <div className="task-card-meta"><SeverityBadge item={item} /><FixBy item={item} data={data} /></div>}
-      {item.type === 'task' && <span className="task-card-facts">
-        <span title="Estimate"><Clock3 size={12} aria-hidden="true" />{item.estimateHours} h</span>
-        {item.dueDate && <span className={clsx(overdue && 'due-overdue')} title={overdue ? 'Carried over: not done on its date' : 'Date'}><CalendarDays size={12} aria-hidden="true" />{displayDate(item.dueDate)}{overdue && <span className="sr-only"> carried over</span>}</span>}
-        <TicketExtendedBadge data={data} item={item} /><PendingExtensionBadge data={data} item={item} />
-        {onExtend && canMoveDueDate(item, data) && <DueDateButton item={item} data={data} onExtend={onExtend} />}
-      </span>}
+    {item.type === 'bug' && <div className="task-card-meta"><SeverityBadge item={item} /><FixBy item={item} data={data} label /></div>}
+    {item.type === 'task' && <span className="task-card-facts">
+      <span title="Estimate"><Clock3 size={12} aria-hidden="true" />{item.estimateHours} h</span>
+      {item.dueDate && <span className={clsx(overdue && 'due-overdue')} title={overdue ? 'Carried over: not done on its date' : 'Date'}><CalendarDays size={12} aria-hidden="true" />{displayDate(item.dueDate)}{overdue && <span className="sr-only"> carried over</span>}</span>}
+      <TicketExtendedBadge data={data} item={item} /><PendingExtensionBadge data={data} item={item} />
+      {/* Late work shows its date action on the card. Every other card keeps it in the menu. */}
+      {onExtend && overdue && canMoveDueDate(item, data) && <DueDateButton item={item} data={data} onExtend={onExtend} />}
+    </span>}
     <div className="task-card-bottom">
-      <span className="task-card-owner" title={owner?.name}><Avatar member={owner} size="small" /><span>{firstName(owner)}</span></span>
-      <span className="task-card-action"><ItemActions item={item} admin={data.currentUser.role === 'admin'} onAction={onAction} busy={busy} /></span>
+      {admin ? <span className="task-card-owner" title={owner?.name}><Avatar member={owner} size="small" /><span>{firstName(owner)}</span></span> : <span className="task-card-owner" />}
+      <span className="task-card-action"><ItemActions item={item} admin={admin} onAction={onAction} busy={busy} /></span>
     </div>
   </Card>;
 }

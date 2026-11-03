@@ -4,21 +4,18 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDownToLine, ArrowRight, BellDot, Bug, CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, ClipboardCheck, Coffee, Eye, FolderKanban, LayoutDashboard, ListTodo, Plus, RotateCcw, Settings2, Target, Users, UsersRound } from 'lucide-react';
+import { ArrowDownToLine, ArrowRight, Bell, Bug, CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, ClipboardCheck, Coffee, Eye, FolderKanban, FolderPlus, LayoutDashboard, ListTodo, Plus, RotateCcw, Search, Settings2, UserPlus, Users, UsersRound } from 'lucide-react';
 import type { DashboardData, Project, WorkItem } from '@/lib/types';
 import { calculateTeamKpi, getWeekStart, shiftDate } from '@/lib/kpi';
-import { Avatar, EmptyState, FormSelect, Panel } from '@/components/ui';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Avatar, EmptyState, FormSelect, Kbd, Panel, StatusIcon } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
-import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from '@/components/ui/breadcrumb';
 import { Button } from '@/components/ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Separator } from '@/components/ui/separator';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { calculateMemberKpi } from '@/lib/kpi';
 import { isSection } from '@/lib/sections';
-import { adminOnlyPages, attentionItems, bands, DEMO_DATA_KEY, demoSnapshot, demoViewer, displayDate, findMember, firstName, isDone, mutateDemo, routeFor, saveDemo, setDemoViewer, statusLabels, subscribeDemo, viewAs, downloadCsv, type ModalState, type Mutation, type MutationFn, type QuickAction } from './lib';
+import { adminOnlyPages, attentionItems, bands, DEMO_DATA_KEY, demoSnapshot, demoViewer, displayDate, findMember, firstName, isDone, mutateDemo, OPEN_PARAM, routeFor, saveDemo, setDemoViewer, statusLabels, subscribeDemo, viewAs, downloadCsv, type ModalState, type Mutation, type MutationFn, type QuickAction } from './lib';
 import { Dashboard } from './dashboard';
 import { Approvals } from './approvals';
 import { WorkList } from './work-list';
@@ -32,13 +29,18 @@ import { ItemDrawer } from './item-drawer';
 import { ProjectDrawer } from './project-drawer';
 import { ExtendForm } from './timeline';
 import { celebrate, dayBrief, greeting } from './engagement';
+import { CommandPalette, type PaletteModal } from './command-palette';
+import { useSearchShortcut } from './use-choice';
 
-const pages = [
+type PageLink = { id: string; label: string; icon: typeof LayoutDashboard; admin?: boolean };
+const workPages: PageLink[] = [
   { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
-  { id: 'standup', label: 'Daily standup', icon: Coffee, admin: true },
   { id: 'tickets', label: 'Tickets', icon: ListTodo },
   { id: 'bugs', label: 'Bugs', icon: Bug },
   { id: 'approvals', label: 'Approvals', icon: ClipboardCheck },
+];
+const teamPages: PageLink[] = [
+  { id: 'standup', label: 'Daily standup', icon: Coffee, admin: true },
   { id: 'team', label: 'Team', icon: Users, admin: true },
   { id: 'projects', label: 'Projects', icon: FolderKanban },
 ];
@@ -46,18 +48,23 @@ const pages = [
 function headings(page: string, data: DashboardData, brief: string): { title: string; description: string } {
   const admin = data.currentUser.role === 'admin';
   switch (page) {
-    case 'standup': return { title: 'Daily standup', description: 'Go through each person’s open tickets and add new ones as you talk.' };
-    case 'tickets': return admin ? { title: 'Tickets', description: 'Every ticket, its owner, and its next step.' } : { title: 'My tickets', description: 'Your tickets and their next step. Request a ticket for new work you take on.' };
+    case 'standup': return { title: 'Daily standup', description: 'Go through each developer’s open tickets and add new ones as you talk.' };
+    case 'tickets': return admin ? { title: 'Tickets', description: 'Every ticket, who owns it, and its next step.' } : { title: 'My tickets', description: 'Your tickets and their next step. Request a ticket for new work you take on.' };
     case 'bugs': return { title: admin ? 'Bugs' : 'My bugs', description: 'Fix a bug before its fix-by time to earn full bug points.' };
     case 'approvals': return admin
-      ? { title: 'Approvals', description: 'Ticket requests from developers, completed tickets, and fixed bugs waiting for you.' }
-      : { title: 'Approvals', description: 'The tickets you asked for, and finished work waiting for your admin.' };
+      ? { title: 'Approvals', description: 'Ticket requests, asks for more hours, and finished work that wait for you.' }
+      : { title: 'Approvals', description: 'The tickets and hours you asked for, and finished work that waits for your admin.' };
     case 'team': return { title: 'Team', description: 'People, their hours at work, leave, and scores.' };
     case 'projects': return { title: 'Projects', description: admin ? 'Projects, their phases, members, and progress.' : 'The projects you work on and their phases.' };
     case 'settings': return { title: 'Settings', description: 'Working hours, score weights, bug targets, and holidays.' };
     case 'account': return { title: 'My account', description: 'Your profile and sign-in.' };
     default: return { title: greeting(data.currentUser.name, new Date(), data.settings.timezone), description: brief };
   }
+}
+
+/** True while someone types in a field, so a single-key shortcut never steals a letter. */
+function typing(target: EventTarget | null) {
+  return target instanceof HTMLElement && !!target.closest('input, textarea, select, [contenteditable="true"], [role="combobox"], [role="listbox"], [role="menu"]');
 }
 
 export function Workspace({ initialData, children }: { initialData: DashboardData; children?: ReactNode }) {
@@ -74,21 +81,33 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
   const data = useMemo(() => demo ? viewAs(fullData, viewerId) : fullData, [demo, fullData, viewerId]);
   const [week, setWeek] = useState(getWeekStart(new Date(), initialData.settings.timezone));
   const [modal, setModal] = useState<ModalState>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [quickAction, setQuickAction] = useState<QuickAction | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   // Drawers belong to the page they were opened on.
   const [openedOn, setOpenedOn] = useState(pathname);
-  if (openedOn !== pathname) { setOpenedOn(pathname); setSelectedId(null); setProjectId(null); }
+  if (openedOn !== pathname) { setOpenedOn(pathname); setProjectId(null); }
   const isAdmin = data.currentUser.role === 'admin';
   const scores = useMemo(() => calculateTeamKpi(data, week), [data, week]);
-  const selected = data.items.find(i => i.id === selectedId);
+  // The open ticket or bug lives in the address, so its link can be shared and survives a reload.
+  const openKey = searchParams.get(OPEN_PARAM);
+  const selected = openKey ? data.items.find(i => i.key === openKey) : undefined;
   const selectedProject = data.projects.find(p => p.id === projectId);
   const currentWeek = getWeekStart(new Date(), data.settings.timezone);
   const brief = useMemo(() => page === 'dashboard' ? dayBrief(data, isAdmin ? undefined : calculateMemberKpi(data.currentUser, data, currentWeek)) : '', [page, data, isAdmin, currentWeek]);
   const { title, description } = headings(page, data, brief);
   const blocked = !isAdmin && adminOnlyPages.includes(page);
+  // The list keeps its filters while a ticket opens and closes, so the open ticket is not part of its identity.
+  const listQuery = useMemo(() => { const params = new URLSearchParams(searchParams.toString()); params.delete(OPEN_PARAM); return params.toString(); }, [searchParams]);
+
+  const openItem = useCallback((id: string | null) => {
+    const item = id ? data.items.find(i => i.id === id) : undefined;
+    const params = new URLSearchParams(window.location.search);
+    if (item) params.set(OPEN_PARAM, item.key); else params.delete(OPEN_PARAM);
+    const query = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+  }, [data.items]);
 
   // Each save returns the whole workspace. Only the newest answer is applied, so a slow reply never undoes a later change.
   const latestRequest = useRef(0);
@@ -153,7 +172,10 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
       return;
     }
     const owner = item.assigneeId === data.currentUser.id ? 'you' : firstName(findMember(data, item.assigneeId));
-    const message = status === 'done' ? `Ticket ${item.status === 'in_review' ? 'approved' : 'completed'}. +${item.estimateHours} h for ${owner}.` : status === 'verified' ? 'Fix verified. Nice catch.' : status === 'fixed' ? 'Marked fixed. Waiting for verification.' : status === 'in_review' ? 'Completed. Waiting for admin review.' : `Moved to ${statusLabels[status].toLowerCase()}`;
+    const message = item.status === 'blocked' && status === 'in_progress' ? `${item.key} is unblocked and back in progress.`
+      : status === 'done' ? `Ticket ${item.status === 'in_review' ? 'approved' : 'completed'}. +${item.estimateHours} h for ${owner}.`
+      : status === 'verified' ? 'Fix verified. Nice catch.' : status === 'fixed' ? 'Marked fixed. Waiting for verification.'
+      : status === 'in_review' ? 'Completed. Waiting for admin review.' : `Moved to ${statusLabels[status].toLowerCase()}`;
     if (status === 'done' || status === 'verified') celebrate();
     void mutate({ action: 'updateItem', id: item.id, patch: { status } }, message, { optimistic: true });
   }
@@ -164,12 +186,35 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     ], `urban-gabru-scores-${week}.csv`);
     toast.success('Weekly report downloaded');
   }
-  const addItem = (kind: 'task' | 'bug', assigneeId?: string) => setModal({ type: 'item', kind, assigneeId });
+  const addItem = useCallback((kind: 'task' | 'bug', assigneeId?: string) => setModal({ type: 'item', kind, assigneeId }), []);
   const extendTicket = (item: WorkItem) => setModal({ type: 'extend', target: { kind: 'ticket', item } });
   const addHours = (item: WorkItem) => setModal({ type: 'extend', target: { kind: 'ticket', item, hours: true } });
   const extendProject = (project: Project) => setModal({ type: 'extend', target: { kind: 'project', project } });
+  const openModal = (type: PaletteModal) => setModal({ type } as ModalState);
+  const searchKey = useSearchShortcut();
+
+  // Shortcuts: ⌘K or Ctrl+K searches everywhere, / searches the list on the page, and C adds a ticket.
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      // Search also works over a ticket's details, but not over a form, so nothing typed is lost.
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') { event.preventDefault(); setPaletteOpen(open => open ? false : !document.querySelector('[role="dialog"]:not(.drawer)')); return; }
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.repeat || typing(event.target)) return;
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      if (event.key === '/') {
+        event.preventDefault();
+        const search = document.querySelector<HTMLInputElement>('[data-page-search]');
+        if (search) search.focus(); else setPaletteOpen(true);
+      } else if (event.key.toLowerCase() === 'c' && !blocked) {
+        event.preventDefault();
+        addItem('task');
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [addItem, blocked]);
+
   // A developer's new work starts as a request that an admin approves.
-  const newTicket = <Button onClick={() => addItem('task')}><Plus data-icon="inline-start" size={17} />{isAdmin ? 'New ticket' : 'Request ticket'}</Button>;
+  const newTicket = <Button onClick={() => addItem('task')} aria-keyshortcuts="C"><Plus data-icon="inline-start" size={17} />{isAdmin ? 'New ticket' : 'Request ticket'}</Button>;
   const actions: Record<string, ReactNode> = {
     dashboard: <>{isAdmin && <Button variant="outline" onClick={exportScores}><ArrowDownToLine data-icon="inline-start" size={16} />Export report</Button>}{newTicket}</>,
     tickets: newTicket,
@@ -184,47 +229,56 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     ? (() => { const { item: asked, hours } = modal.target as { item: WorkItem; hours?: boolean }; const item = data.items.find(i => i.id === asked.id); return item ? { kind: 'ticket' as const, item, hours } : null; })()
     : (() => { const project = data.projects.find(p => p.id === (modal.target as { project: Project }).project.id); return project ? { kind: 'project' as const, project } : null; })()
     : null;
+  const weekLabel = week === currentWeek ? 'This week' : week < currentWeek ? 'Past week' : 'Future week';
 
   return <SidebarProvider className="workspace-shell">
     <WorkspaceSidebar data={data} page={page} />
     <SidebarInset className="main-shell">
       <header className="topbar">
-        <div className="topbar-location"><SidebarTrigger aria-label="Open navigation" /><Separator orientation="vertical" className="h-4" /><Breadcrumb><BreadcrumbList><BreadcrumbItem><BreadcrumbLink asChild><Link href={routeFor(data, 'dashboard')}>Workspace</Link></BreadcrumbLink></BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><BreadcrumbPage>{page === 'dashboard' ? 'Overview' : title}</BreadcrumbPage></BreadcrumbItem></BreadcrumbList></Breadcrumb></div>
-        <div className="topbar-right">
+        <div className="topbar-start">
+          <SidebarTrigger aria-label="Open navigation" className="topbar-trigger" />
+          <button type="button" className="search-trigger" onClick={() => setPaletteOpen(true)} aria-keyshortcuts="Meta+K Control+K">
+            <Search aria-hidden="true" /><span className="search-trigger-label">Search tickets, bugs, and projects…</span><Kbd className="search-trigger-kbd">{searchKey}</Kbd>
+          </button>
+        </div>
+        <div className="topbar-end">
           <Badge variant="outline" className="connection-status"><i />{demo ? 'Demo workspace' : 'Live workspace'}</Badge>
+          {!blocked && <CreateMenu isAdmin={isAdmin} onItem={addItem} onModal={openModal} />}
           <ThemeToggle />
-          <AttentionMenu data={data} onOpen={setSelectedId} />
-          <Link href={routeFor(data, 'account')} aria-label="Open my account"><Avatar member={data.currentUser} size="small" /></Link>
+          <AttentionMenu data={data} onOpen={openItem} />
+          <Link href={routeFor(data, 'account')} aria-label="Open my account" className="topbar-account"><Avatar member={data.currentUser} size="small" /></Link>
         </div>
       </header>
+      {demo && <DemoBanner data={fullData} viewerId={data.currentUser.id} />}
       <div className="main-content" key={page}>
-        {demo && <DemoBanner data={fullData} viewerId={data.currentUser.id} />}
         <div className="page-heading">
-          <div><h1>{title}<span className="heading-dot">.</span></h1><p>{description}</p></div>
-          {!blocked && <div className="page-actions">{actions[page]}</div>}
+          <div className="page-heading-text"><h1>{title}</h1>{description && <p>{description}</p>}</div>
+          {!blocked && actions[page] && <div className="page-actions">{actions[page]}</div>}
         </div>
         {!blocked && ['dashboard', 'standup', 'team'].includes(page) && <div className="period-toolbar">
-          <div className="period-label"><CalendarDays size={16} /><strong>{displayDate(week)} – {displayDate(shiftDate(week, 6, data.settings.timezone))}</strong><Badge variant="secondary">{week === currentWeek ? 'This week' : week < currentWeek ? 'Past week' : 'Future week'}</Badge></div>
           <div className="week-control">
-            <Button variant="ghost" size="icon" aria-label="Previous week" onClick={() => setWeek(shiftDate(week, -7, data.settings.timezone))}><ChevronLeft size={16} /></Button>
-            <Button variant="outline" disabled={week === currentWeek} onClick={() => setWeek(currentWeek)}>This week</Button>
-            <Button variant="ghost" size="icon" aria-label="Next week" onClick={() => setWeek(shiftDate(week, 7, data.settings.timezone))}><ChevronRight size={16} /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label="Previous week" onClick={() => setWeek(shiftDate(week, -7, data.settings.timezone))}><ChevronLeft size={16} /></Button>
+            <span className="period-label"><CalendarDays size={15} aria-hidden="true" /><strong>{displayDate(week)} – {displayDate(shiftDate(week, 6, data.settings.timezone))}</strong></span>
+            <Button variant="ghost" size="icon-sm" aria-label="Next week" onClick={() => setWeek(shiftDate(week, 7, data.settings.timezone))}><ChevronRight size={16} /></Button>
           </div>
+          <Badge variant={week === currentWeek ? 'secondary' : 'outline'} className="period-badge">{weekLabel}</Badge>
+          {week !== currentWeek && <Button variant="link" size="sm" onClick={() => setWeek(currentWeek)}>Back to this week</Button>}
         </div>}
         {blocked ? <Panel><EmptyState title="This page is for admins" description="Your overview, tickets, bugs, and projects are in the menu." action={<Button variant="outline" asChild><Link href={routeFor(data, 'dashboard')}>Go to my overview<ArrowRight data-icon="inline-end" /></Link></Button>} /></Panel> : <>
-          {page === 'dashboard' && <Dashboard data={data} week={week} scores={scores} onOpen={setSelectedId} onOpenProject={setProjectId} onAction={act} onExtend={extendTicket} onAdd={addItem} busy={busy} />}
-          {(page === 'tickets' || page === 'bugs') && <WorkList key={`${page}?${searchParams.toString()}`} data={data} kind={page === 'tickets' ? 'task' : 'bug'} onOpen={setSelectedId} onAction={act} onExtend={extendTicket} onAdd={addItem} busy={busy} />}
-          {page === 'approvals' && <Approvals data={data} onOpen={setSelectedId} onAction={act} onRequest={() => addItem('task')} mutate={mutate} busy={busy} />}
-          {page === 'standup' && <Standup data={data} week={week} onOpen={setSelectedId} onAction={act} onAdd={addItem} mutate={mutate} busy={busy} />}
-          {page === 'team' && <Team data={data} week={week} onEdit={m => setModal({ type: 'member', member: m })} onLeave={userId => setModal({ type: 'leave', userId })} mutate={mutate} onOpen={setSelectedId} />}
+          {page === 'dashboard' && <Dashboard data={data} week={week} scores={scores} onOpen={openItem} onOpenProject={setProjectId} onAction={act} onExtend={extendTicket} onAddHours={addHours} onAdd={addItem} busy={busy} />}
+          {(page === 'tickets' || page === 'bugs') && <WorkList key={`${page}?${listQuery}`} data={data} kind={page === 'tickets' ? 'task' : 'bug'} onOpen={openItem} onAction={act} onExtend={extendTicket} onAddHours={addHours} onAdd={addItem} busy={busy} />}
+          {page === 'approvals' && <Approvals data={data} onOpen={openItem} onAction={act} onRequest={() => addItem('task')} mutate={mutate} busy={busy} />}
+          {page === 'standup' && <Standup data={data} week={week} onOpen={openItem} onAction={act} onAdd={addItem} mutate={mutate} busy={busy} />}
+          {page === 'team' && <Team data={data} week={week} onEdit={m => setModal({ type: 'member', member: m })} onLeave={userId => setModal({ type: 'leave', userId })} mutate={mutate} onOpen={openItem} />}
           {page === 'projects' && <Projects data={data} onEdit={p => setModal({ type: 'project', project: p })} onOpen={setProjectId} onExtend={extendProject} mutate={mutate} />}
           {page === 'settings' && <SettingsPage key={JSON.stringify(data.settings)} data={data} mutate={mutate} busy={busy} onHoliday={() => setModal({ type: 'holiday' })} />}
           {page === 'account' && <Account data={data} />}
         </>}
         {children}
-        <footer className="workspace-footer"><span>Urban Gabru tech workspace</span><span>India time (Asia/Kolkata) · {displayDate(new Date(), { year: 'numeric' })}</span></footer>
+        <footer className="workspace-footer"><span>Urban Gabru tech workspace · {weekLabel === 'This week' ? 'India time (Asia/Kolkata)' : `Showing the week of ${displayDate(week)}`}</span><span>Press <Kbd>{searchKey}</Kbd> to search · <Kbd>C</Kbd> to add a ticket</span></footer>
       </div>
     </SidebarInset>
+    <CommandPalette data={data} open={paletteOpen} onOpenChange={setPaletteOpen} onOpenItem={openItem} onOpenProject={setProjectId} onCreate={kind => addItem(kind)} onModal={openModal} />
     {modal?.type === 'item' && <ItemForm data={data} kind={modal.kind} assigneeId={modal.assigneeId} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {modal?.type === 'member' && <MemberForm data={data} editing={modal.member} mutate={mutate} onClose={() => setModal(null)} onLeave={userId => setModal({ type: 'leave', userId })} busy={busy} />}
     {modal?.type === 'project' && <ProjectForm data={data} editing={data.projects.find(p => p.id === modal.project?.id) ?? modal.project} mutate={mutate} onClose={() => setModal(null)} onExtend={extendProject} busy={busy} />}
@@ -232,10 +286,29 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     {modal?.type === 'holiday' && <HolidayForm mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {modal?.type === 'teamTicket' && <TeamTicketForm data={data} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {extendTarget && <ExtendForm target={extendTarget} data={data} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
-    {selectedProject && !modal && <ProjectDrawer data={data} project={selectedProject} onClose={() => setProjectId(null)} onEdit={() => setModal({ type: 'project', project: selectedProject })} onExtend={() => extendProject(selectedProject)} onOpenItem={id => { setProjectId(null); setSelectedId(id); }} />}
-    {selected && !quickAction && !modal && <ItemDrawer item={selected} data={data} busy={busy} onClose={() => setSelectedId(null)} onAction={act} onAddHours={() => addHours(selected)} onExtend={() => extendTicket(selected)} mutate={mutate} />}
+    {selectedProject && !modal && <ProjectDrawer data={data} project={selectedProject} onClose={() => setProjectId(null)} onEdit={() => setModal({ type: 'project', project: selectedProject })} onExtend={() => extendProject(selectedProject)} onOpenItem={id => { setProjectId(null); openItem(id); }} />}
+    {selected && !quickAction && !modal && <ItemDrawer item={selected} data={data} busy={busy} onClose={() => openItem(null)} onOpen={openItem} onAction={act} onAddHours={() => addHours(selected)} onExtend={() => extendTicket(selected)} mutate={mutate} />}
     {quickAction && <ReasonForm action={quickAction} busy={busy} mutate={mutate} onClose={() => setQuickAction(null)} />}
   </SidebarProvider>;
+}
+
+/** One place to start new work from any page. Each choice opens the same form as the page buttons. */
+function CreateMenu({ isAdmin, onItem, onModal }: { isAdmin: boolean; onItem: (kind: 'task' | 'bug') => void; onModal: (type: PaletteModal) => void }) {
+  return <DropdownMenu>
+    <DropdownMenuTrigger asChild><Button variant="outline" size="icon-sm" aria-label="Create" title="Create"><Plus /></Button></DropdownMenuTrigger>
+    <DropdownMenuContent align="end" className="w-56">
+      <DropdownMenuLabel>Create</DropdownMenuLabel>
+      <DropdownMenuItem onSelect={() => onItem('task')}><ListTodo />{isAdmin ? 'New ticket' : 'Request ticket'}<DropdownMenuShortcut>C</DropdownMenuShortcut></DropdownMenuItem>
+      {isAdmin && <>
+        <DropdownMenuItem onSelect={() => onItem('bug')}><Bug />Log bug</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onModal('teamTicket')}><UsersRound />Team ticket</DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => onModal('project')}><FolderPlus />New project</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onModal('member')}><UserPlus />Add member</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onModal('leave')}><CalendarPlus />Add leave</DropdownMenuItem>
+      </>}
+    </DropdownMenuContent>
+  </DropdownMenu>;
 }
 
 function WorkspaceSidebar({ data, page }: { data: DashboardData; page: string }) {
@@ -246,17 +319,23 @@ function WorkspaceSidebar({ data, page }: { data: DashboardData; page: string })
   const pendingRequests = data.requests.filter(r => r.status === 'pending').length + data.dueDateRequests.filter(r => r.status === 'pending').length;
   const waiting = isAdmin ? pendingRequests + data.items.filter(i => i.type === 'task' ? i.status === 'in_review' : i.status === 'fixed').length : pendingRequests;
   const close = () => setOpenMobile(false);
-  return <Sidebar className="app-sidebar" collapsible="offcanvas">
+  const count = (id: string) => id === 'tickets' ? open.filter(i => i.type === 'task').length : id === 'bugs' ? open.filter(i => i.type === 'bug').length : id === 'approvals' ? waiting : 0;
+  const link = (p: PageLink) => {
+    const Icon = p.icon;
+    const n = count(p.id);
+    return <SidebarMenuItem key={p.id}>
+      <SidebarMenuButton asChild isActive={page === p.id} tooltip={p.label}><Link href={routeFor(data, p.id)} onClick={close}><Icon /><span>{p.label}</span></Link></SidebarMenuButton>
+      {n > 0 && <SidebarMenuBadge className={p.id === 'approvals' && isAdmin ? 'sidebar-count-attention' : undefined}>{n}</SidebarMenuBadge>}
+    </SidebarMenuItem>;
+  };
+  const team = teamPages.filter(p => isAdmin || !p.admin);
+  return <Sidebar className="app-sidebar" variant="inset" collapsible="offcanvas">
     <SidebarHeader><Link className="brand" href={routeFor(data, 'dashboard')} onClick={close} aria-label="Urban Gabru tech workspace"><div>urban<span className="brand-light">gabru</span><small>Tech workspace</small></div></Link></SidebarHeader>
     <SidebarContent>
-      <SidebarGroup><SidebarGroupLabel>Workspace</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{pages.filter(p => isAdmin || !p.admin).map(p => {
-        const Icon = p.icon;
-        const count = p.id === 'tickets' ? open.filter(i => i.type === 'task').length : p.id === 'bugs' ? open.filter(i => i.type === 'bug').length : p.id === 'approvals' ? waiting : 0;
-        return <SidebarMenuItem key={p.id}><SidebarMenuButton asChild isActive={page === p.id} tooltip={p.label}><Link href={routeFor(data, p.id)} onClick={close}><Icon /><span>{p.label}</span></Link></SidebarMenuButton>{count > 0 && <SidebarMenuBadge>{count}</SidebarMenuBadge>}</SidebarMenuItem>;
-      })}</SidebarMenu></SidebarGroupContent></SidebarGroup>
+      <SidebarGroup><SidebarGroupLabel>Workspace</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{[...workPages, ...(isAdmin ? [] : team)].map(link)}</SidebarMenu></SidebarGroupContent></SidebarGroup>
+      {isAdmin && <SidebarGroup><SidebarGroupLabel>Team</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{team.map(link)}</SidebarMenu></SidebarGroupContent></SidebarGroup>}
     </SidebarContent>
     <SidebarFooter>
-      <div className="sidebar-note"><div className="note-icon"><Target size={18} /></div><strong>How the score works</strong><p>Ticket hours done ÷ hours at work × {data.settings.deliveryWeight}%<br />+ bug points × {data.settings.bugWeight}%</p></div>
       <SidebarMenu>
         {isAdmin && <SidebarMenuItem><SidebarMenuButton asChild isActive={page === 'settings'}><Link href={routeFor(data, 'settings')} onClick={close}><Settings2 /><span>Settings</span></Link></SidebarMenuButton></SidebarMenuItem>}
         <SidebarMenuItem><SidebarMenuButton asChild isActive={page === 'account'} className="profile-link h-auto"><Link href={routeFor(data, 'account')} onClick={close}><Avatar member={data.currentUser} /><div>{data.currentUser.name}<span>{isAdmin ? 'Admin' : 'Developer'}</span></div><ChevronRight size={16} /></Link></SidebarMenuButton></SidebarMenuItem>
@@ -273,19 +352,19 @@ function AttentionMenu({ data, onOpen }: { data: DashboardData; onOpen: (id: str
   const extensions = admin ? data.dueDateRequests.filter(r => r.status === 'pending').length : 0;
   const total = items.length + requests + extensions;
   return <DropdownMenu>
-    <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label={`Needs attention: ${total}`}><BellDot size={19} />{total > 0 && <i className="notification-dot" />}</Button></DropdownMenuTrigger>
+    <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" className="attention-trigger" aria-label={`Needs attention: ${total}`}><Bell size={18} />{total > 0 && <span className="notification-count" aria-hidden="true">{total > 9 ? '9+' : total}</span>}</Button></DropdownMenuTrigger>
     <DropdownMenuContent align="end" className="attention-menu">
-      <DropdownMenuLabel>Needs attention{total ? ` · ${total}` : ''}</DropdownMenuLabel>
+      <DropdownMenuLabel className="attention-menu-label">Needs attention{total ? <span className="tab-count">{total}</span> : null}</DropdownMenuLabel>
       <DropdownMenuSeparator />
       {requests > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'approvals'))} className="attention-menu-item">
-        <span className="item-key">Requests</span><span className="attention-menu-title">{requests} ticket {requests === 1 ? 'request waits' : 'requests wait'} for approval</span><span className="attention-menu-reason">Review on Approvals</span>
+        <ClipboardCheck className="attention-menu-icon" /><span className="attention-menu-title">{requests} ticket {requests === 1 ? 'request waits' : 'requests wait'} for approval</span><span className="attention-menu-reason">Review on Approvals</span>
       </DropdownMenuItem>}
       {extensions > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'approvals'))} className="attention-menu-item">
-        <span className="item-key">Hours</span><span className="attention-menu-title">{extensions} {extensions === 1 ? 'ask for more hours waits' : 'asks for more hours wait'} for approval</span><span className="attention-menu-reason">Review on Approvals</span>
+        <CalendarPlus className="attention-menu-icon" /><span className="attention-menu-title">{extensions} {extensions === 1 ? 'ask for more hours waits' : 'asks for more hours wait'} for approval</span><span className="attention-menu-reason">Review on Approvals</span>
       </DropdownMenuItem>}
-      {total === 0 ? <p className="attention-menu-empty">Nothing needs attention.</p>
+      {total === 0 ? <p className="attention-menu-empty">Nothing needs attention. Nice.</p>
         : items.slice(0, 6).map(({ item, reason }) => <DropdownMenuItem key={item.id} onSelect={() => onOpen(item.id)} className="attention-menu-item">
-            <span className="item-key">{item.key}</span><span className="attention-menu-title">{item.title}</span><span className="attention-menu-reason">{reason}</span>
+            <StatusIcon status={item.status} className="attention-menu-icon" /><span className="attention-menu-title"><span className="item-key">{item.key}</span> {item.title}</span><span className="attention-menu-reason">{reason}{admin ? ` · ${firstName(findMember(data, item.assigneeId))}` : ''}</span>
           </DropdownMenuItem>)}
       {items.length > 0 && <><DropdownMenuSeparator /><DropdownMenuItem onSelect={() => router.push(routeFor(data, 'tickets?attention=1'))}>See all tickets that need attention<ArrowRight className="ml-auto" /></DropdownMenuItem></>}
     </DropdownMenuContent>
@@ -299,10 +378,12 @@ function DemoBanner({ data, viewerId }: { data: DashboardData; viewerId: string 
     setDemoViewer(null);
     toast.success('Demo reset');
   }
-  return <Alert className="demo-banner"><Eye /><AlertDescription>
-    <span>This is the demo. Changes stay in this browser.</span>
+  return <div className="demo-banner">
+    <span className="demo-banner-text"><Eye aria-hidden="true" /><strong>Demo</strong><span>Changes stay in this browser.</span></span>
     <span className="demo-viewer"><span>View as</span><FormSelect aria-label="View the demo as" value={viewerId} onValueChange={id => setDemoViewer(id === data.currentUser.id ? null : id)}>{people.map(m => <option key={m.id} value={m.id}>{m.name} · {m.role === 'admin' ? 'Admin' : 'Developer'}</option>)}</FormSelect></span>
-    <Button variant="ghost" size="sm" onClick={reset}><RotateCcw data-icon="inline-start" />Reset</Button>
-    <Button variant="link" size="sm" asChild><Link href="/login">Open your workspace<ArrowRight data-icon="inline-end" /></Link></Button>
-  </AlertDescription></Alert>;
+    <span className="demo-banner-actions">
+      <Button variant="ghost" size="sm" onClick={reset}><RotateCcw data-icon="inline-start" />Reset</Button>
+      <Button variant="link" size="sm" asChild><Link href="/login">Open your workspace<ArrowRight data-icon="inline-end" /></Link></Button>
+    </span>
+  </div>;
 }

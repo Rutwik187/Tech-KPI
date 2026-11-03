@@ -5,12 +5,12 @@ import { Bug, CircleCheck, CornerDownLeft, Plus } from 'lucide-react';
 import type { DashboardData } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
 import { calculateMemberKpi } from '@/lib/kpi';
-import { Avatar, FormDate, FormField, FormSelect, Panel, ProgressBar, StatusBadge } from '@/components/ui';
+import { Avatar, FormDate, FormField, FormSelect, Panel, ProgressBar, StatusIcon } from '@/components/ui';
 import { Button } from '@/components/ui/button';
 import { FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { displayDate, hours, isDone, ownerChoices, projectPhases, selectableProjects, today, withOwner, withProject, type MutationFn, type OnAction, type PickedByHand, type WorkClassification } from './lib';
-import { ItemActions, ScoreBadge } from './parts';
+import { displayDate, findProject, hours, isDone, ownerChoices, projectPhases, selectableProjects, statusLabels, today, withOwner, withProject, type MutationFn, type OnAction, type PickedByHand, type WorkClassification } from './lib';
+import { isCarriedOver, ItemActions, ScoreBadge } from './parts';
 
 export function Standup({ data, week, onOpen, onAction, onAdd, mutate, busy }: { data: DashboardData; week: string; onOpen: (id: string) => void; onAction: OnAction; onAdd: (kind: 'task' | 'bug', assigneeId?: string) => void; mutate: MutationFn; busy: boolean }) {
   const [title, setTitle] = useState('');
@@ -36,7 +36,7 @@ export function Standup({ data, week, onOpen, onAction, onAdd, mutate, busy }: {
     if (ok) { setTitle(''); form.querySelector<HTMLInputElement>('input[name="title"]')?.focus(); }
   }
   return <>
-    <Panel title="Quick add a ticket" action={<span className="keyboard-hint"><CornerDownLeft size={13} />Press Enter to add</span>}>
+    <Panel title="Quick add a ticket" description="Pick the owner once, then type a title and press Enter for each ticket." action={<span className="keyboard-hint"><CornerDownLeft size={13} />Press Enter to add</span>}>
       <form className="standup-form" onSubmit={add}><FieldGroup className="standup-quick-form standup-with-phases">
         <FormField>Owner<FormSelect name="assigneeId" required value={classification.assigneeId} onValueChange={chooseOwner}><option value="" disabled>Choose an owner</option>{ownerChoices(data, classification.projectId, picked.project).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</FormSelect></FormField>
         <FormField className="standup-title-field">Ticket title<Input name="title" required minLength={3} maxLength={200} placeholder="What needs to be done?" value={title} onChange={event => setTitle(event.target.value)} autoComplete="off" /></FormField>
@@ -58,9 +58,13 @@ export function Standup({ data, week, onOpen, onAction, onAdd, mutate, busy }: {
         <div className="standup-task-list">{tickets.length === 0
           ? <div className="standup-clear"><CircleCheck size={17} /><p>No open tickets. Ready for the next one.</p></div>
           : tickets.map(item => <div className="standup-task" key={item.id}>
-              <Button variant="ghost" className="item-name" onClick={() => onOpen(item.id)}>{item.title}</Button>
-              <div><StatusBadge status={item.status} /><span className="estimate-cell">{item.estimateHours} h</span><ItemActions item={item} admin onAction={onAction} busy={busy} /></div>
-              {item.status === 'blocked' && <span className="blocked-inline">{item.blocker ?? 'Blocked. Open the ticket to add the reason.'}</span>}
+              <StatusIcon status={item.status} />
+              <div className="standup-task-main">
+                <Button variant="ghost" className="item-name" onClick={() => onOpen(item.id)}>{item.title}</Button>
+                <div className="standup-task-meta"><span className="item-key">{item.key}</span><span>{statusLabels[item.status]}</span><span>{findProject(data, item.projectId)?.name}</span><span className="estimate-cell">{item.estimateHours} h</span>{item.dueDate && <span className={isCarriedOver(item, data) ? 'due-overdue' : undefined}>{displayDate(item.dueDate)}</span>}</div>
+                {item.status === 'blocked' && <span className="blocked-inline">{item.blocker ?? 'Blocked. Open the ticket to add the reason.'}</span>}
+              </div>
+              <ItemActions item={item} admin onAction={onAction} busy={busy} />
             </div>)}</div>
         <div className="standup-person-footer">
           <Button variant="link" size="sm" onClick={() => onAdd('task', person.id)}><Plus data-icon="inline-start" size={13} />Add ticket</Button>

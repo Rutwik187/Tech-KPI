@@ -177,7 +177,8 @@ export function ProjectTimelines({ data, onOpen }: { data: DashboardData; onOpen
   for (let date = `${first.slice(0, 7)}-01`; date <= last; date = addDays(`${date.slice(0, 7)}-01`, 32).slice(0, 7) + '-01') if (date >= first) months.push(date);
   return <div className="gantt">
     <div className="gantt-axis" aria-hidden="true"><span />
-      <div className="gantt-scale">{months.map(month => <span key={month} style={{ left: at(month) }}>{displayDate(month, { day: undefined, month: 'short' })}</span>)}<span className="gantt-today-label" style={{ left: at(day) }}>Today</span></div>
+      {/* A month name close to today would run into the Today label, so only its gridline shows. */}
+      <div className="gantt-scale">{months.filter(month => Math.abs(daysBetween(month, day)) / span > 0.06).map(month => <span key={month} style={{ left: at(month) }}>{displayDate(month, { day: undefined, month: 'short' })}</span>)}<span className="gantt-today-label" style={{ left: at(day) }}>Today</span></div>
     </div>
     {rows.map(({ project, timeline }) => {
       const start = project.startDate ?? project.targetDate!;

@@ -82,6 +82,13 @@ export function selectableProjects(data: DashboardData, retainedProjectId?: stri
     .sort((a, b) => Number(isAdhocProject(b)) - Number(isAdhocProject(a)) || a.name.localeCompare(b.name));
 }
 export function routeFor(data: DashboardData, section: string) { return `${data.mode === 'demo' ? '/demo' : ''}/${section}`; }
+/** The query parameter that opens a ticket or bug by its key, so a link can be shared. */
+export const OPEN_PARAM = 'open';
+/** A link that opens this ticket or bug on its list page. */
+export function itemLink(data: DashboardData, item: WorkItem) {
+  const origin = typeof window === 'undefined' ? '' : window.location.origin;
+  return `${origin}${routeFor(data, item.type === 'task' ? 'tickets' : 'bugs')}?${OPEN_PARAM}=${encodeURIComponent(item.key)}`;
+}
 
 export function downloadCsv(rows: (string | number | null)[][], name: string) {
   const csv = rows.map(row => row.map(value => `"${String(value ?? '').replaceAll('"', '""')}"`).join(',')).join('\n');

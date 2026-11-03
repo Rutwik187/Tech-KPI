@@ -31,6 +31,17 @@ The interface uses official shadcn/ui components with the Radix Nova style. Card
 
 Use the appearance menu in the header to choose Light, Dark, or System. The preference stays after reload and is shared between login and the workspace. Geist is bundled locally, so the build does not need Google Fonts. Shared semantic color tokens live in `src/app/globals.css`.
 
+### Finding and moving work
+
+- **Search.** Press ⌘K (Ctrl K on Windows), or select the search box in the header. Type a key such as `UG-014`, only its number (`14`), or words from a title. Search also finds projects, people (for admins), pages, and actions such as New ticket.
+- **Shortcuts.** Press C to add a ticket (or request one, for a developer). On Tickets and Bugs, press / to search the list. Shortcuts do nothing while you type in a field or while a form is open.
+- **Links to a ticket.** An open ticket or bug is part of the address, for example `/tickets?open=UG-014`. Copy it with the link button at the top of the details panel, or from the ⋯ menu on any row. Anyone with access opens the same details.
+- **Ticket and bug lists.** Rows are grouped by status, with a count and total hours per group. Group by owner or project, or turn groups off. The status tabs show how many items each status has with the current filters. Each row has its next step and a ⋯ menu with the other steps: mark blocked, unblock, extend the date, add hours, send back, and reopen. The list or board choice, the grouping, and the sort stay after a reload, in this browser only.
+- **Overview.** A developer's overview starts with **My work**: what needs attention, what is for today, what is next, and what waits for review. An admin's overview starts with the team's numbers and the work that waits for a decision. The counts on the Open tickets card open the matching list.
+- **Unblock.** A blocked ticket's owner or the admin chooses **Unblock** when the blocker is cleared. The ticket goes back to In progress and the timeline records it.
+
+Status icons have one shape per state: a dashed circle for To do, a half circle for In progress, a bar for Blocked, a three-quarter circle for In review or Fixed (waiting for the admin), and a check for Done or Verified.
+
 ## Daily workflow
 
 1. The admin creates a project with a title, an optional description, its members, and any phases, such as Build, Testing, and Release. Each phase has a title and an optional description. Members and phases can be changed later. A member with unfinished work stays on the project until that work is finished or reassigned.

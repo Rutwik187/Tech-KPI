@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from 'react';
+import clsx from 'clsx';
 import { AlertTriangle, CalendarDays, Check, CircleHelp, LoaderCircle, Plus, Target, X } from 'lucide-react';
 import type { DashboardData, Settings } from '@/lib/types';
 import { FormDate, FormField, Panel } from '@/components/ui';
@@ -15,6 +16,9 @@ import { displayDate, type MutationFn } from './lib';
 
 export function SettingsPage({ data, mutate, busy, onHoliday }: { data: DashboardData; mutate: MutationFn; busy: boolean; onHoliday: () => void }) {
   const [settings, setSettings] = useState(data.settings);
+  // Unsaved changes keep the save bar on screen, so they are never lost by scrolling away.
+  const comparable = (value: Settings) => JSON.stringify({ ...value, workingDays: [...value.workingDays].sort() });
+  const dirty = comparable(settings) !== comparable(data.settings);
   const [validationError, setValidationError] = useState('');
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) => { setValidationError(''); setSettings(previous => ({ ...previous, [key]: value })); };
   async function save(event: FormEvent) {
@@ -72,7 +76,11 @@ export function SettingsPage({ data, mutate, busy, onHoliday }: { data: Dashboar
           </FieldGroup>
         </CardContent></Card>
       </div>
-      <div className="settings-save-row"><span>{busy ? 'Saving…' : 'Changes apply to the current week straight away.'}</span><Button disabled={busy} type="submit">{busy ? <LoaderCircle data-icon="inline-start" className="spin" size={15} /> : <Check data-icon="inline-start" size={15} />}Save settings</Button></div>
+      <div className={clsx('settings-save-row', dirty && 'is-dirty')}>
+        <span>{busy ? 'Saving…' : dirty ? 'You have unsaved changes. They apply to the current week once saved.' : 'Changes apply to the current week straight away.'}</span>
+        {dirty && !busy && <Button variant="ghost" type="button" onClick={() => { setValidationError(''); setSettings(data.settings); }}>Discard</Button>}
+        <Button disabled={busy || !dirty} type="submit">{busy ? <LoaderCircle data-icon="inline-start" className="spin" size={15} /> : <Check data-icon="inline-start" size={15} />}Save settings</Button>
+      </div>
     </form>
     <div className="settings-row">
       <div className="settings-section-intro"><div className="settings-number">04</div><h2>Holidays</h2><p>Holidays lower everyone’s hours at work and pause bug fix-by clocks.</p></div>
