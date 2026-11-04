@@ -21,7 +21,8 @@ export function dayBrief(data: DashboardData, own?: MemberKpi): string {
   if (admin) {
     const reviews = attention.filter(({ item }) => item.status === 'in_review' || item.status === 'fixed').length;
     const blocked = attention.filter(({ item }) => item.status === 'blocked').length;
-    const parts = [reviews && `${plural(reviews, 'item')} ${reviews === 1 ? 'waits' : 'wait'} for your review`, blocked && `${plural(blocked, 'ticket')} ${blocked === 1 ? 'is' : 'are'} blocked`].filter(Boolean);
+    const newRequests = data.techRequests.filter(r => r.status === 'new').length;
+    const parts = [reviews && `${plural(reviews, 'item')} ${reviews === 1 ? 'waits' : 'wait'} for your review`, newRequests && `${plural(newRequests, 'new request')} from other teams ${newRequests === 1 ? 'needs' : 'need'} an owner`, blocked && `${plural(blocked, 'ticket')} ${blocked === 1 ? 'is' : 'are'} blocked`].filter(Boolean);
     return parts.length ? `${parts.join('. ')}.` : 'All clear. Nothing waits for you right now.';
   }
   if (!own || !own.weekCapacityHours) return 'Your score, your open tickets, and what needs your attention.';

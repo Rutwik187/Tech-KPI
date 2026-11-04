@@ -54,7 +54,7 @@ export function LoginForm({ configured, oauthError }: { configured: boolean; oau
             <h1 id="login-story-title">Less chasing.<br /><span>More shipping.</span></h1>
             <p className="login-story-description">One shared view of what matters.<br />From the morning standup to the final review.</p>
             <div className="login-benefits">
-              {['Capture a task or bug in seconds', 'Know what’s pending and who owns it', 'Measure delivery with context'].map(text => (
+              {['Capture a task or bug in seconds', 'Know what’s pending and who owns it', 'Raise a request from any team, and follow it'].map(text => (
                 <div key={text}><span><Check aria-hidden="true" /></span>{text}</div>
               ))}
             </div>
@@ -67,7 +67,7 @@ export function LoginForm({ configured, oauthError }: { configured: boolean; oau
               <span className="login-account-mark"><ShieldCheck aria-hidden="true" /></span>
               <p className="login-eyebrow">YOUR TEAM. YOUR WORKSPACE.</p>
               <CardTitle><h2 id="login-title">Welcome back.</h2></CardTitle>
-              <CardDescription>Use your company Microsoft account to open your workspace.</CardDescription>
+              <CardDescription>Use your company Microsoft account to open your workspace, or to raise a request for the tech team.</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-5">
               <Button size="lg" className="w-full" onClick={signIn} disabled={busy || !configured} aria-busy={busy}>

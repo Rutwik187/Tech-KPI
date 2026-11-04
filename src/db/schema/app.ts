@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { boolean, check, date, foreignKey, index, integer, jsonb, numeric, pgEnum, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { Settings } from "@/lib/types";
+import type { RequestCategory, Settings, TechRequest } from "@/lib/types";
 import { ADHOC_PROJECT_ID } from "@/lib/project-defaults";
 import { user } from "./auth";
 
@@ -44,10 +44,24 @@ export const projectPhases = pgTable("tech_kpi_project_phase", {
   check("tech_kpi_project_phase_not_adhoc", sql`${t.projectId} <> ${adhocProjectId}`),
   check("tech_kpi_project_phase_name_not_adhoc", sql`length(btrim(${t.name})) > 0 AND lower(regexp_replace(btrim(${t.name}), '[[:space:]]+', ' ', 'g')) <> 'ad hoc'`),
 ]);
+/** A team outside tech, such as Sales or Creative. Its people raise requests for tech work. */
+export const departments = pgTable("tech_kpi_department", {
+  id: uuid("id").defaultRandom().primaryKey(), name: text("name").notNull(),
+  position: integer("position").notNull().default(0), isArchived: boolean("is_archived").notNull().default(false),
+  createdAt: stamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("tech_kpi_department_name_idx").on(sql`lower(${t.name})`),
+  check("tech_kpi_department_name_filled", sql`length(btrim(${t.name})) > 0`),
+  check("tech_kpi_department_position_nonnegative", sql`${t.position} >= 0`),
+]);
 export const memberProfiles = pgTable("tech_kpi_member_profile", {
   userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
   capacity: hours("capacity").notNull().default(33), isActive: boolean("is_active").notNull().default(true),
   joinedOn: date("joined_on", { mode: "string" }).notNull().default(sql`(now() AT TIME ZONE 'Asia/Kolkata')::date`),
+  // The team a requester belongs to. Developers and admins have none.
+  departmentId: uuid("department_id").references(() => departments.id, { onDelete: "set null" }),
+  // A team can have several members who raise requests. The admin marks who leads it. It changes no permission.
+  isTeamLead: boolean("is_team_lead").notNull().default(false),
 }, (t) => [check("tech_kpi_capacity_range", sql`${t.capacity} > 0 AND ${t.capacity} <= 168`)]);
 export const workItems = pgTable("tech_kpi_work_item", {
   id: uuid("id").defaultRandom().primaryKey(), sequence: integer("sequence").generatedAlwaysAsIdentity().notNull().unique(),
@@ -90,6 +104,31 @@ export const ticketRequests = pgTable("tech_kpi_ticket_request", {
   check("tech_kpi_ticket_request_estimate_range", sql`${t.estimateHours} > 0 AND ${t.estimateHours} <= 80`),
   check("tech_kpi_ticket_request_status", sql`${t.status} IN ('pending', 'approved', 'declined')`),
   check("tech_kpi_ticket_request_reviewed", sql`(${t.status} = 'pending') = (${t.reviewedAt} IS NULL)`),
+]);
+/**
+ * Work another team asks the tech team for. An admin assigns it to a developer, which creates a ticket or a bug,
+ * or declines it with a reason. After that, its progress is the progress of that ticket or bug.
+ */
+export const techRequests = pgTable("tech_kpi_tech_request", {
+  id: uuid("id").defaultRandom().primaryKey(), sequence: integer("sequence").generatedAlwaysAsIdentity().notNull().unique(),
+  requesterId: text("requester_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  departmentId: uuid("department_id").notNull().references(() => departments.id),
+  title: text("title").notNull(), description: text("description").notNull(),
+  category: text("category").$type<RequestCategory>().notNull(),
+  priority: priority("priority").notNull().default("medium"), neededBy: date("needed_by", { mode: "string" }),
+  status: text("status").$type<TechRequest["status"]>().notNull().default("new"),
+  reviewedById: text("reviewed_by_id").references(() => user.id, { onDelete: "set null" }), reviewedAt: stamp("reviewed_at"), reviewNote: text("review_note"),
+  itemId: uuid("item_id").references(() => workItems.id, { onDelete: "set null" }),
+  createdAt: stamp("created_at").defaultNow().notNull(), updatedAt: stamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  index("tech_kpi_tech_request_status_idx").on(t.status, t.createdAt),
+  index("tech_kpi_tech_request_requester_idx").on(t.requesterId),
+  index("tech_kpi_tech_request_department_idx").on(t.departmentId),
+  uniqueIndex("tech_kpi_tech_request_item_idx").on(t.itemId).where(sql`${t.itemId} IS NOT NULL`),
+  check("tech_kpi_tech_request_category", sql`${t.category} IN ('feature', 'change', 'problem', 'data', 'access', 'other')`),
+  check("tech_kpi_tech_request_status", sql`${t.status} IN ('new', 'assigned', 'declined')`),
+  check("tech_kpi_tech_request_reviewed", sql`(${t.status} = 'new') = (${t.reviewedAt} IS NULL)`),
+  check("tech_kpi_tech_request_decline_reason", sql`${t.status} <> 'declined' OR length(btrim(coalesce(${t.reviewNote}, ''))) > 0`),
 ]);
 /**
  * A developer's ask for more hours on their ticket. When an admin approves, the hours join the estimate

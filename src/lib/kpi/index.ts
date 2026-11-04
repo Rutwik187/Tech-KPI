@@ -6,6 +6,7 @@ export * from './calendar';
 export * from './week';
 
 export const defaultSettings: Settings = {
+  requestDomains: [],
   timezone: 'Asia/Kolkata',
   trackingStartDate: '2026-10-01',
   workingDays: [1, 2, 3, 4, 5],

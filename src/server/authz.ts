@@ -2,8 +2,16 @@ import { and, eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { db } from "@/db";
 import { account, memberProfiles, user } from "@/db/schema";
-import type { Member } from "@/lib/types";
+import type { Member, Role } from "@/lib/types";
 import { AppError } from "./errors";
+
+/** Better Auth stores a developer as "user". Admins and requesters keep their own names. */
+export function memberRole(stored: string | null | undefined): Role {
+  return stored === "admin" ? "admin" : stored === "requester" ? "requester" : "developer";
+}
+export function storedRole(role: Role): string {
+  return role === "developer" ? "user" : role;
+}
 
 export async function requireSession(headers: Headers): Promise<Member> {
   const result = await auth.api.getSession({ headers, query: { disableCookieCache: true } });
@@ -13,16 +21,16 @@ export async function requireSession(headers: Headers): Promise<Member> {
     .innerJoin(account, and(eq(account.userId, user.id), eq(account.providerId, "microsoft")))
     .leftJoin(memberProfiles, eq(memberProfiles.userId, user.id)).where(eq(user.id, result.user.id));
   if (!identity) throw new AppError("Sign in with your linked Microsoft account.", 401);
-  if (identity.user.banned || identity.profile?.isActive === false) throw new AppError("This account is inactive. Contact your team lead.", 403);
+  if (identity.user.banned || identity.profile?.isActive === false) throw new AppError("This account is inactive. Ask your admin to turn it back on.", 403);
   return {
     id: identity.user.id, name: identity.user.name, email: identity.user.email,
-    role: identity.user.role === "admin" ? "admin" : "developer", image: identity.user.image,
+    role: memberRole(identity.user.role), image: identity.user.image,
     capacity: identity.profile?.capacity ?? (identity.user.role === "admin" ? 10 : 33), isActive: true,
-    joinedOn: identity.profile?.joinedOn,
+    joinedOn: identity.profile?.joinedOn, departmentId: identity.profile?.departmentId ?? null, isTeamLead: identity.profile?.isTeamLead ?? false,
   };
 }
 export function requireAdmin(member: Member): void {
-  if (member.role !== "admin") throw new AppError("Only the team lead can make this change.", 403);
+  if (member.role !== "admin") throw new AppError("Only an admin can make this change.", 403);
 }
 export function assertSameOrigin(request: Request): void {
   const origin = request.headers.get("origin");

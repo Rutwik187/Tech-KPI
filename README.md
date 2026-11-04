@@ -11,7 +11,7 @@ npm run dev
 
 Open [the workspace](http://localhost:3100). Port 3100 avoids another app already running on this machine. [Explore the demo](http://localhost:3100/demo/dashboard) to try a populated workspace. Demo changes stay in browser storage and never reach Neon.
 
-The initial admin is `rutwik.shinde@urbangabru.in`. Sign-in uses company Microsoft accounts only. There are no local passwords.
+The initial admin is `rutwik.shinde@urbangabru.in`. Sign-in uses company Microsoft accounts only. There are no local passwords. Admins also add people from teams outside tech, such as Sales or Creative, and mark who leads each team. They sign in the same way to raise requests for the tech team. See [Requests from other teams](#requests-from-other-teams).
 
 Microsoft sign-in is configured on this machine. For a new environment, run the setup wizard to connect your Microsoft Entra app registration:
 
@@ -52,7 +52,7 @@ Status icons have one shape per state: a dashed circle for To do, a half circle 
 6. The admin records **leave** on the Team page: a full day, a half day, or a range of days. Leave appears per person, on their member panel, and in one list. Weekends and holidays inside a range are skipped.
 7. Use the overview and the bell menu to find reviews, blocked tickets, late work, and late bugs. Use Daily standup to go through each person and add tickets as you talk.
 
-There are two roles: **Admin** and **Developer**. Admins manage projects, phases, people, leave, and all work. Developers see their assigned projects and their own tickets and bugs, add tickets for themselves, and edit the title, details, priority, and due date of their own tickets. Tickets have **To do**, **In progress**, **Blocked**, **In review**, and **Done** states. Bugs have **Open**, **In progress**, **Fixed**, and **Verified** states. The server checks sessions, roles, project membership, and record ownership on every request.
+There are three roles: **Admin**, **Developer**, and **Other team**. Admins manage projects, phases, people, leave, and all work. Developers see their assigned projects and their own tickets and bugs, add tickets for themselves, and edit the title, details, priority, and due date of their own tickets. Tickets have **To do**, **In progress**, **Blocked**, **In review**, and **Done** states. Bugs have **Open**, **In progress**, **Fixed**, and **Verified** states. People from other teams, such as Sales, raise requests for their team and follow them, and see nothing else. An admin can mark any of them as their team's **team lead**. The server checks sessions, roles, project membership, and record ownership on every request.
 
 The database still calls a ticket a `task` (for example `type = 'task'`). Only the words people read changed. Old `/tasks` links redirect to `/tickets`.
 
@@ -64,7 +64,24 @@ For an existing installation, apply the versioned app migrations:
 npm run db:migrate
 ```
 
-This applies `0002_project_members_and_phases` and `0003_phase_description` (it adds the phase description column). Run it before deploying this version: the app reads phase descriptions on every page. `npm run db:migrate:projects` is the same command under its old name. The migration runner uses a direct connection, applies changes in one transaction, and records a checksum per migration so a second run is safe. It preserves `.env.local`. `KPI_MIGRATION_ENV` can point at a separate environment file when testing a Neon branch. For a new empty database, use `npx drizzle-kit migrate` to apply the full migration history, including the built-in Ad hoc project and membership backfill.
+This applies `0002_project_members_and_phases` and `0003_phase_description` (it adds the phase description column). Run it before deploying this version: the app reads phase descriptions on every page. `0010_tech_requests` adds requests from other teams: the teams table, seeded with Sales, E-commerce, Influencer marketing, Digital marketing, Creative, and Graphics, each person's team, and the requests table. `0011_team_leads` records who leads each team. Everyone added to a team before it ran was added as a team lead, so they stay team leads. Every page reads these tables and columns, so apply each migration before you deploy the version that needs it. `npm run db:migrate:projects` is the same command under its old name. The migration runner uses a direct connection, applies changes in one transaction, and records a checksum per migration so a second run is safe. It preserves `.env.local`. `KPI_MIGRATION_ENV` can point at a separate environment file when testing a Neon branch. For a new empty database, use `npx drizzle-kit migrate` to apply the full migration history, including the built-in Ad hoc project and membership backfill.
+
+## Requests from other teams
+
+Sales, E-commerce, Influencer marketing, Digital marketing, Creative, Graphics, and any other team can ask the tech team for work here. A team can have as many **members** as it needs, and every member can raise requests. An admin marks who leads each team.
+
+1. **Create teams and add their members.** On **Other teams**, an admin creates each team and adds its members, with a name and a work email. Tick **Team lead** for the people who lead the team. The first person added to a team starts ticked; untick it if they do not lead it. A team can have more than one team lead. Being a team lead changes how a person is shown, not what they can do. Each member signs in with the Microsoft work account for that email. Only the people an admin adds can sign in. To also let in everyone with a company email, an admin adds the domain, such as `urbangabru.in`, under **Who can sign in** on the same page. People who get in that way join as members, and their first request sets their team. Guest accounts, and people whose access an admin turned off, never get in that way.
+2. **Raise a request.** A member says what they need, picks the kind of request (new feature, change, something broken, data or report, access or setup, or something else), the team, how urgent it is, and an optional date. They can change or withdraw a request until the tech team reviews it.
+3. **Assign or decline.** New requests land on **Requests**, the admin's inbox. The most urgent come first, then the soonest needed, then the oldest. **Assign** makes a ticket, with an estimate and a date, or a bug, with a fix-by time, for a developer. A request about something broken starts as a bug. **Decline** needs a reason, and the person who asked reads it.
+4. **Follow it.** The person who asked sees each request move from **Waiting for review** to **Assigned**, **In progress**, and **Done**, with who works on it and the planned date. A blocked ticket shows as in progress. Everyone in a team sees the team's requests, under the team's name on **My requests**, so nobody asks twice.
+
+The ticket or bug made from a request shows who asked and for which team. Its hours count like any other ticket. To give the work to another developer, change the ticket's owner. On **Other teams**, admins also rename and archive teams. An archived team keeps its old requests and takes no new ones.
+
+A member's workspace has two pages: **My requests** and **My account**. They never see tickets, bugs, projects, people, or scores. On every request, the server allows a member to raise, change, and withdraw their own new requests, and nothing else. A team lead cannot change a teammate's request either.
+
+Each member needs a Microsoft account in your organisation, as a member or an invited guest. For a guest, or when their sign-in name differs from their work email, add their Microsoft user ID (Object ID) when you add them. Also check this app's enterprise application in Microsoft Entra ID. When **Assignment required** is on, Microsoft lets in only assigned people. Assign the members, or their groups, to the app, or turn it off.
+
+The database calls a team outside tech a `department` (table `tech_kpi_department`), a person in one a `requester` (user role `requester`), and a request a `tech request` (table `tech_kpi_tech_request`). The **Team lead** mark is `is_team_lead` on `tech_kpi_member_profile`. People read "team", "member", "team lead", and "request". Two older messages used "team lead" for the admin. They now say "admin".
 
 ## KPI rules
 
@@ -229,3 +246,49 @@ npx playwright test --grep-invert "local fixture" (dev server on port 3200)
 Not yet verified in this version: `npm run verify:backend`, `npm run verify:services`, and the live Playwright tests. They need the Neon database, and migration `0003_phase_description` has not been applied to any database yet. The backend checks were updated for the new rules (developer tickets, due date extensions, leave ranges, phase descriptions).
 
 Use **View as** in the demo banner to see the workspace as any developer.
+
+## Requests from other teams — 4 November 2026
+
+This version adds **team leads** for teams outside tech, the **Other teams** page where an admin creates teams and adds team leads, the **Requests** inbox, and migration `0010_tech_requests`. Sign-in is closed by default: only the team leads an admin adds can sign in. The checks below ran against a temporary local PostgreSQL 17 database, never against Neon. Migrations `0000`–`0009` were applied to it first, so it matched production before the upgrade.
+
+```text
+npm run typecheck   exit 0
+npm run lint        exit 0
+npm test            63 passed
+npm run build       compiled successfully
+npm run db:migrate  0010_tech_requests: applied (0002–0009 already applied); a second run: already applied
+npm run verify:backend (production build)
+  PASS: 345 backend checks
+  Temporary verification records removed.
+npx playwright test --grep-invert "local fixture" (production build)
+  38 passed
+```
+
+The new backend checks cover what a team lead can see and do, team visibility, assigning a request as a ticket or a bug, declining with a reason, withdrawing, team management, and the database rules. Company sign-in was checked with no domain allowed, which is the default, then with an allowed domain, another tenant, a guest account, and a second account with the same email. The new browser checks cover creating a team, adding its team lead, raising, changing, assigning, following, declining, and withdrawing a request, and archiving a team.
+
+An earlier run of the whole browser suite, with the local fixture tests, had 39 passed and 1 failed. The failure, "live ticket and linked bug entry pass through the API to Neon and render after reload", is not caused by this change. It expects a ticket without a date. Every new ticket has had a date since "give every ticket a date instead of a due date", so the test's expectation is out of date.
+
+Migration `0010_tech_requests` was applied to the production database on 4 November 2026. Not verified in this version: a real Microsoft sign-in by a team lead.
+
+## Several members per team — 4 November 2026
+
+A team outside tech can now have several members, and all of them can raise requests. An admin marks who leads each team with **Team lead**. The mark changes how a person is shown, not what they can do. Migration `0011_team_leads` adds it. Everyone already in a team was added as a team lead, so the migration keeps them team leads. The checks below ran against a temporary local PostgreSQL 17 database, never against Neon. It was first brought to production's state with `0000`–`0010`.
+
+```text
+npm run typecheck   exit 0
+npm run lint        exit 0
+npm test            65 passed
+npm run build       compiled successfully
+npm run db:migrate  0011_team_leads: applied (0002–0010 already applied); a second run: already applied
+  before: a person in Sales, a person without a team, and a developer
+  after:  the person in Sales is a team lead; the other two are not
+npm run verify:backend (production build)
+  PASS: 362 backend checks
+  Temporary verification records removed.
+npx playwright test (production build on port 3200, with the sign-in address on port 3200)
+  39 passed, 1 failed
+```
+
+The new backend checks cover adding a member with and without the mark, two team leads in one team, a member's own view, and moving a person to the tech team, which clears their team and the mark. A developer cannot be marked as a team lead, and a member cannot change the mark. The new browser check adds two people to a new team, the first as its team lead. The other member raises a request, and the team lead sees it. The one failure is the out-of-date test described above.
+
+Apply `0011_team_leads` to production with `npm run db:migrate` before you use this version.

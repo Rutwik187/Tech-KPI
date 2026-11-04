@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import Link from 'next/link';
 import clsx from 'clsx';
 import { toast } from 'sonner';
 import { Activity as ActivityIcon, AlertTriangle, ArrowDown, ArrowUpRight, Bug, CalendarClock, CalendarDays, CircleDot, ClipboardCopy, FileText, Flag, Link2, ListTodo, LoaderCircle, Pencil, Plus, RotateCcw } from 'lucide-react';
@@ -13,7 +14,8 @@ import { FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { extensionHistory, reasonLabel, ticketExtendedDays } from '@/lib/timeline';
-import { displayDate, displayDateTime, findMember, findProject, hours, isAdhocProject, kindLabels, pendingExtension, percent, projectMembers, statusLabels, today, type MutationFn, type OnAction, type WorkClassification } from './lib';
+import { displayDate, displayDateTime, findMember, findProject, hours, isAdhocProject, kindLabels, pendingExtension, percent, projectMembers, requestForItem, routeFor, statusLabels, today, type MutationFn, type OnAction, type WorkClassification } from './lib';
+import { TeamTag } from './requests';
 import { canAddHours, canMoveDueDate, copyItemLink, ItemActions, PendingExtensionBadge, PhaseTag, ProjectTag, SeverityBadge } from './parts';
 import { dayCount, ExtensionHistory, TicketExtendedBadge } from './timeline';
 import { ClassificationFields, FormChoice } from './forms';
@@ -89,6 +91,8 @@ export function ItemDrawer({ item, data, busy, onClose, onOpen, onAction, onAddH
   const actorName = (id: string) => id === data.currentUser.id ? 'You' : findMember(data, id)?.name ?? 'Your admin';
   const creatorName = creator ? actorName(creator.actorId) : null;
   const ticket = item.type === 'task';
+  // Work another team asked for shows who asked, so the developer knows whom it is for.
+  const request = requestForItem(data, item.id);
 
   async function copySummary() {
     try { await navigator.clipboard.writeText(`${item.key}: ${item.title}\nOwner: ${person?.name ?? 'Unassigned'}\nStatus: ${statusLabels[item.status]}`); toast.success('Summary copied'); }
@@ -133,6 +137,9 @@ export function ItemDrawer({ item, data, busy, onClose, onOpen, onAction, onAddH
           <Fact label={closed ? 'Bug points' : 'Time left'}>{closed ? percent(bugKpi?.score ?? null) : bugKpi && bugKpi.overdueHours > 0 ? `${hours(bugKpi.overdueHours)} h late` : `${hours(bugKpi?.hoursRemaining ?? 0)} h`} <small>{closed ? `· ${hours(bugKpi?.resolutionWorkingHours ?? 0)} working h to fix` : '· working hours only'}</small></Fact>
         </>}
         <Fact label="Created">{displayDate(item.createdAt)}{creatorName && <small> · by {creatorName === 'You' ? 'you' : creatorName === 'Your admin' ? 'your admin' : creatorName}</small>}</Fact>
+        {request && <Fact label="Requested by" className="detail-fact-request" action={admin && <Button variant="link" size="sm" asChild><Link href={routeFor(data, `requests?q=${request.key}`)}>{request.key}<ArrowUpRight data-icon="inline-end" size={11} /></Link></Button>}>
+          {request.requesterName}<TeamTag data={data} id={request.departmentId} />{request.neededBy && <small>· needs it by {displayDate(request.neededBy)}</small>}
+        </Fact>}
       </div>
       {phase?.description && <p className="phase-note"><strong>{phase.name}:</strong> {phase.description}</p>}
       {pastProjectTarget && <Alert className="detail-blocker"><CalendarClock /><AlertTitle>Dated after the project target</AlertTitle><AlertDescription>{project!.name} targets {displayDate(project!.targetDate)}. {admin ? 'Extend the project if the whole project slips.' : 'Your admin may need to extend the project.'}</AlertDescription></Alert>}

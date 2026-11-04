@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { projectTimeline } from '@/lib/timeline';
 import { ExtendedBadge, HealthBadge, plural, TimelineStrip } from './timeline';
-import { findMember, firstName, hours, isAdhocProject, isDone, projectPhases, projectTeam, routeFor, today, type MutationFn } from './lib';
+import { findMember, firstName, hours, isAdhocProject, isDone, projectPhases, projectTeam, routeFor, techMembers, today, type MutationFn } from './lib';
 
 type ProjectActions = { onEdit: (project: Project) => void; onOpen: (id: string) => void; onExtend: (project: Project) => void; mutate: MutationFn };
 
@@ -53,7 +53,7 @@ function ProjectCard({ data, project, isAdmin, onEdit, onOpen, onExtend, mutate 
   const openBugs = items.filter(item => item.type === 'bug' && !isDone(item)).length;
   const totalHours = tickets.reduce((sum, item) => sum + item.estimateHours, 0);
   const doneHours = completed.reduce((sum, item) => sum + item.estimateHours, 0);
-  const members = adhoc ? data.members.filter(m => m.isActive) : projectTeam(data, project);
+  const members = adhoc ? techMembers(data).filter(m => m.isActive) : projectTeam(data, project);
   const primary = adhoc ? undefined : members.find(m => m.id === project.primaryMemberId);
   // The Ad hoc phase is listed only when it holds work, so empty rows do not repeat on every card.
   const phases = [{ id: null, name: 'Ad hoc', description: 'Work without a named phase.' }, ...projectPhases(data, project.id)]

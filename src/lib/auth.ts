@@ -6,7 +6,7 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import * as schema from "@/db/schema/auth";
-import { claimMicrosoftInvitation } from "@/server/microsoft-accounts";
+import { claimMicrosoftInvitation, provisionRequester } from "@/server/microsoft-accounts";
 
 const tenantId = z.uuid().safeParse(process.env.MICROSOFT_TENANT_ID);
 const clientId = z.uuid().safeParse(process.env.MICROSOFT_CLIENT_ID);
@@ -29,8 +29,9 @@ export const auth = betterAuth({
         const [linked] = await db.select({ email: schema.user.email, name: schema.user.name }).from(schema.account)
           .innerJoin(schema.user, eq(schema.user.id, schema.account.userId))
           .where(and(eq(schema.account.providerId, "microsoft"), eq(schema.account.accountId, objectId)));
-        // A member added by work email links their Microsoft account on first sign-in. Anyone else stays out.
-        const invited = linked ?? await claimMicrosoftInvitation(profile, tenantId.data!);
+        // A member added by work email links their Microsoft account on first sign-in. Someone else with a company
+        // work email (Settings → Requests from other teams) joins as a requester. Anyone else stays out.
+        const invited = linked ?? await claimMicrosoftInvitation(profile, tenantId.data!) ?? await provisionRequester(profile, tenantId.data!);
         return { email: invited?.email ?? `${objectId}@unprovisioned.invalid`, name: invited?.name ?? "Uninvited account", emailVerified: false, image: "" };
       },
     },

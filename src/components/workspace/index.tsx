@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDownToLine, ArrowRight, Bell, Bug, CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, ClipboardCheck, Coffee, Eye, FolderKanban, FolderPlus, LayoutDashboard, ListTodo, Plus, RotateCcw, Search, Settings2, UserPlus, Users, UsersRound } from 'lucide-react';
+import { ArrowDownToLine, ArrowRight, Bell, Briefcase, Bug, CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, ClipboardCheck, Coffee, Eye, FolderKanban, FolderPlus, Inbox, LayoutDashboard, ListTodo, Plus, RotateCcw, Search, Settings2, UserPlus, Users, UsersRound } from 'lucide-react';
 import type { DashboardData, Project, WorkItem } from '@/lib/types';
 import { calculateTeamKpi, getWeekStart, shiftDate } from '@/lib/kpi';
 import { Avatar, EmptyState, FormSelect, Kbd, Panel, StatusIcon } from '@/components/ui';
@@ -14,10 +14,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { calculateMemberKpi } from '@/lib/kpi';
-import { isSection } from '@/lib/sections';
-import { adminOnlyPages, attentionItems, bands, DEMO_DATA_KEY, demoSnapshot, demoViewer, displayDate, findMember, firstName, isDone, mutateDemo, OPEN_PARAM, routeFor, saveDemo, setDemoViewer, statusLabels, subscribeDemo, viewAs, downloadCsv, type ModalState, type Mutation, type MutationFn, type QuickAction } from './lib';
+import { isSection, REQUESTER_SECTIONS } from '@/lib/sections';
+import { adminOnlyPages, attentionItems, bands, DEMO_DATA_KEY, demoSnapshot, demoViewer, displayDate, findMember, firstName, isDone, mutateDemo, OPEN_PARAM, roleLabel, routeFor, saveDemo, setDemoViewer, statusLabels, subscribeDemo, viewAs, downloadCsv, type ModalState, type Mutation, type MutationFn, type QuickAction } from './lib';
 import { Dashboard } from './dashboard';
 import { Approvals } from './approvals';
+import { MyRequests, RequestInbox, TechRequestForm } from './requests';
+import { DepartmentForm, OtherTeams } from './other-teams';
 import { WorkList } from './work-list';
 import { Standup } from './standup';
 import { Team } from './team';
@@ -38,15 +40,22 @@ const workPages: PageLink[] = [
   { id: 'tickets', label: 'Tickets', icon: ListTodo },
   { id: 'bugs', label: 'Bugs', icon: Bug },
   { id: 'approvals', label: 'Approvals', icon: ClipboardCheck },
+  { id: 'requests', label: 'Requests', icon: Inbox, admin: true },
 ];
 const teamPages: PageLink[] = [
   { id: 'standup', label: 'Daily standup', icon: Coffee, admin: true },
   { id: 'team', label: 'Team', icon: Users, admin: true },
+  { id: 'other-teams', label: 'Other teams', icon: Briefcase, admin: true },
   { id: 'projects', label: 'Projects', icon: FolderKanban },
 ];
 
 function headings(page: string, data: DashboardData, brief: string): { title: string; description: string } {
   const admin = data.currentUser.role === 'admin';
+  if (data.currentUser.role === 'requester') {
+    const intro = 'Ask the tech team for what your team needs, and follow each request here until it is done.';
+    return page === 'account' ? { title: 'My account', description: 'Your profile and sign-in.' }
+      : { title: page === 'requests' ? 'My requests' : greeting(data.currentUser.name, new Date(), data.settings.timezone), description: intro };
+  }
   switch (page) {
     case 'standup': return { title: 'Daily standup', description: 'Go through each developer’s open tickets and add new ones as you talk.' };
     case 'tickets': return admin ? { title: 'Tickets', description: 'Every ticket, who owns it, and its next step.' } : { title: 'My tickets', description: 'Your tickets and their next step. Request a ticket for new work you take on.' };
@@ -54,7 +63,9 @@ function headings(page: string, data: DashboardData, brief: string): { title: st
     case 'approvals': return admin
       ? { title: 'Approvals', description: 'Ticket requests, asks for more hours, and finished work that wait for you.' }
       : { title: 'Approvals', description: 'The tickets and hours you asked for, and finished work that waits for your admin.' };
+    case 'requests': return { title: 'Requests', description: 'Tech requests from Sales, E-commerce, and other teams. Assign each one to a developer, or decline it with a reason.' };
     case 'team': return { title: 'Team', description: 'People, their hours at work, leave, and scores.' };
+    case 'other-teams': return { title: 'Other teams', description: 'Teams outside tech, such as Sales, and the people in them. Everyone you add to a team signs in with their Microsoft work account and raises requests for it.' };
     case 'projects': return { title: 'Projects', description: admin ? 'Projects, their phases, members, and progress.' : 'The projects you work on and their phases.' };
     case 'settings': return { title: 'Settings', description: 'Working hours, score weights, bug targets, and holidays.' };
     case 'account': return { title: 'My account', description: 'Your profile and sign-in.' };
@@ -89,15 +100,17 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
   const [openedOn, setOpenedOn] = useState(pathname);
   if (openedOn !== pathname) { setOpenedOn(pathname); setProjectId(null); }
   const isAdmin = data.currentUser.role === 'admin';
+  const isRequester = data.currentUser.role === 'requester';
   const scores = useMemo(() => calculateTeamKpi(data, week), [data, week]);
   // The open ticket or bug lives in the address, so its link can be shared and survives a reload.
   const openKey = searchParams.get(OPEN_PARAM);
   const selected = openKey ? data.items.find(i => i.key === openKey) : undefined;
   const selectedProject = data.projects.find(p => p.id === projectId);
   const currentWeek = getWeekStart(new Date(), data.settings.timezone);
-  const brief = useMemo(() => page === 'dashboard' ? dayBrief(data, isAdmin ? undefined : calculateMemberKpi(data.currentUser, data, currentWeek)) : '', [page, data, isAdmin, currentWeek]);
+  const brief = useMemo(() => page === 'dashboard' && !isRequester ? dayBrief(data, isAdmin ? undefined : calculateMemberKpi(data.currentUser, data, currentWeek)) : '', [page, data, isAdmin, isRequester, currentWeek]);
   const { title, description } = headings(page, data, brief);
-  const blocked = !isAdmin && adminOnlyPages.includes(page);
+  // A requester's workspace is their requests and their account. The Requests page is the admin's inbox, so developers do not see it.
+  const blocked = isRequester ? !REQUESTER_SECTIONS.includes(page) : !isAdmin && (adminOnlyPages.includes(page) || page === 'requests');
   // The list keeps its filters while a ticket opens and closes, so the open ticket is not part of its identity.
   const listQuery = useMemo(() => { const params = new URLSearchParams(searchParams.toString()); params.delete(OPEN_PARAM); return params.toString(); }, [searchParams]);
 
@@ -187,17 +200,19 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     toast.success('Weekly report downloaded');
   }
   const addItem = useCallback((kind: 'task' | 'bug', assigneeId?: string) => setModal({ type: 'item', kind, assigneeId }), []);
+  const raiseRequest = useCallback(() => setModal({ type: 'techRequest' }), []);
   const extendTicket = (item: WorkItem) => setModal({ type: 'extend', target: { kind: 'ticket', item } });
   const addHours = (item: WorkItem) => setModal({ type: 'extend', target: { kind: 'ticket', item, hours: true } });
   const extendProject = (project: Project) => setModal({ type: 'extend', target: { kind: 'project', project } });
-  const openModal = (type: PaletteModal) => setModal({ type } as ModalState);
+  // Someone from another team is a person with the requester role, so their form is the member form.
+  const openModal = (type: PaletteModal) => setModal(type === 'otherTeamMember' ? { type: 'member', role: 'requester' } : { type } as ModalState);
   const searchKey = useSearchShortcut();
 
   // Shortcuts: ⌘K or Ctrl+K searches everywhere, / searches the list on the page, and C adds a ticket.
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       // Search also works over a ticket's details, but not over a form, so nothing typed is lost.
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') { event.preventDefault(); setPaletteOpen(open => open ? false : !document.querySelector('[role="dialog"]:not(.drawer)')); return; }
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') { if (isRequester) return; event.preventDefault(); setPaletteOpen(open => open ? false : !document.querySelector('[role="dialog"]:not(.drawer)')); return; }
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.repeat || typing(event.target)) return;
       if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
       if (event.key === '/') {
@@ -206,16 +221,17 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
         if (search) search.focus(); else setPaletteOpen(true);
       } else if (event.key.toLowerCase() === 'c' && !blocked) {
         event.preventDefault();
-        addItem('task');
+        if (isRequester) raiseRequest(); else addItem('task');
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [addItem, blocked]);
+  }, [addItem, raiseRequest, blocked, isRequester]);
 
   // A developer's new work starts as a request that an admin approves.
   const newTicket = <Button onClick={() => addItem('task')} aria-keyshortcuts="C"><Plus data-icon="inline-start" size={17} />{isAdmin ? 'New ticket' : 'Request ticket'}</Button>;
-  const actions: Record<string, ReactNode> = {
+  const newRequest = <Button onClick={raiseRequest} aria-keyshortcuts="C"><Plus data-icon="inline-start" size={17} />Raise a request</Button>;
+  const actions: Record<string, ReactNode> = isRequester ? { dashboard: newRequest, requests: newRequest } : {
     dashboard: <>{isAdmin && <Button variant="outline" onClick={exportScores}><ArrowDownToLine data-icon="inline-start" size={16} />Export report</Button>}{newTicket}</>,
     tickets: newTicket,
     approvals: !isAdmin && newTicket,
@@ -223,6 +239,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     bugs: isAdmin && <Button onClick={() => addItem('bug')}><Plus data-icon="inline-start" size={17} />Log bug</Button>,
     team: <><Button variant="outline" onClick={() => setModal({ type: 'leave' })}><CalendarPlus data-icon="inline-start" size={16} />Add leave</Button><Button variant="outline" onClick={() => setModal({ type: 'teamTicket' })}><UsersRound data-icon="inline-start" size={16} />Team ticket</Button><Button onClick={() => setModal({ type: 'member' })}><Plus data-icon="inline-start" size={17} />Add member</Button></>,
     projects: isAdmin && <Button onClick={() => setModal({ type: 'project' })}><Plus data-icon="inline-start" size={17} />New project</Button>,
+    'other-teams': <><Button variant="outline" onClick={() => setModal({ type: 'department' })}><Plus data-icon="inline-start" size={16} />New team</Button><Button onClick={() => setModal({ type: 'member', role: 'requester' })}><UserPlus data-icon="inline-start" size={16} />Add member</Button></>,
   };
   // Dialogs work on the latest copy of a record, so a refresh never shows stale dates.
   const extendTarget = modal?.type === 'extend' ? modal.target.kind === 'ticket'
@@ -237,15 +254,15 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
       <header className="topbar">
         <div className="topbar-start">
           <SidebarTrigger aria-label="Open navigation" className="topbar-trigger" />
-          <button type="button" className="search-trigger" onClick={() => setPaletteOpen(true)} aria-keyshortcuts="Meta+K Control+K">
+          {!isRequester && <button type="button" className="search-trigger" onClick={() => setPaletteOpen(true)} aria-keyshortcuts="Meta+K Control+K">
             <Search aria-hidden="true" /><span className="search-trigger-label">Search tickets, bugs, and projects…</span><Kbd className="search-trigger-kbd">{searchKey}</Kbd>
-          </button>
+          </button>}
         </div>
         <div className="topbar-end">
           <Badge variant="outline" className="connection-status"><i />{demo ? 'Demo workspace' : 'Live workspace'}</Badge>
-          {!blocked && <CreateMenu isAdmin={isAdmin} onItem={addItem} onModal={openModal} />}
+          {!blocked && !isRequester && <CreateMenu isAdmin={isAdmin} onItem={addItem} onModal={openModal} />}
           <ThemeToggle />
-          <AttentionMenu data={data} onOpen={openItem} />
+          {!isRequester && <AttentionMenu data={data} onOpen={openItem} />}
           <Link href={routeFor(data, 'account')} aria-label="Open my account" className="topbar-account"><Avatar member={data.currentUser} size="small" /></Link>
         </div>
       </header>
@@ -255,7 +272,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
           <div className="page-heading-text"><h1>{title}</h1>{description && <p>{description}</p>}</div>
           {!blocked && actions[page] && <div className="page-actions">{actions[page]}</div>}
         </div>
-        {!blocked && ['dashboard', 'standup', 'team'].includes(page) && <div className="period-toolbar">
+        {!blocked && !isRequester && ['dashboard', 'standup', 'team'].includes(page) && <div className="period-toolbar">
           <div className="week-control">
             <Button variant="ghost" size="icon-sm" aria-label="Previous week" onClick={() => setWeek(shiftDate(week, -7, data.settings.timezone))}><ChevronLeft size={16} /></Button>
             <span className="period-label"><CalendarDays size={15} aria-hidden="true" /><strong>{displayDate(week)} – {displayDate(shiftDate(week, 6, data.settings.timezone))}</strong></span>
@@ -264,23 +281,35 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
           <Badge variant={week === currentWeek ? 'secondary' : 'outline'} className="period-badge">{weekLabel}</Badge>
           {week !== currentWeek && <Button variant="link" size="sm" onClick={() => setWeek(currentWeek)}>Back to this week</Button>}
         </div>}
-        {blocked ? <Panel><EmptyState title="This page is for admins" description="Your overview, tickets, bugs, and projects are in the menu." action={<Button variant="outline" asChild><Link href={routeFor(data, 'dashboard')}>Go to my overview<ArrowRight data-icon="inline-end" /></Link></Button>} /></Panel> : <>
+        {blocked ? isRequester
+          ? <Panel><EmptyState title="This page is for the tech team" description="Raise a request, and follow it on My requests." action={<Button variant="outline" asChild><Link href={routeFor(data, 'requests')}>Go to my requests<ArrowRight data-icon="inline-end" /></Link></Button>} /></Panel>
+          : <Panel><EmptyState title="This page is for admins" description="Your overview, tickets, bugs, and projects are in the menu." action={<Button variant="outline" asChild><Link href={routeFor(data, 'dashboard')}>Go to my overview<ArrowRight data-icon="inline-end" /></Link></Button>} /></Panel>
+        : isRequester ? <>
+          {(page === 'dashboard' || page === 'requests') && <MyRequests data={data} onRaise={raiseRequest} onEdit={request => setModal({ type: 'techRequest', request })} mutate={mutate} busy={busy} />}
+          {page === 'account' && <Account data={data} />}
+        </> : <>
           {page === 'dashboard' && <Dashboard data={data} week={week} scores={scores} onOpen={openItem} onOpenProject={setProjectId} onAction={act} onExtend={extendTicket} onAddHours={addHours} onAdd={addItem} busy={busy} />}
           {(page === 'tickets' || page === 'bugs') && <WorkList key={`${page}?${listQuery}`} data={data} kind={page === 'tickets' ? 'task' : 'bug'} onOpen={openItem} onAction={act} onExtend={extendTicket} onAddHours={addHours} onAdd={addItem} busy={busy} />}
           {page === 'approvals' && <Approvals data={data} onOpen={openItem} onAction={act} onRequest={() => addItem('task')} mutate={mutate} busy={busy} />}
+          {page === 'requests' && <RequestInbox key={listQuery} data={data} onOpenItem={openItem} mutate={mutate} busy={busy} />}
           {page === 'standup' && <Standup data={data} week={week} onOpen={openItem} onAction={act} onAdd={addItem} mutate={mutate} busy={busy} />}
           {page === 'team' && <Team data={data} week={week} onEdit={m => setModal({ type: 'member', member: m })} onLeave={userId => setModal({ type: 'leave', userId })} mutate={mutate} onOpen={openItem} />}
+          {page === 'other-teams' && <OtherTeams data={data} mutate={mutate} busy={busy} onAddMember={departmentId => setModal({ type: 'member', role: 'requester', departmentId })} onEditMember={m => setModal({ type: 'member', member: m })} onTeam={department => setModal({ type: 'department', department })} />}
           {page === 'projects' && <Projects data={data} onEdit={p => setModal({ type: 'project', project: p })} onOpen={setProjectId} onExtend={extendProject} mutate={mutate} />}
           {page === 'settings' && <SettingsPage key={JSON.stringify(data.settings)} data={data} mutate={mutate} busy={busy} onHoliday={() => setModal({ type: 'holiday' })} />}
           {page === 'account' && <Account data={data} />}
         </>}
         {children}
-        <footer className="workspace-footer"><span>Urban Gabru tech workspace · {weekLabel === 'This week' ? 'India time (Asia/Kolkata)' : `Showing the week of ${displayDate(week)}`}</span><span>Press <Kbd>{searchKey}</Kbd> to search · <Kbd>C</Kbd> to add a ticket</span></footer>
+        <footer className="workspace-footer">{isRequester
+          ? <><span>Urban Gabru tech workspace · India time (Asia/Kolkata)</span><span>Press <Kbd>C</Kbd> to raise a request</span></>
+          : <><span>Urban Gabru tech workspace · {weekLabel === 'This week' ? 'India time (Asia/Kolkata)' : `Showing the week of ${displayDate(week)}`}</span><span>Press <Kbd>{searchKey}</Kbd> to search · <Kbd>C</Kbd> to add a ticket</span></>}</footer>
       </div>
     </SidebarInset>
-    <CommandPalette data={data} open={paletteOpen} onOpenChange={setPaletteOpen} onOpenItem={openItem} onOpenProject={setProjectId} onCreate={kind => addItem(kind)} onModal={openModal} />
+    {!isRequester && <CommandPalette data={data} open={paletteOpen} onOpenChange={setPaletteOpen} onOpenItem={openItem} onOpenProject={setProjectId} onCreate={kind => addItem(kind)} onModal={openModal} />}
+    {modal?.type === 'techRequest' && <TechRequestForm data={data} editing={modal.request && data.techRequests.find(r => r.id === modal.request!.id)} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {modal?.type === 'item' && <ItemForm data={data} kind={modal.kind} assigneeId={modal.assigneeId} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
-    {modal?.type === 'member' && <MemberForm data={data} editing={modal.member} mutate={mutate} onClose={() => setModal(null)} onLeave={userId => setModal({ type: 'leave', userId })} busy={busy} />}
+    {modal?.type === 'member' && <MemberForm data={data} editing={modal.member} role={modal.role} departmentId={modal.departmentId} mutate={mutate} onClose={() => setModal(null)} onLeave={userId => setModal({ type: 'leave', userId })} busy={busy} />}
+    {modal?.type === 'department' && <DepartmentForm editing={modal.department && data.departments.find(d => d.id === modal.department!.id)} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {modal?.type === 'project' && <ProjectForm data={data} editing={data.projects.find(p => p.id === modal.project?.id) ?? modal.project} mutate={mutate} onClose={() => setModal(null)} onExtend={extendProject} busy={busy} />}
     {modal?.type === 'leave' && <LeaveForm data={data} userId={modal.userId} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {modal?.type === 'holiday' && <HolidayForm mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
@@ -305,6 +334,7 @@ function CreateMenu({ isAdmin, onItem, onModal }: { isAdmin: boolean; onItem: (k
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => onModal('project')}><FolderPlus />New project</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onModal('member')}><UserPlus />Add member</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onModal('otherTeamMember')}><Briefcase />Add someone from another team</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onModal('leave')}><CalendarPlus />Add leave</DropdownMenuItem>
       </>}
     </DropdownMenuContent>
@@ -314,25 +344,27 @@ function CreateMenu({ isAdmin, onItem, onModal }: { isAdmin: boolean; onItem: (k
 function WorkspaceSidebar({ data, page }: { data: DashboardData; page: string }) {
   const { setOpenMobile } = useSidebar();
   const isAdmin = data.currentUser.role === 'admin';
+  if (data.currentUser.role === 'requester') return <RequesterSidebar data={data} page={page} onNavigate={() => setOpenMobile(false)} />;
   const open = data.items.filter(i => !isDone(i));
   // Admins see everything waiting for a decision. A developer sees their own requests still waiting.
   const pendingRequests = data.requests.filter(r => r.status === 'pending').length + data.dueDateRequests.filter(r => r.status === 'pending').length;
   const waiting = isAdmin ? pendingRequests + data.items.filter(i => i.type === 'task' ? i.status === 'in_review' : i.status === 'fixed').length : pendingRequests;
   const close = () => setOpenMobile(false);
-  const count = (id: string) => id === 'tickets' ? open.filter(i => i.type === 'task').length : id === 'bugs' ? open.filter(i => i.type === 'bug').length : id === 'approvals' ? waiting : 0;
+  const newRequests = data.techRequests.filter(r => r.status === 'new').length;
+  const count = (id: string) => id === 'tickets' ? open.filter(i => i.type === 'task').length : id === 'bugs' ? open.filter(i => i.type === 'bug').length : id === 'approvals' ? waiting : id === 'requests' ? newRequests : 0;
   const link = (p: PageLink) => {
     const Icon = p.icon;
     const n = count(p.id);
     return <SidebarMenuItem key={p.id}>
       <SidebarMenuButton asChild isActive={page === p.id} tooltip={p.label}><Link href={routeFor(data, p.id)} onClick={close}><Icon /><span>{p.label}</span></Link></SidebarMenuButton>
-      {n > 0 && <SidebarMenuBadge className={p.id === 'approvals' && isAdmin ? 'sidebar-count-attention' : undefined}>{n}</SidebarMenuBadge>}
+      {n > 0 && <SidebarMenuBadge className={(p.id === 'approvals' || p.id === 'requests') && isAdmin ? 'sidebar-count-attention' : undefined}>{n}</SidebarMenuBadge>}
     </SidebarMenuItem>;
   };
   const team = teamPages.filter(p => isAdmin || !p.admin);
   return <Sidebar className="app-sidebar" variant="inset" collapsible="offcanvas">
     <SidebarHeader><Link className="brand" href={routeFor(data, 'dashboard')} onClick={close} aria-label="Urban Gabru tech workspace"><div>urban<span className="brand-light">gabru</span><small>Tech workspace</small></div></Link></SidebarHeader>
     <SidebarContent>
-      <SidebarGroup><SidebarGroupLabel>Workspace</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{[...workPages, ...(isAdmin ? [] : team)].map(link)}</SidebarMenu></SidebarGroupContent></SidebarGroup>
+      <SidebarGroup><SidebarGroupLabel>Workspace</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{[...workPages.filter(p => isAdmin || !p.admin), ...(isAdmin ? [] : team)].map(link)}</SidebarMenu></SidebarGroupContent></SidebarGroup>
       {isAdmin && <SidebarGroup><SidebarGroupLabel>Team</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{team.map(link)}</SidebarMenu></SidebarGroupContent></SidebarGroup>}
     </SidebarContent>
     <SidebarFooter>
@@ -344,18 +376,43 @@ function WorkspaceSidebar({ data, page }: { data: DashboardData; page: string })
   </Sidebar>;
 }
 
+/** Someone from another team needs one place: their requests. Their profile shows their team. */
+function RequesterSidebar({ data, page, onNavigate }: { data: DashboardData; page: string; onNavigate: () => void }) {
+  const waiting = data.techRequests.filter(r => r.requesterId === data.currentUser.id && r.status === 'new').length;
+  return <Sidebar className="app-sidebar" variant="inset" collapsible="offcanvas">
+    <SidebarHeader><Link className="brand" href={routeFor(data, 'requests')} onClick={onNavigate} aria-label="Urban Gabru tech workspace"><div>urban<span className="brand-light">gabru</span><small>Tech requests</small></div></Link></SidebarHeader>
+    <SidebarContent>
+      <SidebarGroup><SidebarGroupLabel>Requests</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton asChild isActive={page === 'requests' || page === 'dashboard'} tooltip="My requests"><Link href={routeFor(data, 'requests')} onClick={onNavigate}><Inbox /><span>My requests</span></Link></SidebarMenuButton>
+          {waiting > 0 && <SidebarMenuBadge title={`${waiting} waiting for review`}>{waiting}</SidebarMenuBadge>}
+        </SidebarMenuItem>
+      </SidebarMenu></SidebarGroupContent></SidebarGroup>
+    </SidebarContent>
+    <SidebarFooter>
+      <SidebarMenu>
+        <SidebarMenuItem><SidebarMenuButton asChild isActive={page === 'account'} className="profile-link h-auto"><Link href={routeFor(data, 'account')} onClick={onNavigate}><Avatar member={data.currentUser} /><div>{data.currentUser.name}<span>{roleLabel(data, data.currentUser)}</span></div><ChevronRight size={16} /></Link></SidebarMenuButton></SidebarMenuItem>
+      </SidebarMenu>
+    </SidebarFooter>
+  </Sidebar>;
+}
+
 function AttentionMenu({ data, onOpen }: { data: DashboardData; onOpen: (id: string) => void }) {
   const router = useRouter();
   const items = attentionItems(data);
   const admin = data.currentUser.role === 'admin';
   const requests = admin ? data.requests.filter(r => r.status === 'pending').length : 0;
   const extensions = admin ? data.dueDateRequests.filter(r => r.status === 'pending').length : 0;
-  const total = items.length + requests + extensions;
+  const teamRequests = admin ? data.techRequests.filter(r => r.status === 'new').length : 0;
+  const total = items.length + requests + extensions + teamRequests;
   return <DropdownMenu>
     <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" className="attention-trigger" aria-label={`Needs attention: ${total}`}><Bell size={18} />{total > 0 && <span className="notification-count" aria-hidden="true">{total > 9 ? '9+' : total}</span>}</Button></DropdownMenuTrigger>
     <DropdownMenuContent align="end" className="attention-menu">
       <DropdownMenuLabel className="attention-menu-label">Needs attention{total ? <span className="tab-count">{total}</span> : null}</DropdownMenuLabel>
       <DropdownMenuSeparator />
+      {teamRequests > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'requests'))} className="attention-menu-item">
+        <Inbox className="attention-menu-icon" /><span className="attention-menu-title">{teamRequests} new {teamRequests === 1 ? 'request' : 'requests'} from other teams</span><span className="attention-menu-reason">Assign or decline on Requests</span>
+      </DropdownMenuItem>}
       {requests > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'approvals'))} className="attention-menu-item">
         <ClipboardCheck className="attention-menu-icon" /><span className="attention-menu-title">{requests} ticket {requests === 1 ? 'request waits' : 'requests wait'} for approval</span><span className="attention-menu-reason">Review on Approvals</span>
       </DropdownMenuItem>}
@@ -380,7 +437,7 @@ function DemoBanner({ data, viewerId }: { data: DashboardData; viewerId: string 
   }
   return <div className="demo-banner">
     <span className="demo-banner-text"><Eye aria-hidden="true" /><strong>Demo</strong><span>Changes stay in this browser.</span></span>
-    <span className="demo-viewer"><span>View as</span><FormSelect aria-label="View the demo as" value={viewerId} onValueChange={id => setDemoViewer(id === data.currentUser.id ? null : id)}>{people.map(m => <option key={m.id} value={m.id}>{m.name} · {m.role === 'admin' ? 'Admin' : 'Developer'}</option>)}</FormSelect></span>
+    <span className="demo-viewer"><span>View as</span><FormSelect aria-label="View the demo as" value={viewerId} onValueChange={id => setDemoViewer(id === data.currentUser.id ? null : id)}>{people.map(m => <option key={m.id} value={m.id}>{m.name} · {roleLabel(data, m)}</option>)}</FormSelect></span>
     <span className="demo-banner-actions">
       <Button variant="ghost" size="sm" onClick={reset}><RotateCcw data-icon="inline-start" />Reset</Button>
       <Button variant="link" size="sm" asChild><Link href="/login">Open your workspace<ArrowRight data-icon="inline-end" /></Link></Button>

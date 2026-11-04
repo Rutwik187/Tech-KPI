@@ -56,16 +56,16 @@ async function pickDateRange(page: Page, trigger: Locator, start: string, end: s
 /** Removes a demo ticket's date, like a ticket made before every ticket had one. */
 async function clearDemoDate(page: Page, title: string) {
   await page.evaluate((title) => {
-    const data = JSON.parse(localStorage.getItem('urban-gabru-kpi-demo-v7')!) as DashboardData;
+    const data = JSON.parse(localStorage.getItem('urban-gabru-kpi-demo-v9')!) as DashboardData;
     data.items = data.items.map(item => item.title === title ? { ...item, dueDate: null, originalDueDate: null } : item);
-    localStorage.setItem('urban-gabru-kpi-demo-v7', JSON.stringify(data));
+    localStorage.setItem('urban-gabru-kpi-demo-v9', JSON.stringify(data));
   }, title);
   await page.reload();
 }
 
 async function readDemoData(page: Page): Promise<DashboardData> {
   return page.evaluate(() => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v7');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v9');
     if (!saved) throw new Error('Demo changes did not persist.');
     return JSON.parse(saved) as DashboardData;
   });
@@ -171,7 +171,9 @@ test('demo navigation keeps every page in the demo workspace', async ({ page }) 
     { label: /^Tickets/, path: 'tickets', heading: /^Tickets/ },
     { label: /^Bugs/, path: 'bugs', heading: /^Bugs/ },
     { label: /^Approvals/, path: 'approvals', heading: /^Approvals/ },
+    { label: /^Requests/, path: 'requests', heading: /^Requests/ },
     { label: /^Team$/, path: 'team', heading: /^Team/ },
+    { label: /^Other teams$/, path: 'other-teams', heading: /^Other teams/ },
     { label: /^Projects$/, path: 'projects', heading: /^Projects/ },
     { label: /^Settings$/, path: 'settings', heading: /^Settings/ },
     { label: /Rohan Desai/, path: 'account', heading: /^My account/ },
@@ -305,7 +307,7 @@ test('a ticket needs only a title, owner and estimate, survives reload, and appe
   await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click();
   await expect(dialog).toBeHidden();
   const savedDescription = await page.evaluate(title => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v7');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v9');
     if (!saved) throw new Error('Demo ticket did not persist.');
     return (JSON.parse(saved) as { items: { title: string; description: string }[] }).items.find(item => item.title === title)?.description;
   }, title);
@@ -548,7 +550,7 @@ test('logging a linked bug fills its owner and project, then supports fix and ve
   await page.getByRole('textbox', { name: 'Search bugs' }).fill(standaloneTitle);
   await expect(page.getByRole('row').filter({ hasText: standaloneTitle })).toBeVisible();
   const storedTaskId = await page.evaluate(title => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v7');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v9');
     if (!saved) throw new Error('Demo bug did not persist.');
     return (JSON.parse(saved) as { items: { title: string; taskId: string | null }[] }).items.find(item => item.title === title)?.taskId;
   }, standaloneTitle);
@@ -565,7 +567,7 @@ test('working-day buttons save ISO weekdays including Sunday as seven in the dem
   await sunday.click();
   await page.getByRole('button', { name: /^Save settings/ }).click();
   const workingDays = await page.evaluate(() => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v7');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v9');
     if (!saved) throw new Error('Demo settings did not persist.');
     return (JSON.parse(saved) as { settings: { workingDays: number[] } }).settings.workingDays;
   });
@@ -1231,4 +1233,177 @@ test('a developer’s overview starts with their own work, with what needs them 
   await expect(attention).toContainText('Finish creator payout reconciliation');
   await expect(attention).toContainText('Blocked: Waiting for the finance team');
   await expect(work.getByRole('button', { name: /^Complete/ }).first()).toBeVisible();
+});
+
+test('someone from another team raises a request, the admin assigns it, and they follow it without seeing tickets', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await openDemo(page, 'requests');
+  const viewAs = page.getByRole('combobox', { name: 'View the demo as', exact: true });
+  await chooseOption(page, viewAs, 'Priya Kapoor · Sales team lead');
+  await expect(page.getByRole('heading', { level: 1, name: 'My requests' })).toBeVisible();
+  // A requester's workspace is their requests. No tickets, no search, no team pages.
+  const sidebar = page.locator('[data-slot="sidebar"]');
+  await expect(sidebar.getByRole('link', { name: 'My requests', exact: true })).toBeVisible();
+  await expect(sidebar.getByRole('link', { name: /^Tickets/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Search tickets/ })).toHaveCount(0);
+
+  // C raises a request, as it adds a ticket for the tech team.
+  await page.getByRole('heading', { level: 1, name: 'My requests' }).click();
+  await page.keyboard.press('c');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: 'Raise a request' })).toBeVisible();
+  await dialog.getByRole('textbox', { name: 'What do you need?', exact: true }).fill('Invoice download for B2B orders');
+  await dialog.getByRole('radio', { name: 'Data or report', exact: true }).click();
+  await dialog.getByRole('textbox', { name: 'Details', exact: true }).fill('B2B customers need a GST invoice PDF on the order page. Sample: https://example.com/sample-invoice');
+  await expect(dialog.getByRole('combobox', { name: 'Team', exact: true })).toHaveText('Sales');
+  await dialog.getByRole('radio', { name: 'High', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Send request', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const card = page.locator('.tech-request-card').filter({ hasText: 'Invoice download for B2B orders' });
+  await expect(card).toContainText('Waiting for review');
+  await expect(card.getByRole('link', { name: 'https://example.com/sample-invoice' })).toHaveAttribute('target', '_blank');
+
+  // Until the tech team reviews it, the requester can change it.
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await dialog.getByRole('textbox', { name: 'What do you need?', exact: true }).fill('GST invoice download for B2B orders');
+  await dialog.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const raised = (await readDemoData(page)).techRequests.find(request => request.title === 'GST invoice download for B2B orders')!;
+  expect(raised).toMatchObject({ status: 'new', category: 'data', priority: 'high', requesterId: 'demo-priya', departmentId: 'demo-team-1' });
+
+  // The admin assigns it to a developer. That makes the developer's ticket.
+  await chooseOption(page, viewAs, 'Rohan Desai · Admin');
+  await expect(page.getByRole('heading', { level: 1, name: 'Requests' })).toBeVisible();
+  await page.locator('.tech-request-card').filter({ hasText: 'GST invoice download for B2B orders' }).getByRole('button', { name: 'Assign', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: 'Choose an owner', exact: true })).toBeDisabled();
+  await chooseOption(page, dialog.getByRole('combobox', { name: 'Owner', exact: true }), 'Aarav Mehta');
+  await dialog.getByRole('textbox', { name: /^Note for Priya/ }).fill('Aarav starts on Monday.');
+  await dialog.getByRole('button', { name: 'Assign to Aarav', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const saved = await readDemoData(page);
+  const assigned = saved.techRequests.find(request => request.id === raised.id)!;
+  expect(assigned).toMatchObject({ status: 'assigned', reviewNote: 'Aarav starts on Monday.' });
+  expect(saved.items.find(item => item.id === assigned.itemId)).toMatchObject({ type: 'task', status: 'todo', assigneeId: 'demo-aarav', title: 'GST invoice download for B2B orders' });
+
+  // The ticket shows who asked. The requester sees who works on it, and can no longer change it.
+  await page.getByRole('radio', { name: /^In progress/ }).click();
+  await page.locator('.tech-request-card').filter({ hasText: 'GST invoice download for B2B orders' }).getByRole('button', { name: /^Open ticket/ }).click();
+  await expect(page.locator('.detail-fact-request')).toContainText('Priya Kapoor');
+  await page.keyboard.press('Escape');
+  await chooseOption(page, viewAs, 'Priya Kapoor · Sales team lead');
+  const followed = page.locator('.tech-request-card').filter({ hasText: 'GST invoice download for B2B orders' });
+  await expect(followed).toContainText('Assigned');
+  await expect(followed).toContainText('Aarav will work on it.');
+  await expect(followed).toContainText('Aarav starts on Monday.');
+  await expect(followed.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test('an admin declines a request with a reason, and a requester withdraws one that waits', async ({ page }) => {
+  await openDemo(page, 'requests');
+  const viewAs = page.getByRole('combobox', { name: 'View the demo as', exact: true });
+  const pixel = page.locator('.tech-request-card').filter({ hasText: 'Add the Meta pixel to the new landing page' });
+  await pixel.getByRole('button', { name: 'Decline', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: /^Why are you declining it/ }).fill('The pixel is already on every page through Tag Manager.');
+  await dialog.getByRole('button', { name: 'Decline request', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator('.tech-request-card').filter({ hasText: 'Add the Meta pixel' })).toHaveCount(0);
+  await page.getByRole('radio', { name: /^Declined/ }).click();
+  await expect(pixel).toContainText('The pixel is already on every page through Tag Manager.');
+
+  await chooseOption(page, viewAs, 'Neha Joshi · Digital marketing team lead');
+  const declined = page.locator('.tech-request-card').filter({ hasText: 'Add the Meta pixel to the new landing page' });
+  await expect(declined).toContainText('Declined');
+  await expect(declined).toContainText('Why it was declined: The pixel is already on every page through Tag Manager.');
+
+  await chooseOption(page, viewAs, 'Priya Kapoor · Sales team lead');
+  const waiting = page.locator('.tech-request-card').filter({ hasText: 'Bulk order form for corporate gifting' });
+  await waiting.getByRole('button', { name: 'Withdraw', exact: true }).click();
+  await waiting.getByRole('button', { name: 'Withdraw', exact: true }).click();
+  await expect(waiting).toHaveCount(0);
+  expect((await readDemoData(page)).techRequests.some(request => request.title === 'Bulk order form for corporate gifting')).toBe(false);
+});
+
+test('an admin creates a team and adds its members, who raise requests and see each other\'s', async ({ page }) => {
+  await openDemo(page, 'other-teams');
+  const viewAs = page.getByRole('combobox', { name: 'View the demo as', exact: true });
+  // Only the people the admin adds to a team can sign in, unless the admin lets a work email domain in.
+  await expect(page.locator('.sign-in-panel')).toContainText('Only the people you add to a team can sign in.');
+  await page.getByRole('button', { name: 'New team', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: 'Team name', exact: true }).fill('Customer support');
+  await dialog.getByRole('button', { name: 'Create team', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const support = page.locator('.other-team-card').filter({ hasText: 'Customer support' });
+  await expect(support).toContainText('No one yet');
+
+  // Adding from a team's card already knows the role and the team. The first person is its lead, unless the admin says no.
+  await support.getByRole('button', { name: 'Add member', exact: true }).click();
+  await expect(dialog.getByRole('heading', { name: 'Add someone to Customer support' })).toBeVisible();
+  await expect(dialog.getByRole('radio', { name: 'Developer', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('combobox', { name: 'Team', exact: true })).toHaveText('Customer support');
+  await expect(dialog.getByRole('checkbox', { name: /^Team lead/ })).toBeChecked();
+  await dialog.getByLabel(/^Full name/).fill('Sneha Pillai');
+  await dialog.getByLabel(/^Work email/).fill('sneha.pillai@urbangabru.in');
+  await dialog.getByRole('button', { name: 'Add member', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(support).toContainText('Sneha PillaiTeam lead');
+
+  // A team can have as many members as it needs. Each one can raise requests.
+  await support.getByRole('button', { name: 'Add member', exact: true }).click();
+  await expect(dialog.getByRole('checkbox', { name: /^Team lead/ })).not.toBeChecked();
+  await dialog.getByLabel(/^Full name/).fill('Farah Ali');
+  await dialog.getByLabel(/^Work email/).fill('farah.ali@urbangabru.in');
+  await dialog.getByRole('button', { name: 'Add member', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(support.locator('.team-person-name strong')).toHaveText(['Sneha PillaiTeam lead', 'Farah Ali']);
+  await expect(page.locator('.team-overview-strip')).toContainText('8people who can raise requests');
+  const saved = await readDemoData(page);
+  const supportTeam = saved.departments.find(team => team.name === 'Customer support')!;
+  expect(saved.members.find(member => member.email === 'sneha.pillai@urbangabru.in')).toMatchObject({ role: 'requester', departmentId: supportTeam.id, isTeamLead: true });
+  expect(saved.members.find(member => member.email === 'farah.ali@urbangabru.in')).toMatchObject({ role: 'requester', departmentId: supportTeam.id, isTeamLead: false });
+
+  // An archived team leaves the list and takes no new requests.
+  await page.getByRole('button', { name: 'More actions for Graphics', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Archive team', exact: true }).click();
+  await expect(page.locator('.other-team-card').filter({ hasText: 'Graphics' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /archived teams \(1\)/ })).toBeVisible();
+
+  // The new member raises a request. Other teams is for the tech team only.
+  await chooseOption(page, viewAs, 'Farah Ali · Customer support team');
+  await expect(page.getByRole('heading', { name: 'This page is for the tech team' })).toBeVisible();
+  await page.locator('[data-slot="sidebar"]').getByRole('link', { name: 'My requests', exact: true }).click();
+  await page.getByRole('button', { name: 'Raise a request', exact: true }).first().click();
+  await expect(dialog.getByRole('combobox', { name: 'Team', exact: true })).toHaveText('Customer support');
+  await dialog.getByRole('combobox', { name: 'Team', exact: true }).click();
+  await expect(page.getByRole('option', { name: 'Sales', exact: true })).toBeVisible();
+  await expect(page.getByRole('option', { name: 'Graphics', exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await dialog.getByRole('textbox', { name: 'What do you need?', exact: true }).fill('Coupon field rejects valid codes');
+  await dialog.getByRole('radio', { name: 'Something is broken', exact: true }).click();
+  await dialog.getByRole('textbox', { name: 'Details', exact: true }).fill('Since this morning, WELCOME10 shows as invalid at checkout on mobile.');
+  await dialog.getByRole('radio', { name: 'Urgent', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Send request', exact: true }).click();
+  await expect(dialog).toBeHidden();
+
+  // The team lead sees what their teammate raised, under their team's requests.
+  await chooseOption(page, viewAs, 'Sneha Pillai · Customer support team lead');
+  await page.getByRole('radio', { name: /^Customer support team/ }).click();
+  await expect(page.locator('.tech-request-card').filter({ hasText: 'Coupon field rejects valid codes' })).toContainText('Farah Ali');
+
+  // Something broken starts as a bug, and an urgent one is critical.
+  await chooseOption(page, viewAs, 'Rohan Desai · Admin');
+  await page.locator('[data-slot="sidebar"]').getByRole('link', { name: /^Requests/ }).click();
+  await page.locator('.tech-request-card').filter({ hasText: 'Coupon field rejects valid codes' }).getByRole('button', { name: 'Assign', exact: true }).click();
+  await expect(dialog.getByRole('radio', { name: 'Bug', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(dialog.getByRole('radio', { name: 'Critical', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await chooseOption(page, dialog.getByRole('combobox', { name: 'Owner', exact: true }), 'Arjun Patil');
+  await dialog.getByRole('button', { name: 'Assign to Arjun', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const after = await readDemoData(page);
+  const request = after.techRequests.find(row => row.title === 'Coupon field rejects valid codes')!;
+  expect(request).toMatchObject({ departmentId: supportTeam.id, status: 'assigned' });
+  expect(after.items.find(item => item.id === request.itemId)).toMatchObject({ type: 'bug', status: 'open', severity: 'critical', assigneeId: 'demo-arjun', estimateHours: 0 });
 });
