@@ -1,15 +1,20 @@
-import { and, desc, eq, inArray, or, isNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, or, isNull, ne, sql, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { headers } from "next/headers";
 import { db } from "@/db";
-import { account, activities, dueDateRequests, holidays, leaves, memberProfiles, projectMembers, projectPhases, projects, settings, snapshots, ticketRequests, user, workItems } from "@/db/schema";
-import type { DashboardData, DueDateRequest, Member, TicketRequest, WorkItem } from "@/lib/types";
-import { DEFAULT_SETTINGS } from "./default-settings";
-import { requireSession } from "./authz";
+import { account, activities, departments, dueDateRequests, holidays, leaves, memberProfiles, projectMembers, projectPhases, projects, settings, snapshots, techRequests, ticketRequests, user, workItems } from "@/db/schema";
+import type { DashboardData, DueDateRequest, Member, TechRequest, TicketRequest, WorkItem } from "@/lib/types";
+import { withDefaults } from "./default-settings";
+import { memberRole, requireSession } from "./authz";
 import { ADHOC_PROJECT_ID } from "@/lib/project-defaults";
 
-export function serializeItem(item: typeof workItems.$inferSelect): WorkItem {
+type ItemRow = typeof workItems.$inferSelect;
+function itemKey(item: Pick<ItemRow, "type" | "sequence">) {
+  return `${item.type === "bug" ? "BUG" : "UG"}-${String(item.sequence).padStart(3, "0")}`;
+}
+export function serializeItem(item: ItemRow): WorkItem {
   return {
-    id: item.id, key: `${item.type === "bug" ? "BUG" : "UG"}-${String(item.sequence).padStart(3, "0")}`,
+    id: item.id, key: itemKey(item),
     type: item.type, title: item.title, description: item.description,
     projectId: item.projectId, phaseId: item.phaseId, assigneeId: item.assigneeId, status: item.status, priority: item.priority,
     severity: item.severity, estimateHours: item.estimateHours, dueDate: item.dueDate, originalDueDate: item.originalDueDate,
@@ -29,6 +34,31 @@ export function serializeRequest(request: typeof ticketRequests.$inferSelect): T
     ...request, reviewedAt: request.reviewedAt?.toISOString() ?? null, createdAt: request.createdAt.toISOString(),
   };
 }
+
+function loadDepartments() {
+  return db.select({ id: departments.id, name: departments.name, position: departments.position, isArchived: departments.isArchived })
+    .from(departments).orderBy(departments.position, departments.name);
+}
+
+const assignee = alias(user, "assignee");
+/** Requests with their requester's name and the work they became. New ones come first, then the newest. */
+async function loadTechRequests(where: SQL | undefined, limit: number): Promise<TechRequest[]> {
+  const rows = await db.select({ request: techRequests, requesterName: user.name, item: workItems, assigneeName: assignee.name })
+    .from(techRequests).innerJoin(user, eq(user.id, techRequests.requesterId))
+    .leftJoin(workItems, eq(workItems.id, techRequests.itemId)).leftJoin(assignee, eq(assignee.id, workItems.assigneeId))
+    .where(where).orderBy(sql`${techRequests.status} = 'new' DESC`, desc(techRequests.createdAt)).limit(limit);
+  return rows.map(({ request, requesterName, item, assigneeName }) => ({
+    id: request.id, key: `REQ-${String(request.sequence).padStart(3, "0")}`, requesterId: request.requesterId, requesterName, departmentId: request.departmentId,
+    title: request.title, description: request.description, category: request.category, priority: request.priority, neededBy: request.neededBy,
+    status: request.status, reviewedById: request.reviewedById, reviewedAt: request.reviewedAt?.toISOString() ?? null, reviewNote: request.reviewNote,
+    itemId: request.itemId, createdAt: request.createdAt.toISOString(), updatedAt: request.updatedAt.toISOString(),
+    work: item ? {
+      key: itemKey(item), type: item.type, status: item.status, assigneeId: item.assigneeId, assigneeName: assigneeName ?? "A developer", dueDate: item.dueDate,
+      doneAt: (item.type === "task" ? item.completedAt : item.fixedAt)?.toISOString() ?? null,
+    } : null,
+  }));
+}
+
 export async function getDashboardData(requestHeaders?: Headers): Promise<DashboardData> {
   const currentUser = await requireSession(requestHeaders ?? await headers());
   return loadDashboardData(currentUser);
@@ -46,9 +76,23 @@ export async function getSnapshotSource(): Promise<DashboardData | null> {
   });
 }
 
+/** A requester sees the teams, their own requests, and their team's requests. No tickets, people, or scores. */
+async function loadRequesterData(currentUser: Member): Promise<DashboardData> {
+  const [departmentRows, settingRows, requests] = await Promise.all([
+    loadDepartments(),
+    db.select().from(settings).where(eq(settings.id, 1)),
+    loadTechRequests(or(eq(techRequests.requesterId, currentUser.id), currentUser.departmentId ? eq(techRequests.departmentId, currentUser.departmentId) : undefined), 300),
+  ]);
+  return {
+    currentUser, members: [currentUser], projects: [], phases: [], items: [], requests: [], dueDateRequests: [], activities: [], leaves: [], holidays: [],
+    settings: withDefaults(settingRows[0]?.value), mode: "live", snapshots: [], departments: departmentRows, techRequests: requests,
+  };
+}
+
 async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
+  if (currentUser.role === "requester") return loadRequesterData(currentUser);
   const isAdmin = currentUser.role === "admin";
-  const [itemRows, identities, projectRows, membershipRows, phaseRows, leaveRows, holidayRows, settingRows, snapshotRows, requestRows, dueDateRows] = await Promise.all([
+  const [itemRows, identities, projectRows, membershipRows, phaseRows, leaveRows, holidayRows, settingRows, snapshotRows, requestRows, dueDateRows, departmentRows] = await Promise.all([
     db.select().from(workItems).where(isAdmin ? undefined : eq(workItems.assigneeId, currentUser.id)).orderBy(desc(workItems.createdAt)),
     db.select({ identity: user, profile: memberProfiles, microsoftObjectId: account.accountId }).from(user)
       .leftJoin(memberProfiles, eq(memberProfiles.userId, user.id))
@@ -63,8 +107,12 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
     // Admins review everyone's requests. A developer sees only their own.
     db.select().from(ticketRequests).where(isAdmin ? undefined : eq(ticketRequests.requesterId, currentUser.id)).orderBy(desc(ticketRequests.createdAt)).limit(200),
     db.select().from(dueDateRequests).where(isAdmin ? undefined : eq(dueDateRequests.requesterId, currentUser.id)).orderBy(desc(dueDateRequests.createdAt)).limit(200),
+    loadDepartments(),
   ]);
   const itemIds = itemRows.map((item) => item.id);
+  // Admins triage every team's requests. A developer sees the requests behind their own tickets and bugs.
+  const techRequestRows = isAdmin ? await loadTechRequests(undefined, 500)
+    : itemIds.length ? await loadTechRequests(inArray(techRequests.itemId, itemIds), 500) : [];
   if (!isAdmin) {
     // A reassigned bug can already have a locked score under its previous owner. Send only that allocation.
     const allocations = await db.select({ weekStart: snapshots.weekStart, bugIds: sql<unknown>`${snapshots.value}->'scoredBugIds'` })
@@ -86,13 +134,13 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
       itemIds.length ? inArray(activities.entityId, itemIds) : undefined,
       and(inArray(activities.entityId, [...visibleProjectIds]), eq(activities.action, "project.target_changed")),
     )).orderBy(desc(activities.createdAt));
-  const appSettings = settingRows[0]?.value ?? DEFAULT_SETTINGS;
+  const appSettings = withDefaults(settingRows[0]?.value);
   const members: Member[] = identities.map(({ identity, profile, microsoftObjectId }) => ({
     id: identity.id, name: identity.name, email: identity.email,
-    role: identity.role === "admin" ? "admin" : "developer", image: identity.image,
+    role: memberRole(identity.role), image: identity.image,
     capacity: profile?.capacity ?? (identity.role === "admin" ? appSettings.defaultLeadCapacityHours : appSettings.defaultDevCapacityHours),
     isActive: !identity.banned && profile?.isActive !== false,
-    joinedOn: profile?.joinedOn,
+    joinedOn: profile?.joinedOn, departmentId: profile?.departmentId ?? null, isTeamLead: profile?.isTeamLead ?? false,
     ...(isAdmin && microsoftObjectId ? { microsoftObjectId } : {}),
   }));
   return {
@@ -104,5 +152,6 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
     phases: phaseRows.filter((phase) => visibleProjectIds.has(phase.projectId)),
     items: itemRows.map(serializeItem), requests: requestRows.map(serializeRequest), dueDateRequests: dueDateRows.map(serializeDueDateRequest), activities: activityRows.map((activity) => ({ ...activity, createdAt: activity.createdAt.toISOString() })),
     leaves: leaveRows, holidays: holidayRows, settings: appSettings, mode: "live", snapshots: snapshotRows,
+    departments: departmentRows, techRequests: techRequestRows,
   };
 }

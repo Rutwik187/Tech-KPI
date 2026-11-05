@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { account, activities, memberProfiles, session, snapshots, user } from "@/db/schema";
 import { auth } from "@/lib/auth";
 import type { Member, Role } from "@/lib/types";
+import { storedRole } from "./authz";
 
 function assertLocal(baseURL: string): URL {
   const url = new URL(baseURL);
@@ -32,7 +33,7 @@ export async function createOfflineSessionFixture({ baseURL, role, name }: { bas
   const id = randomUUID(); const objectId = randomUUID();
   const member: Member = { id, name: name ?? `Verification ${id.slice(0, 8)}`, email: `${id}@example.invalid`, role, image: null, capacity: role === "admin" ? 10 : 33, isActive: true, microsoftObjectId: objectId };
   await db.transaction(async (tx) => {
-    await tx.insert(user).values({ id, name: member.name, email: member.email, role: role === 'admin' ? 'admin' : 'user', emailVerified: false });
+    await tx.insert(user).values({ id, name: member.name, email: member.email, role: storedRole(role), emailVerified: false });
     await tx.insert(memberProfiles).values({ userId: id, capacity: member.capacity });
     await tx.insert(account).values({ id: randomUUID(), providerId: "microsoft", accountId: objectId, userId: id });
   });

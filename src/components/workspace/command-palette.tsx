@@ -3,14 +3,14 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
-import { Bug, CalendarPlus, ClipboardCheck, Coffee, CornerDownLeft, FolderKanban, FolderPlus, LayoutDashboard, ListTodo, Moon, Plus, Settings2, Sun, UserPlus, UserRound, Users, UsersRound } from 'lucide-react';
+import { Briefcase, Bug, CalendarPlus, ClipboardCheck, Coffee, CornerDownLeft, FolderKanban, FolderPlus, Inbox, LayoutDashboard, ListTodo, Moon, Plus, Settings2, Sun, UserPlus, UserRound, Users, UsersRound } from 'lucide-react';
 import type { DashboardData, WorkItem } from '@/lib/types';
 import { Avatar, Kbd, StatusIcon } from '@/components/ui';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator, CommandShortcut } from '@/components/ui/command';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
-import { attentionItems, findMember, findProject, firstName, isDone, routeFor } from './lib';
+import { attentionItems, findDepartment, findMember, findProject, firstName, isDone, requestStage, routeFor, stageLabels } from './lib';
 
-export type PaletteModal = 'project' | 'member' | 'leave' | 'teamTicket';
+export type PaletteModal = 'project' | 'member' | 'leave' | 'teamTicket' | 'otherTeamMember' | 'department';
 type PaletteProps = {
   data: DashboardData; open: boolean; onOpenChange: (open: boolean) => void;
   onOpenItem: (id: string) => void; onOpenProject: (id: string) => void; onCreate: (kind: 'task' | 'bug') => void; onModal: (type: PaletteModal) => void;
@@ -56,14 +56,18 @@ export function CommandPalette({ data, open, onOpenChange, onOpenItem, onOpenPro
   }, [data, needle]);
   const projects = needle ? data.projects.filter(p => !p.isArchived && p.name.toLowerCase().includes(needle)).slice(0, 5) : [];
   const people = needle && admin ? data.members.filter(m => m.isActive && m.role === 'developer' && `${m.name} ${m.email}`.toLowerCase().includes(needle)).slice(0, 5) : [];
+  // Requests from other teams, by key ("REQ-004" or "4" after "req"), title, or who raised them.
+  const teamRequests = needle && admin ? data.techRequests.filter(r => `${r.key} ${r.title} ${r.requesterName}`.toLowerCase().includes(needle)).slice(0, 5) : [];
 
   const pages: { id: string; label: string; icon: ReactNode; admin?: boolean }[] = [
     { id: 'dashboard', label: 'Overview', icon: <LayoutDashboard /> },
     { id: 'tickets', label: admin ? 'Tickets' : 'My tickets', icon: <ListTodo /> },
     { id: 'bugs', label: admin ? 'Bugs' : 'My bugs', icon: <Bug /> },
     { id: 'approvals', label: 'Approvals', icon: <ClipboardCheck /> },
+    { id: 'requests', label: 'Requests from other teams', icon: <Inbox />, admin: true },
     { id: 'standup', label: 'Daily standup', icon: <Coffee />, admin: true },
     { id: 'team', label: 'Team', icon: <Users />, admin: true },
+    { id: 'other-teams', label: 'Other teams', icon: <Briefcase />, admin: true },
     { id: 'projects', label: 'Projects', icon: <FolderKanban /> },
     { id: 'settings', label: 'Settings', icon: <Settings2 />, admin: true },
     { id: 'account', label: 'My account', icon: <UserRound /> },
@@ -76,6 +80,8 @@ export function CommandPalette({ data, open, onOpenChange, onOpenItem, onOpenPro
     { id: 'team-ticket', label: 'Team ticket', icon: <UsersRound />, run: () => onModal('teamTicket'), admin: true },
     { id: 'project', label: 'New project', icon: <FolderPlus />, run: () => onModal('project'), admin: true },
     { id: 'member', label: 'Add member', icon: <UserPlus />, run: () => onModal('member'), admin: true },
+    { id: 'other-team-member', label: 'Add someone from another team', icon: <Briefcase />, run: () => onModal('otherTeamMember'), admin: true },
+    { id: 'department', label: 'New team', icon: <Plus />, run: () => onModal('department'), admin: true },
     { id: 'leave', label: 'Add leave', icon: <CalendarPlus />, run: () => onModal('leave'), admin: true },
     { id: 'theme', label: dark ? 'Switch to light theme' : 'Switch to dark theme', icon: dark ? <Sun /> : <Moon />, run: () => setTheme(dark ? 'light' : 'dark') },
   ];
@@ -117,10 +123,14 @@ export function CommandPalette({ data, open, onOpenChange, onOpenItem, onOpenPro
           {projects.length > 0 && <CommandGroup heading="Projects">{projects.map(project => <CommandItem key={project.id} value={`project-${project.id}`} onSelect={() => run(() => onOpenProject(project.id))}>
             <i className="palette-project-dot" style={{ background: project.color }} aria-hidden="true" />{project.name}<span className="palette-item-meta">Open project</span>
           </CommandItem>)}</CommandGroup>}
+          {teamRequests.length > 0 && <CommandGroup heading="Requests from other teams">{teamRequests.map(request => <CommandItem key={request.id} value={`request-${request.id}`} onSelect={() => run(() => router.push(routeFor(data, `requests?q=${request.key}`)))} className="palette-item">
+            <Inbox /><span className="item-key">{request.key}</span><span className="palette-item-title">{request.title}</span>
+            <span className="palette-item-meta">{findDepartment(data, request.departmentId)?.name ?? 'Another team'} · {stageLabels[requestStage(data, request)]}</span>
+          </CommandItem>)}</CommandGroup>}
           {people.length > 0 && <CommandGroup heading="People">{people.map(member => <CommandItem key={member.id} value={`person-${member.id}`} onSelect={() => run(() => router.push(routeFor(data, `tickets?assignee=${member.id}`)))}>
             <Avatar member={member} size="small" />{member.name}<span className="palette-item-meta">Their tickets</span>
           </CommandItem>)}</CommandGroup>}
-          {(shownActions.length > 0 || shownPages.length > 0) && (tickets.length > 0 || bugs.length > 0 || projects.length > 0 || people.length > 0) && <CommandSeparator />}
+          {(shownActions.length > 0 || shownPages.length > 0) && (tickets.length > 0 || bugs.length > 0 || projects.length > 0 || teamRequests.length > 0 || people.length > 0) && <CommandSeparator />}
           {shownActions.length > 0 && <CommandGroup heading="Actions">{shownActions.map(action => <CommandItem key={action.id} value={`action-${action.id}`} onSelect={() => run(action.run)}>
             {action.icon}{action.label}{action.shortcut && <CommandShortcut><Kbd>{action.shortcut}</Kbd></CommandShortcut>}
           </CommandItem>)}</CommandGroup>}

@@ -1,4 +1,4 @@
-import type { Activity, DashboardData, DueDateRequest, Member, Phase, Project, TicketRequest, WorkItem } from './types';
+import type { Activity, DashboardData, Department, DueDateRequest, Member, Phase, Project, TechRequest, TicketRequest, WorkItem } from './types';
 import { dateKey, defaultSettings, getWeekStart, localDate, shiftDate } from './kpi';
 import { ADHOC_PROJECT } from './project-defaults';
 
@@ -174,8 +174,45 @@ export function createDemoData(now = new Date()): DashboardData {
   activities.push({ id: 'demo-extension-1-asked', entityId: lowStock.id, actorId: lowStock.assigneeId, action: 'task.due_change_requested', reason: dueDateRequests[0].reason,
     payload: { requestId: 'demo-extension-1', from: dueDateRequests[0].fromDate, hours: 3, reasonCategory: 'scope_change' }, createdAt: dueDateRequests[0].createdAt });
 
+  // Other teams raise requests. Some wait for the admin, some became tickets at different stages, and one was declined.
+  const departments: Department[] = ['Sales', 'E-commerce', 'Influencer marketing', 'Digital marketing', 'Creative', 'Graphics']
+    .map((name, position) => ({ id: `demo-team-${position + 1}`, name, position, isArchived: false }));
+  const team = (name: string) => departments.find(department => department.name === name)!.id;
+  // Each team has a lead. E-commerce also has a member, who raises requests too.
+  const requesters: Member[] = ([
+    ['priya', 'Priya Kapoor', 'Sales', true], ['rahul', 'Rahul Verma', 'E-commerce', true], ['zoya', 'Zoya Khan', 'E-commerce', false], ['tanvi', 'Tanvi Shah', 'Influencer marketing', true],
+    ['neha', 'Neha Joshi', 'Digital marketing', true], ['meera', 'Meera Iyer', 'Creative', true],
+  ] as const).map(([id, name, department, isTeamLead]) => ({ id: `demo-${id}`, name, email: `${id}@example.com`, role: 'requester', image: null, capacity: 33, isActive: true, departmentId: team(department), isTeamLead }));
+  const requester = (id: string) => requesters.find(person => person.id === `demo-${id}`)!;
+  let requestNumber = 0;
+  const techRequests: TechRequest[] = [];
+  const addRequest = (id: string, title: string, description: string, category: TechRequest['category'], priority: TechRequest['priority'], raised: string, neededBy: string | null, outcome?: { itemTitle?: string; declined?: string; note?: string }) => {
+    const person = requester(id);
+    const item = outcome?.itemTitle ? items.find(row => row.title === outcome.itemTitle) : undefined;
+    const reviewedAt = item || outcome?.declined ? past(new Date(Date.parse(raised) + 3 * 3_600_000).toISOString()) : null;
+    techRequests.push({
+      id: `demo-tech-request-${++requestNumber}`, key: `REQ-${String(requestNumber).padStart(3, '0')}`, requesterId: person.id, requesterName: person.name, departmentId: person.departmentId!,
+      title, description, category, priority, neededBy, status: item ? 'assigned' : outcome?.declined ? 'declined' : 'new',
+      reviewedById: reviewedAt ? lead.id : null, reviewedAt, reviewNote: outcome?.declined ?? outcome?.note ?? null, itemId: item?.id ?? null,
+      work: item ? { key: item.key, type: item.type, status: item.status, assigneeId: item.assigneeId, assigneeName: developers.find(d => d.id === item.assigneeId)?.name ?? 'A developer', dueDate: item.dueDate, doneAt: item.completedAt ?? item.fixedAt } : null,
+      createdAt: past(raised), updatedAt: past(reviewedAt ?? raised),
+    });
+  };
+  addRequest('rahul', 'Show customers how much they save in the cart', 'Customers ask how much a coupon saved them. Show the total saving under the cart total, on mobile and desktop.', 'feature', 'medium', dateAt(2, '11:00', -1), null,
+    { itemTitle: 'Show discount savings in the cart', note: 'Arjun takes this one.' });
+  addRequest('meera', 'Let us upload homepage banners ourselves', 'Every banner change needs a developer today. We want to upload and schedule homepage banners without waiting.', 'feature', 'medium', dateAt(3, '15:20', -1), null,
+    { declined: 'The CMS already has banner uploads with scheduling. Rohan will show your team how on Friday.' });
+  addRequest('tanvi', 'Templates for creator campaign briefs', 'We write every brief from scratch. Three templates would help: product launch, festive sale, and always-on.', 'feature', 'high', dateAt(4, '10:30', -1), day(3),
+    { itemTitle: 'Add campaign brief templates' });
+  addRequest('zoya', 'Cart feels slow when changing quantity', 'Changing the quantity in the cart takes two to three seconds on mobile. Customers tap twice and get the wrong quantity.', 'problem', 'high', dateAt(4, '12:10', -1), null,
+    { itemTitle: 'Make cart quantity updates feel instant' });
+  addRequest('tanvi', 'Campaign performance report per creator', 'Views, clicks, and orders for each creator in a campaign, so we can decide whom to work with again.', 'data', 'medium', dateAt(0, '09:30'), day(9),
+    { itemTitle: 'Add a campaign performance report' });
+  addRequest('neha', 'Add the Meta pixel to the new landing page', 'The Diwali landing page goes live on Monday. Ads need the Meta pixel and the purchase event on it before then.', 'change', 'urgent', dateAt(1, '10:45'), day(4));
+  addRequest('priya', 'Bulk order form for corporate gifting', 'Companies ask for 50 to 500 gift boxes. We need a form on the website that collects company, quantity, budget, and delivery date, and emails the sales team.', 'feature', 'high', dateAt(2, '11:15'), day(11));
+
   return {
-    currentUser: lead, members: [lead, ...developers], projects, phases, items, requests, dueDateRequests, activities,
+    currentUser: lead, members: [lead, ...developers, ...requesters], departments, techRequests, projects, phases, items, requests, dueDateRequests, activities,
     leaves: [
       { id: 'demo-leave-1', userId: developers[2].id, date: shiftDate(week, 1, timezone), type: 'half_day', note: 'Personal appointment' },
       { id: 'demo-leave-2', userId: developers[5].id, date: shiftDate(week, 4, timezone), type: 'full_day', note: 'Planned leave' },

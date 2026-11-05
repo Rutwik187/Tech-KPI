@@ -20,6 +20,7 @@ async function main() {
   const ids = new Set<string>();
   const memberIds = new Set<string>();
   const auditIds = new Set<string>();
+  const extraFixtures: { dispose: () => Promise<void> }[] = [];
   async function call(path: string, cookie = "", body?: unknown, expected = 200) {
     const response = await fetch(`${baseURL}${path}`, { method: body ? "POST" : "GET", headers: { ...(cookie ? { cookie } : {}), ...(body ? { "content-type": "application/json", origin: baseURL } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(45_000) });
     assert.equal(response.status, expected, `Unexpected status for ${path}: ${response.status}`);
@@ -298,6 +299,145 @@ async function main() {
     await mutate(adminCookie, { action: "addLeave", userIds: [member.id], date: "2099-11-06", endDate: "2099-11-10", type: "full_day" }, 400);
     await mutate(developerCookie, { action: "addLeave", userIds: [member.id], date: "2099-11-12", type: "full_day" }, 403);
     await mutate(adminCookie, { action: "deleteLeave", ids: data.leaves.filter((leave) => leave.userId === member.id).map((leave) => leave.id) });
+    // Requests from other teams. A requester sees only requests; an admin turns one into a ticket or a bug for a developer.
+    const requesterFixture = await createOfflineSessionFixture({ baseURL, role: "requester", name: `${trace}-requester` }); extraFixtures.push(requesterFixture);
+    const teammateFixture = await createOfflineSessionFixture({ baseURL, role: "requester", name: `${trace}-teammate` }); extraFixtures.push(teammateFixture);
+    const outsiderFixture = await createOfflineSessionFixture({ baseURL, role: "requester", name: `${trace}-outsider` }); extraFixtures.push(outsiderFixture);
+    const [requesterCookie, teammateCookie, outsiderCookie] = [requesterFixture.cookieHeader, teammateFixture.cookieHeader, outsiderFixture.cookieHeader];
+    data = await mutate(adminCookie, { action: "createDepartment", name: `${trace}-team` });
+    const requestTeam = data.departments.find((team) => team.name === `${trace}-team`)!; ids.add(requestTeam.id);
+    await mutate(adminCookie, { action: "createDepartment", name: `${trace}-TEAM` }, 409);
+    data = await mutate(adminCookie, { action: "createDepartment", name: `${trace}-other-team` });
+    const otherTeam = data.departments.find((team) => team.name === `${trace}-other-team`)!; ids.add(otherTeam.id);
+    data = await mutate(adminCookie, { action: "createDepartment", name: `${trace}-old-team` });
+    const oldTeam = data.departments.find((team) => team.name === `${trace}-old-team`)!; ids.add(oldTeam.id);
+    data = await mutate(adminCookie, { action: "updateDepartment", id: oldTeam.id, isArchived: true });
+    assert.equal(data.departments.find((team) => team.id === oldTeam.id)?.isArchived, true); checks++;
+    await mutate(requesterCookie, { action: "createDepartment", name: `${trace}-forbidden` }, 403);
+    await mutate(adminCookie, { action: "updateMember", id: teammateFixture.userId, patch: { departmentId: requestTeam.id } });
+    await mutate(adminCookie, { action: "updateMember", id: outsiderFixture.userId, patch: { departmentId: otherTeam.id } });
+    const requesterStart: DashboardData = await (await call("/api/data", requesterCookie)).json();
+    assert.equal(requesterStart.currentUser.role, "requester"); assert.equal(requesterStart.items.length, 0); assert.equal(requesterStart.members.length, 1);
+    assert.equal(requesterStart.projects.length, 0); assert.equal(requesterStart.activities.length, 0); assert(requesterStart.departments.some((team) => team.id === requestTeam.id)); checks += 6;
+    const teamAsk = { title: `${trace}-request`, description: "A bulk order form for corporate gifting, please.", category: "feature", priority: "high", neededBy: "2099-12-01", departmentId: requestTeam.id };
+    await mutate(adminCookie, { action: "createTechRequest", ...teamAsk }, 403);
+    await mutate(developerCookie, { action: "createTechRequest", ...teamAsk }, 403);
+    await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, departmentId: oldTeam.id }, 400);
+    await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, neededBy: "2000-01-03" }, 400);
+    await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, description: "Too short" }, 400);
+    let requesterView = await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk });
+    const raised = requesterView.techRequests.find((request) => request.title === teamAsk.title)!; ids.add(raised.id);
+    assert.equal(raised.status, "new"); assert.match(raised.key, /^REQ-\d{3,}$/); assert.equal(raised.requesterName, `${trace}-requester`);
+    assert.equal(requesterView.currentUser.departmentId, requestTeam.id); checks += 4;
+    requesterView = await mutate(requesterCookie, { action: "updateTechRequest", id: raised.id, patch: { priority: "urgent" } });
+    assert.equal(requesterView.techRequests.find((request) => request.id === raised.id)?.priority, "urgent"); checks++;
+    await mutate(teammateCookie, { action: "updateTechRequest", id: raised.id, patch: { priority: "low" } }, 404);
+    await mutate(teammateCookie, { action: "withdrawTechRequest", id: raised.id }, 404);
+    // The same team sees each other's requests. Another team does not.
+    const teammateView: DashboardData = await (await call("/api/data", teammateCookie)).json();
+    const outsiderView: DashboardData = await (await call("/api/data", outsiderCookie)).json();
+    assert(teammateView.techRequests.some((request) => request.id === raised.id)); assert(!outsiderView.techRequests.some((request) => request.id === raised.id)); checks += 2;
+    await mutate(requesterCookie, { action: "createItem", type: "task", title: `${trace}-requester-ticket`, assigneeId: member.id, estimateHours: 1 }, 403);
+    await mutate(requesterCookie, { action: "requestTicket", title: `${trace}-requester-teamAsk`, estimateHours: 1 }, 403);
+    await mutate(requesterCookie, { action: "updateItem", id: task.id, patch: { title: "Forbidden" } }, 403);
+    await mutate(requesterCookie, { action: "assignTechRequest", id: raised.id, type: "task", assigneeId: member.id, title: "Forbidden", estimateHours: 1 }, 403);
+    await mutate(requesterCookie, { action: "saveSettings", settings: data.settings }, 403);
+    await call(`/api/attachments?itemId=${task.id}`, requesterCookie, undefined, 404);
+    await call("/api/workload", requesterCookie, undefined, 403);
+    let adminView: DashboardData = await (await call("/api/data", adminCookie)).json();
+    assert(adminView.techRequests.some((request) => request.id === raised.id && request.status === "new")); checks++;
+    assert(!((await (await call("/api/data", developerCookie)).json()) as DashboardData).techRequests.some((request) => request.id === raised.id)); checks++;
+    await mutate(adminCookie, { action: "assignTechRequest", id: raised.id, type: "task", assigneeId: requesterFixture.userId, title: `${trace}-from-request`, estimateHours: 4 }, 400);
+    await mutate(adminCookie, { action: "assignTechRequest", id: raised.id, type: "task", assigneeId: member.id, title: `${trace}-from-request` }, 400);
+    await mutate(adminCookie, { action: "assignTechRequest", id: raised.id, type: "bug", assigneeId: member.id, title: `${trace}-from-request`, estimateHours: 2 }, 400);
+    adminView = await mutate(adminCookie, { action: "assignTechRequest", id: raised.id, type: "task", assigneeId: member.id, title: `${trace}-from-request`, projectId: project.id, phaseId: buildPhase.id, estimateHours: 4, dueDate: "2099-11-20", note: "Planned for next week" });
+    const assignedRequest = adminView.techRequests.find((request) => request.id === raised.id)!;
+    const fromRequest = adminView.items.find((item) => item.id === assignedRequest.itemId)!;
+    assert.equal(assignedRequest.status, "assigned"); assert.equal(fromRequest.assigneeId, member.id); assert.equal(fromRequest.estimateHours, 4);
+    assert.equal(fromRequest.description, teamAsk.description); assert.equal(fromRequest.priority, "urgent"); assert.equal(fromRequest.phaseId, buildPhase.id); checks += 6;
+    assert(adminView.activities.some((event) => event.entityId === fromRequest.id && event.payload.techRequestId === raised.id)); checks++;
+    await mutate(adminCookie, { action: "assignTechRequest", id: raised.id, type: "task", assigneeId: member.id, title: `${trace}-twice`, estimateHours: 1 }, 409);
+    await mutate(adminCookie, { action: "declineTechRequest", id: raised.id, reason: "Too late to decline" }, 409);
+    await mutate(requesterCookie, { action: "withdrawTechRequest", id: raised.id }, 409);
+    await mutate(requesterCookie, { action: "updateTechRequest", id: raised.id, patch: { priority: "low" } }, 409);
+    // The requester follows the work without seeing tickets. The developer sees who asked.
+    requesterView = await (await call("/api/data", requesterCookie)).json();
+    const followed = requesterView.techRequests.find((request) => request.id === raised.id)!;
+    assert.equal(followed.work?.key, fromRequest.key); assert.equal(followed.work?.status, "todo"); assert.equal(followed.work?.assigneeName, member.name);
+    assert.equal(followed.reviewNote, "Planned for next week"); assert.equal(requesterView.items.length, 0); checks += 5;
+    const developerFollowing = await mutate(developerCookie, { action: "updateItem", id: fromRequest.id, patch: { status: "in_review" } });
+    assert.equal(developerFollowing.techRequests.find((request) => request.itemId === fromRequest.id)?.requesterName, `${trace}-requester`); checks++;
+    requesterView = await (await call("/api/data", requesterCookie)).json();
+    assert.equal(requesterView.techRequests.find((request) => request.id === raised.id)?.work?.status, "in_review"); checks++;
+    // Requesters own no work and join no projects.
+    await mutate(adminCookie, { action: "updateMember", id: member.id, patch: { role: "requester", departmentId: requestTeam.id } }, 400);
+    await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { memberIds: [fixture.userId, member.id, requesterFixture.userId] } }, 400);
+    await mutate(adminCookie, { action: "addLeave", userIds: [requesterFixture.userId], date: "2099-11-12", type: "full_day" }, 400);
+    await mutate(adminCookie, { action: "createMember", name: `${trace}-no-team`, email: `${trace}-no-team@example.invalid`, role: "requester" }, 400);
+    adminView = await mutate(adminCookie, { action: "createMember", name: `${trace}-added`, email: `${trace}-added@example.invalid`, role: "requester", departmentId: requestTeam.id });
+    const addedRequester = adminView.members.find((row) => row.email === `${trace}-added@example.invalid`)!; memberIds.add(addedRequester.id);
+    assert.equal(addedRequester.role, "requester"); assert.equal(addedRequester.departmentId, requestTeam.id); checks += 2;
+    // A team has several members who raise requests. The admin marks who leads it, which changes nothing they can do.
+    adminView = await mutate(adminCookie, { action: "createMember", name: `${trace}-lead`, email: `${trace}-lead@example.invalid`, role: "requester", departmentId: requestTeam.id, isTeamLead: true });
+    const addedLead = adminView.members.find((row) => row.email === `${trace}-lead@example.invalid`)!; memberIds.add(addedLead.id);
+    assert.equal(addedLead.isTeamLead, true); assert.equal(addedRequester.isTeamLead, false); assert.equal(requesterStart.currentUser.isTeamLead, false); checks += 3;
+    await mutate(adminCookie, { action: "createMember", name: `${trace}-developer-lead`, email: `${trace}-developer-lead@example.invalid`, role: "developer", isTeamLead: true }, 400);
+    await mutate(adminCookie, { action: "updateMember", id: member.id, patch: { isTeamLead: true } }, 400);
+    await mutate(requesterCookie, { action: "updateMember", id: requesterFixture.userId, patch: { isTeamLead: true } }, 403);
+    adminView = await mutate(adminCookie, { action: "updateMember", id: requesterFixture.userId, patch: { isTeamLead: true } });
+    assert.deepEqual(adminView.members.filter((row) => row.departmentId === requestTeam.id && row.isTeamLead).map((row) => row.id).sort(), [addedLead.id, requesterFixture.userId].sort()); checks++;
+    const leadView: DashboardData = await (await call("/api/data", requesterCookie)).json();
+    assert.equal(leadView.currentUser.isTeamLead, true); assert.equal(leadView.members.length, 1); assert.equal(leadView.items.length, 0); checks += 3;
+    adminView = await mutate(adminCookie, { action: "updateMember", id: requesterFixture.userId, patch: { isTeamLead: false } });
+    assert.equal(adminView.members.find((row) => row.id === requesterFixture.userId)?.isTeamLead, false); checks++;
+    // Someone who moves to the tech team leaves their other team, and no longer leads it.
+    adminView = await mutate(adminCookie, { action: "updateMember", id: addedLead.id, patch: { role: "developer" } });
+    assert.deepEqual(adminView.members.filter((row) => row.id === addedLead.id).map(({ role, departmentId, isTeamLead }) => ({ role, departmentId, isTeamLead })), [{ role: "developer", departmentId: null, isTeamLead: false }]); checks++;
+    // Decline with a reason, and withdraw while it waits.
+    requesterView = await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, title: `${trace}-decline-me`, neededBy: null });
+    const toDecline = requesterView.techRequests.find((request) => request.title === `${trace}-decline-me`)!; ids.add(toDecline.id);
+    await mutate(adminCookie, { action: "declineTechRequest", id: toDecline.id, reason: "" }, 400);
+    adminView = await mutate(adminCookie, { action: "declineTechRequest", id: toDecline.id, reason: "The CMS already does this." });
+    assert.equal(adminView.techRequests.find((request) => request.id === toDecline.id)?.status, "declined"); checks++;
+    requesterView = await (await call("/api/data", requesterCookie)).json();
+    assert.equal(requesterView.techRequests.find((request) => request.id === toDecline.id)?.reviewNote, "The CMS already does this."); checks++;
+    requesterView = await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, title: `${trace}-withdraw-me` });
+    const toWithdraw = requesterView.techRequests.find((request) => request.title === `${trace}-withdraw-me`)!; ids.add(toWithdraw.id);
+    requesterView = await mutate(requesterCookie, { action: "withdrawTechRequest", id: toWithdraw.id });
+    assert(!requesterView.techRequests.some((request) => request.id === toWithdraw.id)); checks++;
+    // Something broken becomes a bug with a fix-by time instead of an estimate.
+    requesterView = await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, title: `${trace}-broken`, category: "problem" });
+    const broken = requesterView.techRequests.find((request) => request.title === `${trace}-broken`)!; ids.add(broken.id);
+    adminView = await mutate(adminCookie, { action: "assignTechRequest", id: broken.id, type: "bug", assigneeId: member.id, title: `${trace}-broken-bug`, projectId: project.id, severity: "critical" });
+    const bugFromRequest = adminView.items.find((item) => item.id === adminView.techRequests.find((request) => request.id === broken.id)?.itemId)!;
+    assert.equal(bugFromRequest.type, "bug"); assert.equal(bugFromRequest.status, "open"); assert.equal(bugFromRequest.severity, "critical"); assert.equal(bugFromRequest.estimateHours, 0); assert.equal(bugFromRequest.dueDate, null); checks += 5;
+    // The database keeps the rules even outside the app.
+    requesterView = await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, title: `${trace}-database-rules` });
+    const ruled = requesterView.techRequests.find((request) => request.title === `${trace}-database-rules`)!; ids.add(ruled.id);
+    await assert.rejects(db.update(schema.techRequests).set({ status: "declined", reviewNote: " ", reviewedAt: new Date() }).where(eq(schema.techRequests.id, ruled.id)));
+    await assert.rejects(db.update(schema.techRequests).set({ status: "assigned" }).where(eq(schema.techRequests.id, ruled.id)));
+    await assert.rejects(db.update(schema.techRequests).set({ category: "wish" as never }).where(eq(schema.techRequests.id, ruled.id))); checks += 3;
+    // Company sign-in: only the tenant's members with an allowed work email domain, and only once per person.
+    const { provisionRequester } = await import("./microsoft-accounts");
+    const companyDomain = `${trace}.example.invalid`;
+    const selfServeTenant = randomUUID();
+    const claims = { oid: randomUUID(), tid: selfServeTenant, preferred_username: `${trace}-self@${companyDomain}`, name: `${trace} Self Serve` };
+    assert.equal(await provisionRequester(claims, selfServeTenant), null); checks++;
+    const settingsBefore = adminView.settings;
+    await mutate(adminCookie, { action: "saveSettings", settings: { ...settingsBefore, requestDomains: [...settingsBefore.requestDomains, `@${companyDomain}`] } }, 400);
+    await mutate(adminCookie, { action: "saveSettings", settings: { ...settingsBefore, requestDomains: [...settingsBefore.requestDomains, companyDomain] } });
+    try {
+      assert.equal(await provisionRequester({ ...claims, tid: randomUUID() }, selfServeTenant), null);
+      assert.equal(await provisionRequester({ ...claims, acct: 1 }, selfServeTenant), null);
+      assert.deepEqual(await provisionRequester(claims, selfServeTenant), { email: claims.preferred_username, name: claims.name });
+      const [selfServe] = await db.select().from(schema.user).where(eq(schema.user.email, claims.preferred_username));
+      ids.add(selfServe.id); memberIds.add(selfServe.id);
+      const [selfServeLink] = await db.select().from(schema.account).where(and(eq(schema.account.userId, selfServe.id), eq(schema.account.providerId, "microsoft")));
+      assert.equal(selfServe.role, "requester"); assert.equal(selfServeLink.accountId, claims.oid);
+      assert.equal(await provisionRequester({ ...claims, oid: randomUUID() }, selfServeTenant), null); checks += 6;
+    } finally {
+      await mutate(adminCookie, { action: "saveSettings", settings: settingsBefore });
+    }
     await mutate(adminCookie, { action: "saveSettings", settings: { ...data.settings, deliveryWeight: 75 } }, 400);
     const beforeSettingAudits = new Set(data.activities.map((activity) => activity.id));
     const savedSettings = await mutate(adminCookie, { action: "saveSettings", settings: data.settings });
@@ -315,7 +455,7 @@ async function main() {
       const cron = await fetch(`${baseURL}/api/cron/weekly-snapshot`, { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } });
       assert.equal(cron.status, 200); checks++;
     }
-    console.log(`PASS: ${checks} backend checks (projects, primary developers, project timelines and extensions, more hours on tickets with approval, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable, sign-in by invited work email, ticket requests and approvals). Local session fixtures used; real Microsoft OAuth is not exercised.`);
+    console.log(`PASS: ${checks} backend checks (projects, primary developers, project timelines and extensions, more hours on tickets with approval, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable, sign-in by invited work email, ticket requests and approvals, requests from other teams, teams, and company sign-in). Local session fixtures used; real Microsoft OAuth is not exercised.`);
   } finally {
     await db.transaction(async (tx) => {
       const testItems = await tx.select({ id: schema.workItems.id }).from(schema.workItems).where(like(schema.workItems.title, `${trace}%`));
@@ -326,12 +466,17 @@ async function main() {
       if (auditIds.size) await tx.delete(schema.activities).where(inArray(schema.activities.id, [...auditIds]));
       if (memberIds.size) await tx.delete(schema.activities).where(inArray(schema.activities.actorId, [...memberIds]));
       await tx.delete(schema.ticketRequests).where(like(schema.ticketRequests.title, `${trace}%`));
+      await tx.delete(schema.techRequests).where(like(schema.techRequests.title, `${trace}%`));
+      await tx.delete(schema.departments).where(like(schema.departments.name, `${trace}%`));
       await tx.delete(schema.workItems).where(like(schema.workItems.title, `${trace}%`));
       const testProjects = await tx.select({ id: schema.projects.id }).from(schema.projects).where(eq(schema.projects.name, trace));
       if (testProjects.length) await tx.delete(schema.projectPhases).where(inArray(schema.projectPhases.projectId, testProjects.map(project => project.id)));
+      // The weekly lock can score a temporary developer when that week was not locked yet.
+      if (memberIds.size) await tx.delete(schema.snapshots).where(inArray(schema.snapshots.userId, [...memberIds]));
       if (memberIds.size) await tx.delete(schema.user).where(inArray(schema.user.id, [...memberIds]));
       await tx.delete(schema.projects).where(eq(schema.projects.name, trace));
     });
+    for (const extra of extraFixtures) await extra.dispose();
     await fixture.dispose();
     await pool.end();
     console.log("Temporary verification records removed.");

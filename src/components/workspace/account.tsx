@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { LoaderCircle, LogOut, ShieldCheck } from 'lucide-react';
 import type { DashboardData } from '@/lib/types';
+import { findDepartment, roleLabel } from './lib';
 import { authClient } from '@/lib/auth-client';
 import { Avatar, Panel } from '@/components/ui';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -15,7 +16,8 @@ export function Account({ data }: { data: DashboardData }) {
   const [busy, setBusy] = useState(false);
   const router = useRouter();
   const user = data.currentUser;
-  const role = user.role === 'admin' ? 'Admin' : 'Developer';
+  const requester = user.role === 'requester';
+  const role = requester ? user.isTeamLead ? 'Team lead' : 'Team member' : roleLabel(data, user);
   async function signOut() {
     setBusy(true);
     try {
@@ -36,7 +38,8 @@ export function Account({ data }: { data: DashboardData }) {
       <h2>{user.name}</h2>
       <p>{user.email}</p>
       <Badge variant="outline" className="role-tag">{role}</Badge>
-      <div className="profile-fact"><span>Hours per week</span><strong>{user.capacity} hours</strong></div>
+      {requester ? <div className="profile-fact"><span>Team</span><strong>{findDepartment(data, user.departmentId)?.name ?? 'Chosen with your first request'}</strong></div>
+        : <div className="profile-fact"><span>Hours per week</span><strong>{user.capacity} hours</strong></div>}
       <div className="profile-fact"><span>Workspace</span><strong>Urban Gabru</strong></div>
       <Button variant="outline" disabled={busy} onClick={signOut}>{busy ? <LoaderCircle data-icon="inline-start" size={15} className="spin" /> : <LogOut data-icon="inline-start" size={15} />}Sign out</Button>
     </Panel>

@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { bands, displayDate, displayDateTime, findMember, findProject, firstName, hours, isDone, itemLink, pendingExtension, percent, phaseName, today, type OnAction } from './lib';
+import { bands, displayDate, displayDateTime, findDepartment, findMember, findProject, firstName, hours, isDone, itemLink, pendingExtension, percent, phaseName, requestForItem, today, type OnAction } from './lib';
 import { TicketExtendedBadge } from './timeline';
 
 export function ProjectTag({ data, id }: { data: DashboardData; id: string }) {
@@ -109,9 +109,12 @@ export function isCarriedOver(item: WorkItem, data: DashboardData) {
   return item.type === 'task' && !!item.dueDate && item.dueDate < today(data.settings.timezone) && !isDone(item);
 }
 
-/** Small signals next to a title: extensions, more time asked, and, where no column shows it, a critical bug. */
+/** Small signals next to a title: the team that asked for it, extensions, more time asked, and, where no column shows it, a critical bug. */
 export function ItemFlags({ item, data, severity = false }: { item: WorkItem; data: DashboardData; severity?: boolean }) {
+  const request = requestForItem(data, item.id);
+  const team = request ? findDepartment(data, request.departmentId)?.name ?? 'Another team' : null;
   return <span className="item-flags">
+    {request && <span className="flag flag-request" title={`Requested by ${request.requesterName} (${team}) · ${request.key}`}>{team}</span>}
     {item.type === 'task' && <TicketExtendedBadge data={data} item={item} />}
     {item.type === 'task' && <PendingExtensionBadge data={data} item={item} />}
     {severity && item.type === 'bug' && item.severity === 'critical' && !isDone(item) && item.status !== 'fixed' && <span className="flag flag-critical"><AlertTriangle aria-hidden="true" />Critical</span>}

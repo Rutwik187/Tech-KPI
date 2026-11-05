@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { account, activities, memberProfiles, user } from "@/db/schema";
+import { account, activities, memberProfiles, settings, user } from "@/db/schema";
+import { withDefaults } from "./default-settings";
 import { AppError } from "./errors";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -39,5 +40,43 @@ export async function claimMicrosoftInvitation(claims: { oid?: unknown; tid?: un
     await linkMicrosoftAccount(tx, invited.id, objectId.data);
     await tx.insert(activities).values({ entityId: invited.id, actorId: invited.id, action: "member.microsoft_linked", payload: { microsoftObjectId: objectId.data.toLowerCase(), via: "work_email" } });
     return { email: invited.email, name: invited.name };
+  });
+}
+
+/** The domain of a work email, or null when it is not a usable email. */
+export function emailDomain(email: string): string | null {
+  const at = email.lastIndexOf("@");
+  return at > 0 && at < email.length - 1 ? email.slice(at + 1).toLowerCase() : null;
+}
+/** "priya.kapoor@urbangabru.in" reads as "Priya Kapoor" when Microsoft sends no display name. */
+export function nameFromEmail(email: string): string {
+  const words = email.slice(0, email.indexOf("@")).split(/[._-]+/).filter(Boolean);
+  return words.map((word) => word[0].toUpperCase() + word.slice(1).toLowerCase()).join(" ") || email;
+}
+
+/**
+ * The first sign-in of someone from another team, such as Sales. When their work email is on a domain in Settings,
+ * they get a requester account: they raise requests for tech work and see only requests. An admin can change the role later.
+ * Guests and people the team already knows by this email, active or not, never get a new account this way.
+ */
+export async function provisionRequester(claims: { oid?: unknown; tid?: unknown; preferred_username?: unknown; name?: unknown; acct?: unknown }, tenantId: string): Promise<{ email: string; name: string } | null> {
+  const objectId = z.uuid().safeParse(claims.oid);
+  const signInName = z.email().safeParse(typeof claims.preferred_username === "string" ? claims.preferred_username.trim().toLowerCase() : "");
+  if (!objectId.success || !signInName.success || typeof claims.tid !== "string" || claims.tid.toLowerCase() !== tenantId.toLowerCase() || claims.acct === 1) return null;
+  const email = signInName.data;
+  const [saved] = await db.select().from(settings).where(eq(settings.id, 1));
+  const domain = emailDomain(email);
+  if (!domain || !withDefaults(saved?.value).requestDomains.includes(domain)) return null;
+  const displayName = typeof claims.name === "string" && claims.name.trim() ? claims.name.trim().slice(0, 200) : nameFromEmail(email);
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(7201203)`);
+    const [known] = await tx.select({ id: user.id }).from(user).where(eq(user.email, email));
+    if (known) return null;
+    const id = randomUUID();
+    await tx.insert(user).values({ id, name: displayName, email, emailVerified: false, role: "requester" });
+    await tx.insert(memberProfiles).values({ userId: id });
+    await linkMicrosoftAccount(tx, id, objectId.data);
+    await tx.insert(activities).values({ entityId: id, actorId: id, action: "member.self_registered", payload: { role: "requester", microsoftObjectId: objectId.data.toLowerCase(), via: "company_domain" } });
+    return { email, name: displayName };
   });
 }

@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { displayDate, displayRange, findMember, groupLeaves, hours, isDone, percent, today, type LeaveGroup, type MutationFn } from './lib';
+import { displayDate, displayRange, findMember, groupLeaves, hours, isDone, percent, techMembers, today, type LeaveGroup, type MutationFn } from './lib';
 import { ScoreBadge } from './parts';
 import { TeamEfficiencyChart, TrendChart } from './charts';
 
@@ -24,7 +24,8 @@ export function Team({ data, week, onEdit, onLeave, mutate, onOpen }: TeamProps)
   const day = today(data.settings.timezone);
   const weekEnd = shiftDate(week, 6, data.settings.timezone);
   const current = week === getWeekStart(new Date(), data.settings.timezone);
-  const shown = data.members.filter(m => `${m.name} ${m.email}`.toLowerCase().includes(search.trim().toLowerCase()))
+  // People from other teams only raise requests. They are on Other teams, without hours or scores.
+  const shown = techMembers(data).filter(m => `${m.name} ${m.email}`.toLowerCase().includes(search.trim().toLowerCase()))
     .sort((a, b) => Number(b.isActive) - Number(a.isActive) || Number(b.role === 'admin') - Number(a.role === 'admin') || a.name.localeCompare(b.name));
   const developers = data.members.filter(m => m.isActive && m.role === 'developer');
   // Only admins receive Microsoft IDs, and the demo has none, so only a live admin can tell who has not signed in.
@@ -155,3 +156,4 @@ function MemberDrawer({ data, member, week, current, onClose, onEdit, onLeave, o
     </div>
   </Modal>;
 }
+

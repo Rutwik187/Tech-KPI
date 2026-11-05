@@ -8,7 +8,7 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a valid calendar date.
 const uuid = z.uuid();
 const priority = z.enum(["low", "medium", "high", "urgent"]);
 const severity = z.enum(["normal", "critical"]);
-const role = z.enum(["admin", "developer"]);
+const role = z.enum(["admin", "developer", "requester"]);
 const capacity = z.number().min(0.01).max(168).multipleOf(0.01);
 const color = z.string().regex(/^#[a-fA-F0-9]{6}$/, "Use a six digit color code.");
 const description = z.string().trim().max(20_000);
@@ -23,6 +23,15 @@ const phases = z.array(z.object({ name: phaseName, description: phaseDescription
 const extensionReason = z.enum(["scope_change", "blocked_dependency", "underestimated", "other"]);
 const extraHours = z.number().min(0.5, "Ask for at least half an hour.").max(80).multipleOf(0.5, "Use steps of half an hour.");
 const reason = z.string().trim().max(2000);
+const domain = z.string().trim().toLowerCase().max(253)
+  .regex(/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/, "Enter a domain such as urbangabru.in, without the @.");
+const departmentName = z.string().trim().min(1, "Enter a team name.").max(60);
+const requestCategory = z.enum(["feature", "change", "problem", "data", "access", "other"]);
+/** What a requester fills in. Details are required, so the tech team can act without a meeting. */
+const techRequestFields = {
+  title: shortText, description: z.string().trim().min(10, "Describe what you need in a sentence or two.").max(20_000),
+  category: requestCategory, priority, neededBy: date.nullable(), departmentId: uuid,
+};
 const timelineOrder = (value: { startDate?: string | null; targetDate?: string | null }) => !value.startDate || !value.targetDate || value.targetDate >= value.startDate;
 const timelineOrderMessage = "The target date must be on or after the start date.";
 const itemFields = {
@@ -35,6 +44,7 @@ const requestFields = {
   estimateHours: z.number().gt(0, "Estimate the hours this work needs.").max(80).multipleOf(0.01), dueDate: date.nullable().optional(),
 };
 export const settingsSchema = z.object({
+  requestDomains: z.array(domain).max(20).refine((list) => new Set(list).size === list.length, "Enter each domain once."),
   timezone: z.literal("Asia/Kolkata"), trackingStartDate: date,
   workingDays: z.array(z.number().int().min(1).max(7)).min(1).max(7).refine((days) => new Set(days).size === days.length, "Working days must be unique."),
   workdayStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), workdayEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
@@ -58,8 +68,10 @@ export const actionSchema = z.discriminatedUnion("action", [
     status: z.enum(["todo", "in_progress", "blocked", "in_review", "done", "open", "fixed", "verified"]).optional(),
     blocker: z.string().trim().max(2000).nullable().optional(),
   }).partial().strict(), reason: reason.optional(), reasonCategory: extensionReason.optional() }).strict(),
-  z.object({ action: z.literal("createMember"), name: shortText, email: z.email(), microsoftObjectId: uuid.optional(), role: role.optional(), capacity: capacity.optional() }).strict(),
-  z.object({ action: z.literal("updateMember"), id: z.string().min(1), patch: z.object({ name: shortText.optional(), email: z.email().optional(), capacity: capacity.optional(), isActive: z.boolean().optional(), role: role.optional(), microsoftObjectId: uuid.optional() }).strict() }).strict(),
+  z.object({ action: z.literal("createMember"), name: shortText, email: z.email(), microsoftObjectId: uuid.optional(), role: role.optional(), capacity: capacity.optional(), departmentId: uuid.nullable().optional(), isTeamLead: z.boolean().optional() }).strict()
+    .refine((member) => member.role !== "requester" || !!member.departmentId, "Choose a team for this person.")
+    .refine((member) => !member.isTeamLead || member.role === "requester", "Only someone in a team outside tech can lead it."),
+  z.object({ action: z.literal("updateMember"), id: z.string().min(1), patch: z.object({ name: shortText.optional(), email: z.email().optional(), capacity: capacity.optional(), isActive: z.boolean().optional(), role: role.optional(), microsoftObjectId: uuid.optional(), departmentId: uuid.nullable().optional(), isTeamLead: z.boolean().optional() }).strict() }).strict(),
   z.object({ action: z.literal("createProject"), name: shortText, color: color.optional(), description: description.optional(), memberIds: memberIds.default([]), primaryMemberId: z.string().min(1).max(200).nullable().optional(), phases: phases.default([]), startDate: date.nullable().optional(), targetDate: date.nullable().optional() }).strict()
     .refine(timelineOrder, timelineOrderMessage),
   z.object({ action: z.literal("updateProject"), id: uuid, patch: z.object({ name: shortText.optional(), color: color.optional(), description: description.optional(), isArchived: z.boolean().optional(), memberIds: memberIds.optional(), primaryMemberId: z.string().min(1).max(200).nullable().optional(), startDate: date.nullable().optional(), targetDate: date.optional() }).strict().refine(timelineOrder, timelineOrderMessage), reason: reason.optional(), reasonCategory: extensionReason.optional() }).strict(),
@@ -82,5 +94,18 @@ export const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("approveDueDateRequest"), id: uuid, hours: extraHours.optional(), note: reason.optional() }).strict(),
   z.object({ action: z.literal("declineDueDateRequest"), id: uuid, reason: z.string().trim().min(3, "Say why you are declining, so the developer can adjust.").max(2000) }).strict(),
   z.object({ action: z.literal("withdrawDueDateRequest"), id: uuid }).strict(),
+  // Another team asks for tech work. Only requesters raise, change, and withdraw these; only admins assign or decline them.
+  z.object({ action: z.literal("createTechRequest"), ...techRequestFields }).strict(),
+  z.object({ action: z.literal("updateTechRequest"), id: uuid, patch: z.object(techRequestFields).partial().strict() }).strict(),
+  z.object({ action: z.literal("withdrawTechRequest"), id: uuid }).strict(),
+  // Assigning makes a ticket, which needs an estimate, or a bug, which runs on its fix-by time instead.
+  z.object({ action: z.literal("assignTechRequest"), id: uuid, type: z.enum(["task", "bug"]), assigneeId: z.string().min(1), title: shortText,
+    projectId: uuid.optional(), phaseId: uuid.nullable().optional(), priority: priority.optional(), severity: severity.optional(),
+    estimateHours: z.number().gt(0, "Estimate the hours this work needs.").max(80).multipleOf(0.01).optional(), dueDate: date.nullable().optional(), note: reason.optional() }).strict()
+    .refine((assign) => assign.type === "bug" || assign.estimateHours !== undefined, "Estimate the hours this work needs.")
+    .refine((assign) => assign.type === "task" || (assign.estimateHours === undefined && !assign.dueDate), "A bug has a fix-by time instead of an estimate or a date."),
+  z.object({ action: z.literal("declineTechRequest"), id: uuid, reason: z.string().trim().min(3, "Say why you are declining, so the team knows what to do next.").max(2000) }).strict(),
+  z.object({ action: z.literal("createDepartment"), name: departmentName }).strict(),
+  z.object({ action: z.literal("updateDepartment"), id: uuid, name: departmentName.optional(), isArchived: z.boolean().optional() }).strict(),
 ]);
 export type DataAction = z.infer<typeof actionSchema>;
