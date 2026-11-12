@@ -189,14 +189,13 @@ export function MemberForm({ data, editing, role: initialRole, departmentId: ini
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const f = new FormData(event.currentTarget);
-    const microsoftObjectId = String(f.get('microsoftObjectId') ?? '').trim();
     const email = String(f.get('email') ?? '').trim().toLowerCase();
     const team = requester && departmentId !== (editing?.departmentId ?? '') ? { departmentId } : {};
     const isTeamLead = requester && f.get('isTeamLead') === 'on';
     const lead = requester && isTeamLead !== !!editing?.isTeamLead ? { isTeamLead } : {};
     const ok = editing
-      ? await mutate({ action: 'updateMember', id: editing.id, patch: { name: String(f.get('name')), role, capacity, isActive: own ? true : f.get('isActive') === 'on', ...team, ...lead, ...(pending && email && email !== editing.email ? { email } : {}), ...(!editing.microsoftObjectId && microsoftObjectId ? { microsoftObjectId } : {}) } }, requester ? 'Member updated' : 'Team member updated')
-      : await mutate({ action: 'createMember', name: String(f.get('name')).trim(), email, ...(microsoftObjectId ? { microsoftObjectId } : {}), role, capacity, ...(requester ? { departmentId, isTeamLead } : {}) }, requester ? `Added to ${teamName ?? 'the team'}. They sign in with Microsoft using this work email, then raise requests.` : 'Team member added. They can sign in with Microsoft using this work email.');
+      ? await mutate({ action: 'updateMember', id: editing.id, patch: { name: String(f.get('name')), role, capacity, isActive: own ? true : f.get('isActive') === 'on', ...team, ...lead, ...(pending && email && email !== editing.email ? { email } : {}) } }, requester ? 'Member updated' : 'Team member updated')
+      : await mutate({ action: 'createMember', name: String(f.get('name')).trim(), email, role, capacity, ...(requester ? { departmentId, isTeamLead } : {}) }, requester ? `Added to ${teamName ?? 'the team'}. They sign in with Microsoft using this work email, then raise requests.` : 'Team member added. They can sign in with Microsoft using this work email.');
     if (ok) onClose();
   }
   const title = editing ? requester ? 'Edit member' : 'Edit team member' : requester ? initialTeam && teamName ? `Add someone to ${teamName}` : 'Add someone from another team' : 'Add a team member';
@@ -206,8 +205,6 @@ export function MemberForm({ data, editing, role: initialRole, departmentId: ini
         <FormField>Full name<Input name="name" required defaultValue={editing?.name} placeholder="e.g. Aarav Sharma" /></FormField>
         <FormField>Work email<Input name="email" type="email" required disabled={!!editing && !pending} defaultValue={editing?.email} placeholder="firstname.lastname@urbangabru.in" />
           <span className="field-help">{pending ? 'Not signed in yet. You can correct the email until they do.' : editing ? 'Their Microsoft work account is linked.' : 'They sign in with the Microsoft account for this email.'}</span></FormField>
-        <FormField>Microsoft user ID <span className="optional">{editing?.microsoftObjectId ? 'Object ID' : 'Optional'}</span><Input className="microsoft-id-input" name="microsoftObjectId" defaultValue={editing?.microsoftObjectId} readOnly={!!editing?.microsoftObjectId} pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" placeholder="00000000-0000-0000-0000-000000000000" title="Use the Object ID from this person’s Microsoft Entra profile." autoComplete="off" spellCheck={false} />
-          <span className="field-help">{editing?.microsoftObjectId ? 'Linked to their Microsoft company account.' : 'Only needed if their Microsoft sign-in name differs from their work email. Find it in Microsoft Entra ID → Users → the person → Overview.'}</span></FormField>
         <FieldGroup className="form-grid">
           {!roleDecided && <FormField>Role<FormChoice value={role} disabled={own} onValueChange={next => { const value = next as Member['role']; setRole(value); if (!editing) setCapacity(value === 'admin' ? data.settings.defaultLeadCapacityHours : data.settings.defaultDevCapacityHours); }} options={[{ value: 'developer', label: 'Developer' }, { value: 'admin', label: 'Admin' }, { value: 'requester', label: 'Other team' }]} /></FormField>}
           {role === 'developer' && <FormField>Hours per week<Input type="number" min={.5} max={168} step={.5} required value={capacity} onChange={event => setCapacity(Number(event.target.value))} /><span className="field-help">Leave and holidays lower this for that week.</span></FormField>}

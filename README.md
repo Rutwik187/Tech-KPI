@@ -79,7 +79,7 @@ The ticket or bug made from a request shows who asked and for which team. Its ho
 
 A member's workspace has two pages: **My requests** and **My account**. They never see tickets, bugs, projects, people, or scores. On every request, the server allows a member to raise, change, and withdraw their own new requests, and nothing else. A team lead cannot change a teammate's request either.
 
-Each member needs a Microsoft account in your organisation, as a member or an invited guest. For a guest, or when their sign-in name differs from their work email, add their Microsoft user ID (Object ID) when you add them. Also check this app's enterprise application in Microsoft Entra ID. When **Assignment required** is on, Microsoft lets in only assigned people. Assign the members, or their groups, to the app, or turn it off.
+Each member needs a Microsoft account in your organisation, as a member or an invited guest. Add members using their work email. Their Microsoft account is linked when they first sign in with that email. Also check this app's enterprise application in Microsoft Entra ID. When **Assignment required** is on, Microsoft lets in only assigned people. Assign the members, or their groups, to the app, or turn it off.
 
 The database calls a team outside tech a `department` (table `tech_kpi_department`), a person in one a `requester` (user role `requester`), and a request a `tech request` (table `tech_kpi_tech_request`). The **Team lead** mark is `is_team_lead` on `tech_kpi_member_profile`. People read "team", "member", "team lead", and "request". Two older messages used "team lead" for the admin. They now say "admin".
 

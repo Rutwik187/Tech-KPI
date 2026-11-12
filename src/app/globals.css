@@ -743,7 +743,6 @@
 .member-leave-row>div { display:flex; flex-direction:column; gap:2px; font-size:13px; }
 .member-leave-row strong { font-weight:550; }
 .member-leave-row span { font-size:12px; color:var(--muted-foreground); }
-.microsoft-id-input { font-family:ui-monospace,monospace; }
 .locked-date { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:36px; padding:0 4px 0 12px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--muted); font-size:13px; }
 .locked-date strong { font-weight:550; }
 
