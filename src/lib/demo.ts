@@ -213,6 +213,7 @@ export function createDemoData(now = new Date()): DashboardData {
 
   return {
     currentUser: lead, members: [lead, ...developers, ...requesters], departments, techRequests, projects, phases, items, requests, dueDateRequests, activities,
+    leaveRequests: [],
     leaves: [
       { id: 'demo-leave-1', userId: developers[2].id, date: shiftDate(week, 1, timezone), type: 'half_day', note: 'Personal appointment' },
       { id: 'demo-leave-2', userId: developers[5].id, date: shiftDate(week, 4, timezone), type: 'full_day', note: 'Planned leave' },

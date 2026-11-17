@@ -14,6 +14,7 @@ import { displayDate, displayDateTime, findMember, findProject, firstName, hours
 import { daysBetween, reasonLabel } from '@/lib/timeline';
 import { dayCount } from './timeline';
 import { EstimateField, FormChoice, FormFooter } from './forms';
+import { LeaveRequests } from './leave-requests';
 import { ItemActions, PhaseTag, ProjectTag } from './parts';
 
 type ApprovalsProps = { data: DashboardData; onOpen: (id: string) => void; onAction: OnAction; onRequest: () => void; mutate: MutationFn; busy: boolean };
@@ -41,6 +42,7 @@ function AdminApprovals({ data, onOpen, onAction, mutate, busy }: ApprovalsProps
   const reviewed = data.requests.filter(r => r.status !== 'pending').sort((a, b) => (b.reviewedAt ?? '').localeCompare(a.reviewedAt ?? '')).slice(0, 6);
   const finished = finishedWork(data);
   return <>
+    <LeaveRequests data={data} mutate={mutate} busy={busy} />
     <div className="team-overview-strip approvals-strip">
       <div><span className="mini-metric-icon"><Inbox size={18} /></span><strong>{pending.length}</strong><span>ticket {pending.length === 1 ? 'request' : 'requests'}</span></div>
       <div><span className="mini-metric-icon"><CalendarClock size={18} /></span><strong>{extensions.length}</strong><span>{extensions.length === 1 ? 'ask' : 'asks'} for more hours</span></div>
@@ -95,6 +97,7 @@ function DeveloperApprovals({ data, onOpen, onAction, onRequest, mutate, busy }:
   const extensions = [...data.dueDateRequests].sort((a, b) => order[a.status] - order[b.status] || b.createdAt.localeCompare(a.createdAt)).slice(0, 8);
   const finished = finishedWork(data);
   return <>
+    <LeaveRequests data={data} mutate={mutate} busy={busy} />
     <Panel title="Your ticket requests" action={mine.length > 0 && <Button variant="link" size="sm" onClick={onRequest}><Plus data-icon="inline-start" />Request ticket</Button>}>
       {mine.length
         ? <div className="request-list">{mine.map(request => <RequestCard key={request.id} data={data} request={request} mine actions={

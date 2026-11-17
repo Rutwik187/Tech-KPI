@@ -61,8 +61,8 @@ function headings(page: string, data: DashboardData, brief: string): { title: st
     case 'tickets': return admin ? { title: 'Tickets', description: 'Every ticket, who owns it, and its next step.' } : { title: 'My tickets', description: 'Your tickets and their next step. Request a ticket for new work you take on.' };
     case 'bugs': return { title: admin ? 'Bugs' : 'My bugs', description: 'Fix a bug before its fix-by time to earn full bug points.' };
     case 'approvals': return admin
-      ? { title: 'Approvals', description: 'Ticket requests, asks for more hours, and finished work that wait for you.' }
-      : { title: 'Approvals', description: 'The tickets and hours you asked for, and finished work that waits for your admin.' };
+      ? { title: 'Approvals', description: 'Leave requests, ticket requests, asks for more hours, and finished work that wait for you.' }
+      : { title: 'Approvals', description: 'The leave, tickets, and hours you asked for, and finished work that waits for your admin.' };
     case 'requests': return { title: 'Requests', description: 'Tech requests from Sales, E-commerce, and other teams. Assign each one to a developer, or decline it with a reason.' };
     case 'team': return { title: 'Team', description: 'People, their hours at work, leave, and scores.' };
     case 'other-teams': return { title: 'Other teams', description: 'Teams outside tech, such as Sales, and the people in them. Everyone you add to a team signs in with their Microsoft work account and raises requests for it.' };
@@ -232,9 +232,9 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
   const newTicket = <Button onClick={() => addItem('task')} aria-keyshortcuts="C"><Plus data-icon="inline-start" size={17} />{isAdmin ? 'New ticket' : 'Request ticket'}</Button>;
   const newRequest = <Button onClick={raiseRequest} aria-keyshortcuts="C"><Plus data-icon="inline-start" size={17} />Raise a request</Button>;
   const actions: Record<string, ReactNode> = isRequester ? { dashboard: newRequest, requests: newRequest } : {
-    dashboard: <>{isAdmin && <Button variant="outline" onClick={exportScores}><ArrowDownToLine data-icon="inline-start" size={16} />Export report</Button>}{newTicket}</>,
+    dashboard: <>{!isAdmin && <Button variant="outline" onClick={() => setModal({ type: 'leave' })}><CalendarPlus data-icon="inline-start" />Request leave</Button>}{isAdmin && <Button variant="outline" onClick={exportScores}><ArrowDownToLine data-icon="inline-start" size={16} />Export report</Button>}{newTicket}</>,
     tickets: newTicket,
-    approvals: !isAdmin && newTicket,
+    approvals: !isAdmin && <><Button variant="outline" onClick={() => setModal({ type: 'leave' })}><CalendarPlus data-icon="inline-start" />Request leave</Button>{newTicket}</>,
     standup: newTicket,
     bugs: isAdmin && <Button onClick={() => addItem('bug')}><Plus data-icon="inline-start" size={17} />Log bug</Button>,
     team: <><Button variant="outline" onClick={() => setModal({ type: 'leave' })}><CalendarPlus data-icon="inline-start" size={16} />Add leave</Button><Button variant="outline" onClick={() => setModal({ type: 'teamTicket' })}><UsersRound data-icon="inline-start" size={16} />Team ticket</Button><Button onClick={() => setModal({ type: 'member' })}><Plus data-icon="inline-start" size={17} />Add member</Button></>,
@@ -347,7 +347,7 @@ function WorkspaceSidebar({ data, page }: { data: DashboardData; page: string })
   if (data.currentUser.role === 'requester') return <RequesterSidebar data={data} page={page} onNavigate={() => setOpenMobile(false)} />;
   const open = data.items.filter(i => !isDone(i));
   // Admins see everything waiting for a decision. A developer sees their own requests still waiting.
-  const pendingRequests = data.requests.filter(r => r.status === 'pending').length + data.dueDateRequests.filter(r => r.status === 'pending').length;
+  const pendingRequests = data.requests.filter(r => r.status === 'pending').length + data.dueDateRequests.filter(r => r.status === 'pending').length + (data.leaveRequests ?? []).filter(r => r.status === 'pending').length;
   const waiting = isAdmin ? pendingRequests + data.items.filter(i => i.type === 'task' ? i.status === 'in_review' : i.status === 'fixed').length : pendingRequests;
   const close = () => setOpenMobile(false);
   const newRequests = data.techRequests.filter(r => r.status === 'new').length;
@@ -404,7 +404,8 @@ function AttentionMenu({ data, onOpen }: { data: DashboardData; onOpen: (id: str
   const requests = admin ? data.requests.filter(r => r.status === 'pending').length : 0;
   const extensions = admin ? data.dueDateRequests.filter(r => r.status === 'pending').length : 0;
   const teamRequests = admin ? data.techRequests.filter(r => r.status === 'new').length : 0;
-  const total = items.length + requests + extensions + teamRequests;
+  const leaveCount = admin ? (data.leaveRequests ?? []).filter(r => r.status === 'pending').length : 0;
+  const total = items.length + requests + extensions + teamRequests + leaveCount;
   return <DropdownMenu>
     <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" className="attention-trigger" aria-label={`Needs attention: ${total}`}><Bell size={18} />{total > 0 && <span className="notification-count" aria-hidden="true">{total > 9 ? '9+' : total}</span>}</Button></DropdownMenuTrigger>
     <DropdownMenuContent align="end" className="attention-menu">
@@ -412,6 +413,9 @@ function AttentionMenu({ data, onOpen }: { data: DashboardData; onOpen: (id: str
       <DropdownMenuSeparator />
       {teamRequests > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'requests'))} className="attention-menu-item">
         <Inbox className="attention-menu-icon" /><span className="attention-menu-title">{teamRequests} new {teamRequests === 1 ? 'request' : 'requests'} from other teams</span><span className="attention-menu-reason">Assign or decline on Requests</span>
+      </DropdownMenuItem>}
+      {leaveCount > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'approvals'))} className="attention-menu-item">
+        <CalendarPlus className="attention-menu-icon" /><span className="attention-menu-title">{leaveCount} leave {leaveCount === 1 ? 'request waits' : 'requests wait'} for approval</span><span className="attention-menu-reason">Review on Approvals</span>
       </DropdownMenuItem>}
       {requests > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'approvals'))} className="attention-menu-item">
         <ClipboardCheck className="attention-menu-icon" /><span className="attention-menu-title">{requests} ticket {requests === 1 ? 'request waits' : 'requests wait'} for approval</span><span className="attention-menu-reason">Review on Approvals</span>

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, ne, notInArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { account, activities, departments, dueDateRequests, holidays, leaves, memberProfiles, projectMembers, projectPhases, projects, session, settings, techRequests, ticketRequests, user, workItems } from "@/db/schema";
+import { account, activities, departments, dueDateRequests, holidays, leaves, leaveRequests, memberProfiles, projectMembers, projectPhases, projects, session, settings, techRequests, ticketRequests, user, workItems } from "@/db/schema";
 import type { Member } from "@/lib/types";
 import { memberRole, requireAdmin, storedRole } from "./authz";
 import { AppError } from "./errors";
@@ -153,7 +153,7 @@ function statusChange(item: ItemRow, next: string, actor: Member, reason?: strin
 const OWNER_FIELDS = new Set(["status", "blocker", "dueDate", "title", "description", "priority"]);
 
 /** What a developer may do. Everything else is an admin's. New work from a developer goes through a request. */
-const DEVELOPER_ACTIONS = new Set<DataAction["action"]>(["updateItem", "requestTicket", "withdrawTicketRequest", "extendTicket", "withdrawDueDateRequest"]);
+const DEVELOPER_ACTIONS = new Set<DataAction["action"]>(["requestLeave", "withdrawLeaveRequest", "updateItem", "requestTicket", "withdrawTicketRequest", "extendTicket", "withdrawDueDateRequest"]);
 /** All a requester may do: raise a request, and change or withdraw it until the tech team reviews it. */
 const REQUESTER_ACTIONS = new Set<DataAction["action"]>(["createTechRequest", "updateTechRequest", "withdrawTechRequest"]);
 const OPEN_TICKET = ["todo", "in_progress", "blocked"];
@@ -639,6 +639,46 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
       case "saveSettings": {
         await tx.insert(settings).values({ id: 1, value: action.settings }).onConflictDoUpdate({ target: settings.id, set: { value: action.settings, updatedAt: new Date() } });
         await audit(tx, actor, "settings", "settings.updated", { settings: action.settings }); break;
+      }
+      case "requestLeave": {
+        if (actor.role !== "developer") throw new AppError("Only developers can request leave.", 403);
+        await assertAssignee(tx, actor.id);
+        // Serialize requests for this person so overlapping submissions cannot both pass.
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${actor.id}), 12)`);
+        const dates = await leaveDates(tx, action.date, action.endDate ?? action.date);
+        const recorded = await tx.select().from(leaves).where(eq(leaves.userId, actor.id));
+        const pending = await tx.select().from(leaveRequests).where(and(eq(leaveRequests.requesterId, actor.id), eq(leaveRequests.status, "pending")));
+        const taken = new Set([...recorded.map(l => l.date), ...pending.flatMap(r => r.dates)]);
+        const fresh = dates.filter(date => !taken.has(date));
+        if (!fresh.length) throw new AppError("Leave is already recorded or waiting for approval for these days.");
+        const [request] = await tx.insert(leaveRequests).values({ requesterId: actor.id, dates: fresh, type: action.type, note: action.note ?? "" }).returning();
+        await audit(tx, actor, request.id, "leave.requested", { dates: fresh, type: action.type });
+        break;
+      }
+      case "approveLeaveRequest":
+      case "declineLeaveRequest":
+      case "withdrawLeaveRequest": {
+        const [request] = await tx.select().from(leaveRequests).where(eq(leaveRequests.id, action.id)).for("update");
+        if (!request || (action.action === "withdrawLeaveRequest" && request.requesterId !== actor.id)) throw new AppError("This leave request was not found.", 404);
+        if (request.status !== "pending") throw new AppError("This leave request was already reviewed.", 409);
+        if (action.action === "withdrawLeaveRequest") {
+          await tx.delete(leaveRequests).where(eq(leaveRequests.id, request.id));
+          await audit(tx, actor, request.id, "leave.withdrawn", {});
+          break;
+        }
+        const approved = action.action === "approveLeaveRequest";
+        if (approved) {
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${request.requesterId}), 12)`);
+          await assertAssignee(tx, request.requesterId);
+          const saved = await tx.insert(leaves).values(request.dates.map(date => ({ userId: request.requesterId, date, type: request.type, note: request.note })))
+            .onConflictDoNothing({ target: [leaves.userId, leaves.date] }).returning();
+          if (!saved.length) throw new AppError("Leave is already recorded for all these days. Decline this request instead.", 409);
+          for (const leave of saved) await audit(tx, actor, leave.id, "leave.added", { userId: leave.userId, date: leave.date, type: leave.type, requestId: request.id });
+        }
+        const reviewNote = action.action === "declineLeaveRequest" ? action.reason : null;
+        await tx.update(leaveRequests).set({ status: approved ? "approved" : "declined", reviewedById: actor.id, reviewedAt: new Date(), reviewNote }).where(eq(leaveRequests.id, request.id));
+        await audit(tx, actor, request.id, approved ? "leave.approved" : "leave.declined", { dates: request.dates, requesterId: request.requesterId }, reviewNote ?? undefined);
+        break;
       }
       case "addLeave": {
         for (const userId of action.userIds) await assertAssignee(tx, userId);

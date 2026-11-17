@@ -13,7 +13,9 @@ export interface Phase { id: string; projectId: string; name: string; descriptio
 export interface WorkItem { id: string; key: string; type: 'task' | 'bug'; title: string; description: string; projectId: string; phaseId: string | null; assigneeId: string; status: TaskStatus | BugStatus; priority: Priority; severity: Severity; estimateHours: number; dueDate: string | null; originalDueDate: string | null; createdAt: string; updatedAt: string; startedAt: string | null; completedAt: string | null; fixedAt: string | null; reportedAt: string; blocker: string | null; taskId: string | null; reopenCount: number; }
 export interface Activity { id: string; entityId: string; actorId: string; action: string; reason: string | null; payload: Record<string, unknown>; createdAt: string; }
 export interface Leave { id: string; userId: string; date: string; type: 'full_day' | 'half_day'; note: string; }
-/** A day off for the whole team. A half-day holiday takes half the day's hours, and the office stays open. */
+/** Leave proposed by a developer. Only approval records these dates as leave. */
+export interface LeaveRequest { id: string; requesterId: string; dates: string[]; type: Leave['type']; note: string; status: 'pending' | 'approved' | 'declined'; reviewedById: string | null; reviewedAt: string | null; reviewNote: string | null; createdAt: string; }
+/** A day off for the whole team. A half-day holiday takes half the day's hours. */
 export interface Holiday { id: string; date: string; name: string; type: 'full_day' | 'half_day'; }
 /** `requestDomains`: people with a work email on these domains may sign in to raise requests. Empty, the default, means only the people an admin adds to a team. */
 export interface Settings { requestDomains: string[]; timezone: string; trackingStartDate: string; workingDays: number[]; workdayStart: string; workdayEnd: string; defaultDevCapacityHours: number; defaultLeadCapacityHours: number; deliveryWeight: number; bugWeight: number; leadTeamWeight: number; leadOwnWeight: number; criticalTargetHours: number; normalTargetHours: number; bandOnTarget: number; bandBelowTarget: number; }
@@ -37,4 +39,4 @@ export interface TechRequest {
 }
 /** The ticket or bug a request became, as its requester may see it. */
 export interface RequestWork { key: string; type: WorkItem['type']; status: WorkItem['status']; assigneeId: string; assigneeName: string; dueDate: string | null; doneAt: string | null; }
-export interface DashboardData { currentUser: Member; members: Member[]; projects: Project[]; phases: Phase[]; items: WorkItem[]; requests: TicketRequest[]; dueDateRequests: DueDateRequest[]; activities: Activity[]; leaves: Leave[]; holidays: Holiday[]; settings: Settings; mode: 'live' | 'demo'; departments: Department[]; techRequests: TechRequest[]; snapshots?: Array<{userId: string; weekStart: string; value: Record<string, unknown>}>; }
+export interface DashboardData { currentUser: Member; members: Member[]; projects: Project[]; phases: Phase[]; items: WorkItem[]; requests: TicketRequest[]; dueDateRequests: DueDateRequest[]; activities: Activity[]; leaves: Leave[]; leaveRequests: LeaveRequest[]; holidays: Holiday[]; settings: Settings; mode: 'live' | 'demo'; departments: Department[]; techRequests: TechRequest[]; snapshots?: Array<{userId: string; weekStart: string; value: Record<string, unknown>}>; }

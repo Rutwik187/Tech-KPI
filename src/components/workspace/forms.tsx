@@ -328,10 +328,11 @@ export function ProjectForm({ data, editing, mutate, onClose, onExtend, busy }: 
 }
 
 export function LeaveForm({ data, userId, mutate, onClose, busy }: { data: DashboardData; userId?: string; mutate: MutationFn; onClose: () => void; busy: boolean }) {
+  const requesting = data.currentUser.role === 'developer';
   // Leave lowers tracked hours, and only developers are tracked.
   const people = data.members.filter(m => m.isActive && m.role === 'developer');
   const day = today(data.settings.timezone);
-  const [personIds, setPersonIds] = useState<string[]>(userId ? [userId] : []);
+  const [personIds, setPersonIds] = useState<string[]>(requesting ? [data.currentUser.id] : userId ? [userId] : []);
   const [length, setLength] = useState<Leave['type']>('full_day');
   const [start, setStart] = useState(day);
   const [end, setEnd] = useState(day);
@@ -350,7 +351,7 @@ export function LeaveForm({ data, userId, mutate, onClose, busy }: { data: Dashb
   }
   // Each person loses only the days they do not already have leave on.
   const effects = chosen.map(person => {
-    const taken = new Set(data.leaves.filter(l => l.userId === person.id).map(l => l.date));
+    const taken = new Set(data.leaves.filter(l => l.userId === person.id).map(l => l.date).concat(requesting ? (data.leaveRequests ?? []).filter(r => r.requesterId === person.id && r.status === 'pending').flatMap(r => r.dates) : []));
     const fresh = days.filter(date => !taken.has(date));
     return { fresh: fresh.length, lost: singleOffDay ? 0 : person.capacity / workingDays * fresh.length * (length === 'half_day' ? .5 : 1) };
   });
@@ -361,14 +362,14 @@ export function LeaveForm({ data, userId, mutate, onClose, busy }: { data: Dashb
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const note = String(new FormData(event.currentTarget).get('note') ?? '').trim();
-    const ok = await mutate({ action: 'addLeave', userIds: personIds, date: start, ...(oneDay ? {} : { endDate: end }), type: length, note },
-      chosen.length > 1 ? `Leave added for ${chosen.length} developers. Hours at work updated.` : 'Leave added. Hours at work updated.');
+    const ok = await mutate({ ...(requesting ? { action: 'requestLeave' as const } : { action: 'addLeave' as const, userIds: personIds }), date: start, ...(oneDay ? {} : { endDate: end }), type: length, note },
+      requesting ? 'Leave request sent for admin approval.' : chosen.length > 1 ? `Leave added for ${chosen.length} developers. Hours at work updated.` : 'Leave added. Hours at work updated.');
     if (ok) onClose();
   }
-  return <Modal title="Add leave" subtitle="Leave lowers hours at work for that week, so the score stays fair. Pick several people for a team day off." onClose={onClose}>
+  return <Modal title={requesting ? "Request leave" : "Add leave"} subtitle={requesting ? "Request one date or a range of days. Your admin approves it before your hours at work change." : "Leave lowers hours at work for that week, so the score stays fair. Pick several people for a team day off."} onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
-        <DeveloperPicker people={people} value={personIds} onChange={setPersonIds} disabled={busy} />
+        {!requesting && <DeveloperPicker people={people} value={personIds} onChange={setPersonIds} disabled={busy} />}
         <FormField>Dates<FormDateRange start={start} end={end} onValueChange={chooseDates} /></FormField>
         <FormField>Length<FormChoice value={length} onValueChange={value => setLength(value as Leave['type'])} options={[{ value: 'full_day', label: 'Full day' }, { value: 'half_day', label: 'Half day', disabled: !oneDay }]} />
           {!oneDay && <span className="field-help">A half day covers one date only.</span>}</FormField>
@@ -376,12 +377,12 @@ export function LeaveForm({ data, userId, mutate, onClose, busy }: { data: Dashb
           tooLong ? 'Record up to two months of leave at a time.'
           : !chosen.length ? 'Choose who is on leave.'
           : !days.length ? 'These dates are weekends or holidays. No leave is needed.'
-          : freshDays === 0 ? 'Leave is already recorded for these days.'
-          : `${length === 'half_day' ? 'Half a day' : `${days.length} working day${days.length === 1 ? '' : 's'}`}${oneDay ? ` on ${displayDate(start, { weekday: 'short' })}` : ` from ${displayDate(start)} to ${displayDate(end)}`}. Lowers ${whose} hours at work by ${hours(lostHours)} h${chosen.length > 1 ? ' in total' : ''}.${oneDay ? '' : ' Weekends and holidays are skipped.'}${singleOffDay ? ' This date is already a day off.' : ''}${skipped > 0 ? ` ${skipped} day(s) already recorded will be skipped.` : ''}`
+          : freshDays === 0 ? 'Leave is already recorded or waiting for approval for these days.'
+          : `${length === 'half_day' ? 'Half a day' : `${days.length} working day${days.length === 1 ? '' : 's'}`}${oneDay ? ` on ${displayDate(start, { weekday: 'short' })}` : ` from ${displayDate(start)} to ${displayDate(end)}`}. ${requesting ? 'After approval, lowers' : 'Lowers'} ${whose} hours at work by ${hours(lostHours)} h${chosen.length > 1 ? ' in total' : ''}.${oneDay ? '' : ' Weekends and holidays are skipped.'}${singleOffDay ? ' This date is already a day off.' : ''}${skipped > 0 ? ` ${skipped} day(s) already recorded will be skipped.` : ''}`
         }</p></AlertDescription></Alert>
         <FormField>Note <span className="optional">optional</span><Input name="note" placeholder="e.g. Family function" maxLength={200} /></FormField>
       </FieldGroup>
-      <FormFooter busy={busy} disabled={!chosen.length || freshDays === 0} onClose={onClose} label={chosen.length > 1 ? `Add leave for ${chosen.length}` : 'Add leave'} />
+      <FormFooter busy={busy} disabled={!chosen.length || freshDays === 0 || tooLong || end < start} onClose={onClose} label={requesting ? 'Send for approval' : chosen.length > 1 ? `Add leave for ${chosen.length}` : 'Add leave'} />
     </form>
   </Modal>;
 }

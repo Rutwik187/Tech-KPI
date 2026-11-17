@@ -78,6 +78,12 @@ export const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("createPhase"), projectId: uuid, name: phaseName, description: phaseDescription.optional() }).strict(),
   z.object({ action: z.literal("updatePhase"), id: uuid, name: phaseName.optional(), description: phaseDescription.optional() }).strict(),
   z.object({ action: z.literal("saveSettings"), settings: settingsSchema }).strict(),
+  z.object({ action: z.literal("requestLeave"), date, endDate: date.optional(), type: dayLength, note: z.string().trim().max(2000).optional() }).strict()
+    .refine(r => !r.endDate || r.endDate >= r.date, "The last day must be on or after the first day.")
+    .refine(r => !r.endDate || r.endDate === r.date || r.type === "full_day", "A half day covers one date only."),
+  z.object({ action: z.literal("approveLeaveRequest"), id: uuid }).strict(),
+  z.object({ action: z.literal("declineLeaveRequest"), id: uuid, reason: reason.min(1, "Enter a reason.") }).strict(),
+  z.object({ action: z.literal("withdrawLeaveRequest"), id: uuid }).strict(),
   z.object({ action: z.literal("addLeave"), userIds: developerIds, date, endDate: date.optional(), type: dayLength, note: z.string().trim().max(2000).optional() }).strict()
     .refine((leave) => !leave.endDate || leave.endDate >= leave.date, "The last day of leave must be on or after the first day.")
     .refine((leave) => !leave.endDate || leave.endDate === leave.date || leave.type === "full_day", "A half day covers one date only."),

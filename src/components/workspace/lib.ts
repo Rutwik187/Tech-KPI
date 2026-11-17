@@ -246,6 +246,10 @@ export type Mutation =
   | { action: 'createPhase'; projectId: string; name: string; description: string }
   | { action: 'updatePhase'; id: string; name?: string; description?: string }
   | { action: 'saveSettings'; settings: Settings }
+  | { action: 'requestLeave'; date: string; endDate?: string; type: Leave['type']; note: string }
+  | { action: 'approveLeaveRequest'; id: string }
+  | { action: 'declineLeaveRequest'; id: string; reason: string }
+  | { action: 'withdrawLeaveRequest'; id: string }
   | ({ action: 'addLeave'; userIds: string[]; endDate?: string } & Omit<Leave, 'id' | 'userId'>)
   | ({ action: 'addHoliday' } & Omit<Holiday, 'id'>)
   | { action: 'deleteLeave'; ids: string[] }
@@ -468,6 +472,37 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
     case 'saveSettings':
       next.settings = mutation.settings;
       break;
+    case 'requestLeave': {
+      if (actor.role !== 'developer' || !actor.isActive) throw new Error('Only active developers can request leave.');
+      if (mutation.endDate && (mutation.endDate < mutation.date || mutation.endDate > shiftDate(mutation.date, 61, next.settings.timezone))) throw new Error('Choose a range of up to two months.');
+      if (mutation.type === 'half_day' && mutation.endDate && mutation.endDate !== mutation.date) throw new Error('A half day covers one date only.');
+      const taken = new Set([...next.leaves.filter(l => l.userId === actor.id).map(l => l.date), ...(next.leaveRequests ?? []).filter(r => r.requesterId === actor.id && r.status === 'pending').flatMap(r => r.dates)]);
+      const dates = leaveDays(next, mutation.date, mutation.endDate ?? mutation.date).filter(d => !taken.has(d));
+      if (!dates.length) throw new Error('Leave is already recorded or waiting for approval for these days.');
+      (next.leaveRequests ??= []).unshift({ id, requesterId: actor.id, dates, type: mutation.type, note: mutation.note, status: 'pending', reviewedById: null, reviewedAt: null, reviewNote: null, createdAt: now });
+      log(id, 'leave.requested', { dates, type: mutation.type });
+      break;
+    }
+    case 'approveLeaveRequest':
+    case 'declineLeaveRequest':
+    case 'withdrawLeaveRequest': {
+      if (mutation.action !== 'withdrawLeaveRequest' && actor.role !== 'admin') throw new Error('Only admins can review leave.');
+      const request = next.leaveRequests?.find(r => r.id === mutation.id);
+      if (!request || (mutation.action === 'withdrawLeaveRequest' && request.requesterId !== actor.id)) throw new Error('This leave request was not found.');
+      if (request.status !== 'pending') throw new Error('This leave request was already reviewed.');
+      if (mutation.action === 'withdrawLeaveRequest') { next.leaveRequests = next.leaveRequests.filter(r => r.id !== request.id); log(request.id, 'leave.withdrawn'); break; }
+      if (mutation.action === 'approveLeaveRequest') {
+        const person = next.members.find(m => m.id === request.requesterId && m.isActive && m.role === 'developer');
+        if (!person) throw new Error('Choose an active developer.');
+        const dates = request.dates.filter(d => !next.leaves.some(l => l.userId === request.requesterId && l.date === d));
+        if (!dates.length) throw new Error('Leave is already recorded for all these days. Decline this request instead.');
+        dates.forEach(date => { const leaveId = crypto.randomUUID(); next.leaves.push({ id: leaveId, userId: request.requesterId, date, type: request.type, note: request.note }); log(leaveId, 'leave.added', { date, userId: request.requesterId, requestId: request.id }); });
+        request.status = 'approved';
+      } else { if (!mutation.reason.trim()) throw new Error('Enter a reason.'); request.status = 'declined'; request.reviewNote = mutation.reason; }
+      request.reviewedAt = now; request.reviewedById = actor.id;
+      log(request.id, `leave.${request.status}`, { dates: request.dates }, request.reviewNote);
+      break;
+    }
     case 'addLeave': {
       const days = leaveDays(next, mutation.date, mutation.endDate ?? mutation.date);
       // Days someone already has leave on are skipped, so one form can cover a whole team.
@@ -556,7 +591,7 @@ export function viewAs(data: DashboardData, viewerId: string | null): DashboardD
   if (viewer.role === 'requester') {
     // Their own and their team's requests, each with a summary of the work it became. Nothing from the tech team's side.
     const techRequests = data.techRequests.filter(r => r.requesterId === viewer.id || (!!viewer.departmentId && r.departmentId === viewer.departmentId)).map(r => ({ ...r, work: requestWork(data, r) }));
-    return { ...data, currentUser: viewer, members: [viewer], projects: [], phases: [], items: [], requests: [], dueDateRequests: [], activities: [], leaves: [], holidays: [], snapshots: [], techRequests };
+    return { ...data, currentUser: viewer, members: [viewer], projects: [], phases: [], items: [], requests: [], dueDateRequests: [], activities: [], leaves: [], leaveRequests: [], holidays: [], snapshots: [], techRequests };
   }
   const items = data.items.filter(item => item.assigneeId === viewer.id);
   const requests = data.requests.filter(request => request.requesterId === viewer.id);
@@ -570,6 +605,7 @@ export function viewAs(data: DashboardData, viewerId: string | null): DashboardD
     techRequests: data.techRequests.filter(r => !!r.itemId && itemIds.has(r.itemId)),
     phases: data.phases.filter(phase => projectIds.has(phase.projectId)),
     activities: data.activities.filter(a => itemIds.has(a.entityId) || (projectIds.has(a.entityId) && a.action === 'project.target_changed')),
+    leaveRequests: (data.leaveRequests ?? []).filter(r => r.requesterId === viewer.id),
     leaves: data.leaves.filter(l => l.userId === viewer.id),
   };
 }

@@ -1407,3 +1407,35 @@ test('an admin creates a team and adds its members, who raise requests and see e
   expect(request).toMatchObject({ departmentId: supportTeam.id, status: 'assigned' });
   expect(after.items.find(item => item.id === request.itemId)).toMatchObject({ type: 'bug', status: 'open', severity: 'critical', assigneeId: 'demo-arjun', estimateHours: 0 });
 });
+
+test('a teammate submits bulk leave and the admin approves it', async ({ page }) => {
+  await openDemo(page, 'approvals');
+  const viewer = page.getByRole('combobox', { name: 'View the demo as', exact: true });
+  await chooseOption(page, viewer, 'Aarav Mehta · Developer');
+  await page.locator('.page-actions').getByRole('button', { name: 'Request leave', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: 'Request leave', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+  const start = shiftDate(getWeekStart(new Date(), 'Asia/Kolkata'), 11, 'Asia/Kolkata');
+  const end = shiftDate(start, 4, 'Asia/Kolkata');
+  await pickDateRange(page, dialog.getByRole('button', { name: /^Dates/ }), start, end);
+  await expect(dialog).toContainText('3 working days');
+  await dialog.getByRole('textbox', { name: /^Note/ }).fill('Bulk leave approval test');
+  await dialog.getByRole('button', { name: 'Send for approval', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  let card = page.locator('.request-card').filter({ hasText: 'Bulk leave approval test' });
+  await expect(card).toContainText('Waiting for approval');
+  await expect(card.getByRole('button', { name: 'Approve', exact: true })).toHaveCount(0);
+  let data = await readDemoData(page);
+  expect(data.leaves.some(l => l.userId === 'demo-aarav' && l.date === start)).toBe(false);
+  await chooseOption(page, viewer, 'Rohan Desai · Admin');
+  await expect(page.getByRole('button', { name: /^Needs attention:/ })).toBeVisible();
+  card = page.locator('.request-card').filter({ hasText: 'Bulk leave approval test' });
+  await expect(card).toContainText('Aarav Mehta');
+  await card.getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect(card).toContainText('Approved');
+  data = await readDemoData(page);
+  expect(data.leaves.filter(l => l.userId === 'demo-aarav').map(l => l.date).sort()).toEqual([start, shiftDate(start, 3, 'Asia/Kolkata'), end]);
+  await chooseOption(page, viewer, 'Aarav Mehta · Developer');
+  await expect(page.locator('.request-card').filter({ hasText: 'Bulk leave approval test' })).toContainText('Approved');
+});
