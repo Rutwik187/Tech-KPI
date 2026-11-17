@@ -180,3 +180,21 @@ export const attachments = pgTable("tech_kpi_attachment", {
   mimeType: text("mime_type").notNull(), size: integer("size").notNull(), objectKey: text("object_key").notNull(),
   createdAt: stamp("created_at").defaultNow().notNull(),
 }, (t) => [index("tech_kpi_attachment_item_idx").on(t.itemId)]);
+
+/** Pending leave does not affect capacity. Approval creates the leave rows atomically. */
+export const leaveRequests = pgTable("tech_kpi_leave_request", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  requesterId: text("requester_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  dates: jsonb("dates").$type<string[]>().notNull(),
+  type: text("type").$type<"full_day" | "half_day">().notNull(), note: text("note").notNull().default(""),
+  status: text("status").$type<"pending" | "approved" | "declined">().notNull().default("pending"),
+  reviewedById: text("reviewed_by_id").references(() => user.id, { onDelete: "set null" }),
+  reviewedAt: stamp("reviewed_at"), reviewNote: text("review_note"), createdAt: stamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  index("tech_kpi_leave_request_requester_idx").on(t.requesterId),
+  index("tech_kpi_leave_request_status_idx").on(t.status, t.createdAt),
+  check("tech_kpi_leave_request_status", sql`${t.status} IN ('pending','approved','declined')`),
+  check("tech_kpi_leave_request_type", sql`${t.type} IN ('full_day','half_day')`),
+  check("tech_kpi_leave_request_dates", sql`jsonb_typeof(${t.dates}) = 'array' AND jsonb_array_length(${t.dates}) BETWEEN 1 AND 62`),
+  check("tech_kpi_leave_request_reviewed", sql`(${t.status} = 'pending') = (${t.reviewedAt} IS NULL)`),
+]);

@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, or, isNull, ne, sql, type SQL } from "drizzle-o
 import { alias } from "drizzle-orm/pg-core";
 import { headers } from "next/headers";
 import { db } from "@/db";
-import { account, activities, departments, dueDateRequests, holidays, leaves, memberProfiles, projectMembers, projectPhases, projects, settings, snapshots, techRequests, ticketRequests, user, workItems } from "@/db/schema";
+import { account, activities, departments, dueDateRequests, holidays, leaves, leaveRequests, memberProfiles, projectMembers, projectPhases, projects, settings, snapshots, techRequests, ticketRequests, user, workItems } from "@/db/schema";
 import type { DashboardData, DueDateRequest, Member, TechRequest, TicketRequest, WorkItem } from "@/lib/types";
 import { withDefaults } from "./default-settings";
 import { memberRole, requireSession } from "./authz";
@@ -84,7 +84,7 @@ async function loadRequesterData(currentUser: Member): Promise<DashboardData> {
     loadTechRequests(or(eq(techRequests.requesterId, currentUser.id), currentUser.departmentId ? eq(techRequests.departmentId, currentUser.departmentId) : undefined), 300),
   ]);
   return {
-    currentUser, members: [currentUser], projects: [], phases: [], items: [], requests: [], dueDateRequests: [], activities: [], leaves: [], holidays: [],
+    currentUser, members: [currentUser], projects: [], phases: [], items: [], requests: [], dueDateRequests: [], activities: [], leaves: [], leaveRequests: [], holidays: [],
     settings: withDefaults(settingRows[0]?.value), mode: "live", snapshots: [], departments: departmentRows, techRequests: requests,
   };
 }
@@ -92,7 +92,7 @@ async function loadRequesterData(currentUser: Member): Promise<DashboardData> {
 async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
   if (currentUser.role === "requester") return loadRequesterData(currentUser);
   const isAdmin = currentUser.role === "admin";
-  const [itemRows, identities, projectRows, membershipRows, phaseRows, leaveRows, holidayRows, settingRows, snapshotRows, requestRows, dueDateRows, departmentRows] = await Promise.all([
+  const [itemRows, identities, projectRows, membershipRows, phaseRows, leaveRows, holidayRows, settingRows, snapshotRows, requestRows, dueDateRows, departmentRows, leaveRequestRows] = await Promise.all([
     db.select().from(workItems).where(isAdmin ? undefined : eq(workItems.assigneeId, currentUser.id)).orderBy(desc(workItems.createdAt)),
     db.select({ identity: user, profile: memberProfiles, microsoftObjectId: account.accountId }).from(user)
       .leftJoin(memberProfiles, eq(memberProfiles.userId, user.id))
@@ -108,6 +108,7 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
     db.select().from(ticketRequests).where(isAdmin ? undefined : eq(ticketRequests.requesterId, currentUser.id)).orderBy(desc(ticketRequests.createdAt)).limit(200),
     db.select().from(dueDateRequests).where(isAdmin ? undefined : eq(dueDateRequests.requesterId, currentUser.id)).orderBy(desc(dueDateRequests.createdAt)).limit(200),
     loadDepartments(),
+    db.select().from(leaveRequests).where(isAdmin ? undefined : eq(leaveRequests.requesterId, currentUser.id)).orderBy(desc(leaveRequests.createdAt)),
   ]);
   const itemIds = itemRows.map((item) => item.id);
   // Admins triage every team's requests. A developer sees the requests behind their own tickets and bugs.
@@ -151,7 +152,7 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
     }),
     phases: phaseRows.filter((phase) => visibleProjectIds.has(phase.projectId)),
     items: itemRows.map(serializeItem), requests: requestRows.map(serializeRequest), dueDateRequests: dueDateRows.map(serializeDueDateRequest), activities: activityRows.map((activity) => ({ ...activity, createdAt: activity.createdAt.toISOString() })),
-    leaves: leaveRows, holidays: holidayRows, settings: appSettings, mode: "live", snapshots: snapshotRows,
+    leaveRequests: leaveRequestRows.map(r => ({ ...r, reviewedAt: r.reviewedAt?.toISOString() ?? null, createdAt: r.createdAt.toISOString() })), leaves: leaveRows, holidays: holidayRows, settings: appSettings, mode: "live", snapshots: snapshotRows,
     departments: departmentRows, techRequests: techRequestRows,
   };
 }

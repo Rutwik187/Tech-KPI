@@ -299,6 +299,32 @@ async function main() {
     await mutate(adminCookie, { action: "addLeave", userIds: [member.id], date: "2099-11-06", endDate: "2099-11-10", type: "full_day" }, 400);
     await mutate(developerCookie, { action: "addLeave", userIds: [member.id], date: "2099-11-12", type: "full_day" }, 403);
     await mutate(adminCookie, { action: "deleteLeave", ids: data.leaves.filter((leave) => leave.userId === member.id).map((leave) => leave.id) });
+    // A developer submits their own bulk leave; only approval creates capacity-affecting rows.
+    data = await mutate(developerCookie, { action: "requestLeave", date: "2099-11-06", endDate: "2099-11-10", type: "full_day", note: trace });
+    const leaveRequest = data.leaveRequests.find(r => r.note === trace)!; ids.add(leaveRequest.id);
+    assert.deepEqual(leaveRequest.dates, ["2099-11-06", "2099-11-09", "2099-11-10"]); checks++;
+    assert.equal(data.leaves.filter(l => l.userId === member.id).length, 0); checks++;
+    await mutate(developerCookie, { action: "requestLeave", date: "2099-11-06", endDate: "2099-11-10", type: "full_day" }, 400);
+    await mutate(developerCookie, { action: "approveLeaveRequest", id: leaveRequest.id }, 403);
+    await mutate(developerCookie, { action: "declineLeaveRequest", id: leaveRequest.id, reason: "Self review" }, 403);
+    await mutate(developerCookie, { action: "requestLeave", userIds: [member.id], date: "2099-11-12", type: "full_day" }, 400);
+    const reviewerView: DashboardData = await (await call("/api/data", adminCookie)).json();
+    assert(reviewerView.leaveRequests.some(r => r.id === leaveRequest.id)); checks++;
+    data = await mutate(adminCookie, { action: "approveLeaveRequest", id: leaveRequest.id });
+    assert.equal(data.leaveRequests.find(r => r.id === leaveRequest.id)?.status, "approved"); checks++;
+    const approvedLeaves = data.leaves.filter(l => l.userId === member.id);
+    approvedLeaves.forEach(l => ids.add(l.id));
+    assert.deepEqual(approvedLeaves.map(l => l.date).sort(), leaveRequest.dates); checks++;
+    await mutate(adminCookie, { action: "approveLeaveRequest", id: leaveRequest.id }, 409);
+    await mutate(adminCookie, { action: "deleteLeave", ids: approvedLeaves.map(l => l.id) });
+    data = await mutate(developerCookie, { action: "requestLeave", date: "2099-11-12", type: "half_day", note: trace });
+    const halfRequest = data.leaveRequests.find(r => r.status === "pending")!; ids.add(halfRequest.id);
+    data = await mutate(adminCookie, { action: "declineLeaveRequest", id: halfRequest.id, reason: "Please choose another day." });
+    assert.equal(data.leaveRequests.find(r => r.id === halfRequest.id)?.reviewNote, "Please choose another day."); checks++;
+    data = await mutate(developerCookie, { action: "requestLeave", date: "2099-11-12", type: "half_day", note: trace });
+    const withdrawRequest = data.leaveRequests.find(r => r.status === "pending")!; ids.add(withdrawRequest.id);
+    data = await mutate(developerCookie, { action: "withdrawLeaveRequest", id: withdrawRequest.id });
+    assert(!data.leaveRequests.some(r => r.id === withdrawRequest.id)); checks++;
     // Requests from other teams. A requester sees only requests; an admin turns one into a ticket or a bug for a developer.
     const requesterFixture = await createOfflineSessionFixture({ baseURL, role: "requester", name: `${trace}-requester` }); extraFixtures.push(requesterFixture);
     const teammateFixture = await createOfflineSessionFixture({ baseURL, role: "requester", name: `${trace}-teammate` }); extraFixtures.push(teammateFixture);
