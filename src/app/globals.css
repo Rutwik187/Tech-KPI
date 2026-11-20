@@ -963,6 +963,61 @@
 .leave-past { padding:4px 18px 12px; border-top:1px solid var(--border); }
 .leave-past>[data-slot="field"] { padding:10px 0 4px; }
 .leave-past .availability-list { padding:0; }
+.leave-list-label { padding:0 18px; }
+
+/* ───────────────────────── Leave: picking days and the calendar ───────────────────────── */
+:root { --leave-mark: oklch(0.52 0.11 171); --leave-mark-bg: oklch(0.95 0.035 171); --holiday-mark: oklch(0.5 0.13 305); --holiday-mark-bg: oklch(0.96 0.03 305); }
+.dark { --leave-mark: oklch(0.8 0.1 171); --leave-mark-bg: oklch(0.3 0.05 171); --holiday-mark: oklch(0.8 0.11 305); --holiday-mark-bg: oklch(0.3 0.05 305); }
+.form-days { display:flex; justify-content:center; border:1px solid var(--border); border-radius:var(--radius-lg); background:var(--card); }
+.form-days [data-slot="calendar"] { --cell-size:2.4rem; background:transparent; }
+.form-days td.day-leave,.form-days td.day-waiting { opacity:1; }
+.form-days td.day-leave:not([aria-selected="true"]) button { background:var(--leave-mark-bg); color:var(--leave-mark); text-decoration:line-through; }
+.form-days td.day-waiting:not([aria-selected="true"]) button { box-shadow:inset 0 0 0 1.5px var(--warning-foreground); color:var(--warning-foreground); }
+.leave-legend { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:12px; color:var(--muted-foreground); }
+.leave-legend>span { display:inline-flex; align-items:center; gap:6px; }
+.leave-legend i { width:12px; height:12px; border-radius:3px; flex-shrink:0; }
+.legend-picked { background:var(--primary); }
+.legend-leave { background:var(--leave-mark-bg); box-shadow:inset 0 0 0 1px var(--leave-mark); }
+.legend-waiting { box-shadow:inset 0 0 0 1.5px var(--warning-foreground); background:color-mix(in oklab, var(--warning-foreground) 10%, var(--card)); }
+.legend-holiday { background:var(--holiday-mark-bg); box-shadow:inset 0 0 0 1px var(--holiday-mark); }
+.legend-off { background:var(--muted); box-shadow:inset 0 0 0 1px var(--border); }
+.picked-days { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 10px; padding:10px 12px; border-radius:var(--radius-lg); background:var(--accent); color:var(--accent-foreground); font-size:13px; }
+.picked-days strong { font-weight:600; }
+.picked-days>span { flex:1; min-width:0; }
+.picked-days [data-slot="button"] { height:auto; padding:0; }
+.leave-filter { padding:0 18px 12px; }
+.leave-request-days { display:flex; gap:8px; font-size:13px; font-weight:500; font-variant-numeric:tabular-nums; }
+.leave-request-days svg { flex-shrink:0; margin-top:2px; color:var(--muted-foreground); }
+.leave-month-nav { display:flex; align-items:center; gap:4px; }
+.leave-month-nav strong { min-width:124px; text-align:center; font-size:13.5px; font-weight:600; }
+.leave-calendar-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px 16px; padding:0 18px 12px; }
+.leave-person-filter { width:220px; }
+.leave-month-scroll { padding:0 18px; }
+.leave-month { width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; }
+.leave-month th { padding:8px 6px; font-size:11px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--muted-foreground); text-align:left; background:var(--muted); border-bottom:1px solid var(--border); }
+.leave-month td { height:104px; padding:6px; vertical-align:top; border-top:1px solid var(--border); border-left:1px solid var(--border); background:var(--card); }
+.leave-month tr:first-child td { border-top:0; }
+.leave-month td:first-child { border-left:0; }
+.leave-month td.leave-day-off { background:color-mix(in oklab, var(--muted) 70%, var(--card)); }
+.leave-month td.leave-day-holiday { background:var(--holiday-mark-bg); }
+.leave-month td.leave-day-outside>* { opacity:.45; }
+.leave-day-head { display:flex; align-items:center; gap:6px; min-width:0; margin-bottom:4px; }
+.leave-day-number { display:inline-flex; align-items:center; gap:2px; height:24px; min-width:24px; padding:0 6px; border-radius:999px; font-size:12.5px; font-weight:550; font-variant-numeric:tabular-nums; color:var(--foreground); }
+button.leave-day-number { cursor:pointer; border:0; background:transparent; }
+button.leave-day-number svg { width:12px; height:12px; opacity:0; color:var(--primary); transition:opacity .12s; }
+button.leave-day-number:hover,button.leave-day-number:focus-visible { background:var(--accent); color:var(--accent-foreground); outline:none; }
+button.leave-day-number:focus-visible { box-shadow:0 0 0 2px var(--ring); }
+button.leave-day-number:hover svg,button.leave-day-number:focus-visible svg { opacity:1; }
+.leave-day-today .leave-day-number { background:var(--primary); color:var(--primary-foreground); }
+.leave-day-today button.leave-day-number:hover { background:var(--primary); color:var(--primary-foreground); }
+.leave-day-today button.leave-day-number svg { color:var(--primary-foreground); }
+.leave-holiday-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; font-weight:550; color:var(--holiday-mark); }
+.leave-day-marks { display:flex; flex-direction:column; gap:3px; margin:0; padding:0; list-style:none; }
+.leave-mark { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:2px 6px; border-radius:5px; font-size:11.5px; line-height:1.35; font-weight:550; }
+.leave-mark-leave { background:var(--leave-mark-bg); color:var(--leave-mark); }
+.leave-mark-waiting { color:var(--warning-foreground); background:color-mix(in oklab, var(--warning-foreground) 8%, var(--card)); box-shadow:inset 0 0 0 1px color-mix(in oklab, var(--warning-foreground) 55%, transparent); border:0; }
+.leave-mark-more { color:var(--muted-foreground); font-weight:500; padding-inline:2px; }
+.leave-calendar-help { padding-top:12px; }
 
 /* ───────────────────────── Projects ───────────────────────── */
 .project-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; color:var(--muted-foreground); font-size:13px; margin-bottom:16px; }
@@ -1198,6 +1253,18 @@ button.project-title svg { width:15px; height:15px; color:var(--muted-foreground
 }
 @media (max-width:767px) {
   .topbar { height:52px; padding:0 10px; gap:8px; }
+  .leave-month-scroll,.leave-calendar-toolbar,.leave-filter,.leave-list-label { padding-inline:14px; }
+  .leave-person-filter { width:100%; }
+  .leave-month td { height:64px; padding:3px; }
+  .leave-month th { padding:6px 2px; text-align:center; font-size:10px; letter-spacing:0; }
+  .leave-day-head { justify-content:center; margin-bottom:2px; }
+  .leave-day-number { height:22px; min-width:22px; padding:0 4px; justify-content:center; font-size:12px; }
+  button.leave-day-number svg,.leave-holiday-name { display:none; }
+  .leave-day-marks { flex-direction:row; flex-wrap:wrap; justify-content:center; gap:3px; }
+  .leave-mark { width:8px; height:8px; padding:0; border-radius:50%; font-size:0; }
+  .leave-mark-leave { background:var(--leave-mark); }
+  .leave-mark-waiting { background:transparent; box-shadow:inset 0 0 0 1.5px var(--warning-foreground); }
+  .leave-mark-more { width:auto; height:auto; font-size:9.5px; line-height:1; border-radius:0; }
   .topbar-end { gap:4px; }
   .connection-status { display:none; }
   .search-trigger { width:36px; height:34px; padding:0; justify-content:center; background:transparent; border-color:transparent; }

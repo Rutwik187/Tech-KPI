@@ -43,6 +43,22 @@ async function pickDate(page: Page, trigger: Locator, iso: string) {
   await expect(page.locator('[data-slot="popover-content"]')).toHaveCount(0);
 }
 
+/** Clicks a day (`YYYY-MM-DD`) in the leave form's calendar, which stays open. With Shift, it adds every working day since the last click. */
+async function pickLeaveDay(dialog: Locator, iso: string, shift = false) {
+  await (await leaveDay(dialog, iso)).click(shift ? { modifiers: ['Shift'] } : undefined);
+}
+/** Shows the month that holds a day (`YYYY-MM-DD`) in the leave form's calendar, and returns that day's button. */
+async function leaveDay(dialog: Locator, iso: string) {
+  const calendar = dialog.locator('.form-days [data-slot="calendar"]');
+  for (let step = 0; step < 24; step++) {
+    const cell = calendar.locator(`td[data-day="${iso}"]:not([data-outside])`);
+    if (await cell.count()) return cell.getByRole('button');
+    const shown = await calendar.locator('td[data-day]:not([data-outside])').first().getAttribute('data-day');
+    await calendar.getByRole('button', { name: (shown ?? '') < iso ? /next month/i : /previous month/i }).click();
+  }
+  throw new Error(`Day ${iso} was not found in the leave calendar.`);
+}
+
 /** Picks the first and last day in a shadcn date range picker. The same day twice picks one day. */
 async function pickDateRange(page: Page, trigger: Locator, start: string, end: string) {
   await trigger.click();
@@ -171,6 +187,7 @@ test('demo navigation keeps every page in the demo workspace', async ({ page }) 
     { label: /^Tickets/, path: 'tickets', heading: /^Tickets/ },
     { label: /^Bugs/, path: 'bugs', heading: /^Bugs/ },
     { label: /^Approvals/, path: 'approvals', heading: /^Approvals/ },
+    { label: /^Leave/, path: 'leave', heading: /^Leave$/ },
     { label: /^Requests/, path: 'requests', heading: /^Requests/ },
     { label: /^Team$/, path: 'team', heading: /^Team/ },
     { label: /^Other teams$/, path: 'other-teams', heading: /^Other teams/ },
@@ -645,8 +662,10 @@ test('a developer requests a ticket, asks for more hours, and completes it after
   const card = page.locator('.request-card').filter({ hasText: title });
   await expect(card).toContainText('Aarav Mehta');
   await expect(card).toContainText('The payment provider now signs every callback.');
-  await card.getByRole('button', { name: 'Approve', exact: true }).click();
+  // Approve on the card approves at once. Edit opens the form first.
+  await card.getByRole('button', { name: /^Edit before approving/ }).click();
   dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: 'Edit and approve ticket request', exact: true })).toBeVisible();
   await dialog.getByLabel(/^Estimate/).fill('5');
   await dialog.getByRole('textbox', { name: /^Note for Aarav/ }).fill('Five hours is enough.');
   await dialog.getByRole('button', { name: 'Approve and create ticket', exact: true }).click();
@@ -685,7 +704,7 @@ test('a developer requests a ticket, asks for more hours, and completes it after
   const ask = page.locator('.request-card').filter({ hasText: ticket.key });
   await expect(ask).toContainText('+3 h');
   await expect(ask).toContainText('5 h → 8 h');
-  await ask.getByRole('button', { name: 'Approve', exact: true }).click();
+  await ask.getByRole('button', { name: 'Edit the hours before approving', exact: true }).click();
   dialog = page.getByRole('dialog');
   await dialog.getByRole('spinbutton', { name: 'Hours to approve', exact: true }).fill('2');
   await expect(dialog).toContainText('Estimate 5 h → 7 h');
@@ -734,11 +753,13 @@ test('an approved request’s ticket is completed from its request card', async 
   await openDemo(page, 'approvals');
   const viewAs = page.getByRole('combobox', { name: 'View the demo as', exact: true });
   const title = 'Add UPI autopay to checkout';
+  // Approve on the card approves the request as asked, without a form.
+  const asked = createDemoData().requests.find(row => row.id === 'demo-request-1')!;
   await page.locator('.request-card').filter({ hasText: title }).getByRole('button', { name: 'Approve', exact: true }).click();
-  const dialog = page.getByRole('dialog');
-  await dialog.getByRole('button', { name: 'Approve and create ticket', exact: true }).click();
-  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect.poll(async () => (await readDemoData(page)).requests.find(row => row.id === 'demo-request-1')?.status).toBe('approved');
   const itemId = (await readDemoData(page)).requests.find(row => row.id === 'demo-request-1')?.itemId;
+  expect((await readDemoData(page)).items.find(item => item.id === itemId)).toMatchObject({ title, assigneeId: asked.requesterId, estimateHours: asked.estimateHours, priority: asked.priority, projectId: asked.projectId });
 
   // The developer completes it from their request, so it waits for review.
   await chooseOption(page, viewAs, 'Aarav Mehta · Developer');
@@ -903,7 +924,8 @@ test('an admin records several days of leave from the team table and sees one ra
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('checkbox', { name: 'Ananya Rao', exact: true })).toBeChecked();
   await expect(dialog.getByRole('checkbox', { checked: true })).toHaveCount(1);
-  await pickDateRange(page, dialog.getByRole('button', { name: /^Dates/ }), friday, tuesday);
+  await pickLeaveDay(dialog, friday);
+  await pickLeaveDay(dialog, tuesday, true);
   await expect(dialog.getByRole('radio', { name: 'Half day', exact: true })).toBeDisabled();
   // Friday to Tuesday skips the weekend: three working days.
   await expect(dialog).toContainText('3 working days');
@@ -1094,7 +1116,7 @@ test('an admin gives every developer the same half day of leave in one step', as
   await dialog.getByRole('button', { name: 'Select all', exact: true }).click();
   const developers = createDemoData().members.filter(m => m.isActive && m.role === 'developer');
   await expect(dialog.getByRole('checkbox', { checked: true })).toHaveCount(developers.length);
-  await pickDateRange(page, dialog.getByRole('button', { name: /^Dates/ }), nextMonday, nextMonday);
+  await pickLeaveDay(dialog, nextMonday);
   await dialog.getByRole('radio', { name: 'Half day', exact: true }).click();
   await expect(dialog).toContainText(`${developers.length} developers’ hours at work`);
   await dialog.getByRole('button', { name: `Add leave for ${developers.length}`, exact: true }).click();
@@ -1408,7 +1430,7 @@ test('an admin creates a team and adds its members, who raise requests and see e
   expect(after.items.find(item => item.id === request.itemId)).toMatchObject({ type: 'bug', status: 'open', severity: 'critical', assigneeId: 'demo-arjun', estimateHours: 0 });
 });
 
-test('a teammate submits bulk leave and the admin approves it', async ({ page }) => {
+test('a teammate picks separate days of leave and the admin approves them', async ({ page }) => {
   await openDemo(page, 'approvals');
   const viewer = page.getByRole('combobox', { name: 'View the demo as', exact: true });
   await chooseOption(page, viewer, 'Aarav Mehta · Developer');
@@ -1416,26 +1438,64 @@ test('a teammate submits bulk leave and the admin approves it', async ({ page })
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: 'Request leave', exact: true })).toBeVisible();
   await expect(dialog.getByRole('checkbox')).toHaveCount(0);
-  const start = shiftDate(getWeekStart(new Date(), 'Asia/Kolkata'), 11, 'Asia/Kolkata');
-  const end = shiftDate(start, 4, 'Asia/Kolkata');
-  await pickDateRange(page, dialog.getByRole('button', { name: /^Dates/ }), start, end);
+  // Friday, then Monday and Tuesday of the week after. Each click adds one day, and the calendar stays open.
+  const friday = shiftDate(getWeekStart(new Date(), 'Asia/Kolkata'), 11, 'Asia/Kolkata');
+  const monday = shiftDate(friday, 3, 'Asia/Kolkata');
+  const tuesday = shiftDate(friday, 4, 'Asia/Kolkata');
+  const wednesday = shiftDate(friday, 5, 'Asia/Kolkata');
+  for (const day of [friday, monday, tuesday, wednesday]) await pickLeaveDay(dialog, day);
+  // A second click removes a day.
+  await pickLeaveDay(dialog, wednesday);
+  await expect(dialog.locator('.picked-days')).toContainText('3 days picked');
   await expect(dialog).toContainText('3 working days');
   await dialog.getByRole('textbox', { name: /^Note/ }).fill('Bulk leave approval test');
-  await dialog.getByRole('button', { name: 'Send for approval', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Request 3 working days', exact: true }).click();
   await expect(dialog).toBeHidden();
+  let data = await readDemoData(page);
+  expect(data.leaveRequests.find(r => r.note === 'Bulk leave approval test')?.dates).toEqual([friday, monday, tuesday]);
   let card = page.locator('.request-card').filter({ hasText: 'Bulk leave approval test' });
   await expect(card).toContainText('Waiting for approval');
   await expect(card.getByRole('button', { name: 'Approve', exact: true })).toHaveCount(0);
-  let data = await readDemoData(page);
-  expect(data.leaves.some(l => l.userId === 'demo-aarav' && l.date === start)).toBe(false);
+  expect(data.leaves.some(l => l.userId === 'demo-aarav' && l.date === friday)).toBe(false);
+
+  // Days that wait for approval cannot be picked again.
+  await page.locator('.page-actions').getByRole('button', { name: 'Request leave', exact: true }).click();
+  await expect(await leaveDay(dialog, friday)).toBeDisabled();
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+
   await chooseOption(page, viewer, 'Rohan Desai · Admin');
   await expect(page.getByRole('button', { name: /^Needs attention:/ })).toBeVisible();
   card = page.locator('.request-card').filter({ hasText: 'Bulk leave approval test' });
   await expect(card).toContainText('Aarav Mehta');
   await card.getByRole('button', { name: 'Approve', exact: true }).click();
-  await expect(card).toContainText('Approved');
+  // Approvals shows only what waits, so the approved request moves to the Leave page.
+  await expect(card).toHaveCount(0);
   data = await readDemoData(page);
-  expect(data.leaves.filter(l => l.userId === 'demo-aarav').map(l => l.date).sort()).toEqual([start, shiftDate(start, 3, 'Asia/Kolkata'), end]);
-  await chooseOption(page, viewer, 'Aarav Mehta · Developer');
+  expect(data.leaves.filter(l => l.userId === 'demo-aarav').map(l => l.date).sort()).toEqual([friday, monday, tuesday]);
+  await page.locator('[data-slot="sidebar"]').getByRole('link', { name: /^Leave/ }).click();
   await expect(page.locator('.request-card').filter({ hasText: 'Bulk leave approval test' })).toContainText('Approved');
+
+  // The developer sees the decision and the days on their Leave page.
+  await chooseOption(page, viewer, 'Aarav Mehta · Developer');
+  await expect(page.getByRole('heading', { level: 1, name: 'My leave' })).toBeVisible();
+  await expect(page.locator('.request-card').filter({ hasText: 'Bulk leave approval test' })).toContainText('Approved');
+  await expect(page.locator('.availability-row').filter({ hasText: 'Bulk leave approval test' })).toContainText('3 days');
+});
+
+test('a developer requests leave from a day on the leave calendar', async ({ page }) => {
+  await openDemo(page, 'leave');
+  await chooseOption(page, page.getByRole('combobox', { name: 'View the demo as', exact: true }), 'Aarav Mehta · Developer');
+  const days = page.locator('td.leave-day');
+  const index = await days.evaluateAll(cells => cells.findIndex(cell => !!cell.querySelector('button.leave-day-number')));
+  expect(index).toBeGreaterThanOrEqual(0);
+  const cell = days.nth(index);
+  const label = await cell.locator('button.leave-day-number').getAttribute('aria-label');
+  await cell.locator('button.leave-day-number').click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.locator('.picked-days')).toContainText('1 day picked');
+  await dialog.getByRole('button', { name: /^Request 1 working day/ }).click();
+  await expect(dialog).toBeHidden();
+  // The day now shows as waiting, and can no longer be picked.
+  await expect(cell.locator('.leave-mark-waiting')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: label ?? '', exact: true })).toHaveCount(0);
 });

@@ -58,6 +58,28 @@ export const settingsSchema = z.object({
   if (value.workdayEnd <= value.workdayStart) ctx.addIssue({ code: "custom", message: "Office end time must be after start time." });
   if (value.bandOnTarget <= value.bandBelowTarget) ctx.addIssue({ code: "custom", message: "On target must be above the lower score band." });
 });
+/**
+ * The days of a leave request: each day picked on the calendar (`dates`), or a first and last day (`date` and `endDate`).
+ * Older pages send the range, so the server accepts both.
+ */
+const leaveDays = {
+  dates: z.array(date).min(1, "Pick at least one day.").max(62, "Pick up to 62 days at a time.").optional(),
+  date: date.optional(), endDate: date.optional(),
+  type: dayLength, note: z.string().trim().max(2000).optional(),
+};
+function leaveRules(leave: { dates?: string[]; date?: string; endDate?: string; type: string }, context: z.RefinementCtx) {
+  const fail = (message: string) => context.addIssue({ code: "custom", message });
+  if (leave.dates) {
+    if (leave.date || leave.endDate) fail("Send the picked days or a range, not both.");
+    if (new Set(leave.dates).size !== leave.dates.length) fail("Pick each day once.");
+    if (leave.dates.length > 1 && leave.type !== "full_day") fail("A half day covers one date only.");
+    return;
+  }
+  if (!leave.date) return fail("Pick at least one day.");
+  if (leave.endDate && leave.endDate < leave.date) fail("The last day must be on or after the first day.");
+  if (leave.endDate && leave.endDate !== leave.date && leave.type !== "full_day") fail("A half day covers one date only.");
+}
+
 export const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("createItem"), type: z.enum(["task", "bug"]), ...itemFields }).strict(),
   // The same ticket for several developers. With doneOn, it records an event they already attended as finished work.
@@ -78,15 +100,11 @@ export const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("createPhase"), projectId: uuid, name: phaseName, description: phaseDescription.optional() }).strict(),
   z.object({ action: z.literal("updatePhase"), id: uuid, name: phaseName.optional(), description: phaseDescription.optional() }).strict(),
   z.object({ action: z.literal("saveSettings"), settings: settingsSchema }).strict(),
-  z.object({ action: z.literal("requestLeave"), date, endDate: date.optional(), type: dayLength, note: z.string().trim().max(2000).optional() }).strict()
-    .refine(r => !r.endDate || r.endDate >= r.date, "The last day must be on or after the first day.")
-    .refine(r => !r.endDate || r.endDate === r.date || r.type === "full_day", "A half day covers one date only."),
+  z.object({ action: z.literal("requestLeave"), ...leaveDays }).strict().superRefine(leaveRules),
   z.object({ action: z.literal("approveLeaveRequest"), id: uuid }).strict(),
   z.object({ action: z.literal("declineLeaveRequest"), id: uuid, reason: reason.min(1, "Enter a reason.") }).strict(),
   z.object({ action: z.literal("withdrawLeaveRequest"), id: uuid }).strict(),
-  z.object({ action: z.literal("addLeave"), userIds: developerIds, date, endDate: date.optional(), type: dayLength, note: z.string().trim().max(2000).optional() }).strict()
-    .refine((leave) => !leave.endDate || leave.endDate >= leave.date, "The last day of leave must be on or after the first day.")
-    .refine((leave) => !leave.endDate || leave.endDate === leave.date || leave.type === "full_day", "A half day covers one date only."),
+  z.object({ action: z.literal("addLeave"), userIds: developerIds, ...leaveDays }).strict().superRefine(leaveRules),
   z.object({ action: z.literal("addHoliday"), date, name: shortText, type: dayLength.default("full_day") }).strict(),
   z.object({ action: z.literal("deleteLeave"), ids: z.array(uuid).min(1).max(62) }).strict(),
   z.object({ action: z.literal("deleteHoliday"), id: uuid }).strict(),

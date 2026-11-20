@@ -3,7 +3,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
-import { Briefcase, Bug, CalendarPlus, ClipboardCheck, Coffee, CornerDownLeft, FolderKanban, FolderPlus, Inbox, LayoutDashboard, ListTodo, Moon, Plus, Settings2, Sun, UserPlus, UserRound, Users, UsersRound } from 'lucide-react';
+import { Briefcase, Bug, CalendarDays, CalendarPlus, ClipboardCheck, Coffee, CornerDownLeft, FolderKanban, FolderPlus, Inbox, LayoutDashboard, ListTodo, Moon, Plus, Settings2, Sun, UserPlus, UserRound, Users, UsersRound } from 'lucide-react';
 import type { DashboardData, WorkItem } from '@/lib/types';
 import { Avatar, Kbd, StatusIcon } from '@/components/ui';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator, CommandShortcut } from '@/components/ui/command';
@@ -64,6 +64,7 @@ export function CommandPalette({ data, open, onOpenChange, onOpenItem, onOpenPro
     { id: 'tickets', label: admin ? 'Tickets' : 'My tickets', icon: <ListTodo /> },
     { id: 'bugs', label: admin ? 'Bugs' : 'My bugs', icon: <Bug /> },
     { id: 'approvals', label: 'Approvals', icon: <ClipboardCheck /> },
+    { id: 'leave', label: admin ? 'Leave' : 'My leave', icon: <CalendarDays /> },
     { id: 'requests', label: 'Requests from other teams', icon: <Inbox />, admin: true },
     { id: 'standup', label: 'Daily standup', icon: <Coffee />, admin: true },
     { id: 'team', label: 'Team', icon: <Users />, admin: true },
