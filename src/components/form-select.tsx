@@ -191,7 +191,47 @@ export function FormDateRange({ start, end, min, max, onValueChange, disabled, c
   </Popover>;
 }
 
-export type FormCheckboxProps = Pick<InputHTMLAttributes<HTMLInputElement>, "id" | "name" | "checked" | "defaultChecked" | "required" | "disabled" | "className" | "form" | "aria-label" | "aria-labelledby" | "aria-describedby" | "aria-invalid"> & {
+export type FormDaysProps = Pick<InputHTMLAttributes<HTMLDivElement>, "id" | "className" | "aria-labelledby" | "aria-describedby"> & {
+  /** The picked days, `YYYY-MM-DD`, in order. */
+  value: string[];
+  onValueChange: (days: string[]) => void;
+  /** True for a day that cannot be picked, such as a weekend or a day already on leave. */
+  isDisabled?: (day: string) => boolean;
+  /** The days from one pick to the next, for Shift and click. Without it, Shift does nothing special. */
+  daysBetween?: (from: string, to: string) => string[];
+  /** Named day styles. A day that matches gets the class `day-<name>`. */
+  marks?: Record<string, (day: string) => boolean>;
+  /** The month to show first, `YYYY-MM-DD`, when nothing is picked. */
+  defaultMonth?: string;
+};
+
+/**
+ * A calendar that stays open and picks several separate days. Each click adds or removes one day.
+ * Shift and click adds every open day since the last pick.
+ */
+export function FormDays({ value, onValueChange, isDisabled, daysBetween, marks = {}, defaultMonth, className, ...rootProps }: FormDaysProps) {
+  const lastPick = useRef<string | null>(null);
+  const picked = value.map(toDate).filter((date): date is Date => !!date);
+  function pick(date: Date, shift: boolean) {
+    const day = toKey(date);
+    const next = new Set(value);
+    if (shift && lastPick.current && daysBetween) daysBetween(lastPick.current, day).filter(d => !isDisabled?.(d)).forEach(d => next.add(d));
+    else if (next.has(day)) next.delete(day);
+    else next.add(day);
+    lastPick.current = day;
+    onValueChange([...next].sort());
+  }
+  const names = Object.keys(marks);
+  return <div {...rootProps} role="group" className={cn("form-days", className)}>
+    <Calendar mode="multiple" selected={picked} defaultMonth={picked[0] ?? toDate(defaultMonth)} weekStartsOn={1} fixedWeeks
+      disabled={date => isDisabled?.(toKey(date)) ?? false}
+      modifiers={Object.fromEntries(names.map(name => [name, (date: Date) => marks[name](toKey(date))]))}
+      modifiersClassNames={Object.fromEntries(names.map(name => [name, `day-${name}`]))}
+      onSelect={(_, date, __, event) => pick(date, event.shiftKey)} />
+  </div>;
+}
+
+export type FormCheckboxProps =Pick<InputHTMLAttributes<HTMLInputElement>, "id" | "name" | "checked" | "defaultChecked" | "required" | "disabled" | "className" | "form" | "aria-label" | "aria-labelledby" | "aria-describedby" | "aria-invalid"> & {
   value?: string;
   onCheckedChange?: (checked: boolean) => void;
 };

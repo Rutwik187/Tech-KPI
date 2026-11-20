@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { AlertTriangle, ArrowUpRight, Bug, CalendarClock, CalendarDays, Check, CheckCheck, Clock3, Inbox, ListTodo, MessageSquareText, Plus, X } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, Bug, CalendarClock, CalendarDays, Check, CheckCheck, Clock3, Inbox, ListTodo, MessageSquareText, Pencil, Plus, X } from 'lucide-react';
 import type { DashboardData, DueDateRequest, TicketRequest, WorkItem } from '@/lib/types';
 import { dateKey } from '@/lib/kpi';
 import { Avatar, EmptyState, FormDate, FormField, FormSelect, Modal, Panel, PriorityBadge } from '@/components/ui';
@@ -41,8 +41,21 @@ function AdminApprovals({ data, onOpen, onAction, mutate, busy }: ApprovalsProps
   const pending = data.requests.filter(r => r.status === 'pending').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const reviewed = data.requests.filter(r => r.status !== 'pending').sort((a, b) => (b.reviewedAt ?? '').localeCompare(a.reviewedAt ?? '')).slice(0, 6);
   const finished = finishedWork(data);
+  /** Approves the request as the developer asked. Edit opens the form to change it first. */
+  function approveRequest(request: TicketRequest) {
+    const person = findMember(data, request.requesterId);
+    // Every ticket has a date. A request without one gets the day it was asked, as the form would.
+    const patch = request.dueDate ? undefined : { dueDate: dateKey(request.createdAt, data.settings.timezone) };
+    void mutate({ action: 'approveTicketRequest', id: request.id, ...(patch ? { patch } : {}) }, `Approved. ${person ? firstName(person) : 'The developer'} has a new ticket.`);
+  }
+  /** Approves the hours as asked. Edit opens the form to approve a different number of hours. */
+  function approveExtension(request: DueDateRequest) {
+    const item = data.items.find(i => i.id === request.itemId);
+    const preview = item ? ticketExtension(data, item, request.hours) : null;
+    void mutate({ action: 'approveDueDateRequest', id: request.id }, `Approved +${request.hours} h.${preview?.dueDate ? ` ${item?.key ?? 'The ticket'} is now dated ${displayDate(preview.dueDate)}.` : ''}`);
+  }
   return <>
-    <LeaveRequests data={data} mutate={mutate} busy={busy} />
+    <LeaveRequests data={data} mutate={mutate} busy={busy} pendingOnly />
     <div className="team-overview-strip approvals-strip">
       <div><span className="mini-metric-icon"><Inbox size={18} /></span><strong>{pending.length}</strong><span>ticket {pending.length === 1 ? 'request' : 'requests'}</span></div>
       <div><span className="mini-metric-icon"><CalendarClock size={18} /></span><strong>{extensions.length}</strong><span>{extensions.length === 1 ? 'ask' : 'asks'} for more hours</span></div>
@@ -51,21 +64,23 @@ function AdminApprovals({ data, onOpen, onAction, mutate, busy }: ApprovalsProps
     </div>
 
     <Panel title="Ticket requests" className="requests-panel">
-      <p className="panel-intro">Developers ask for these tickets. Check the estimate and the dates, then approve or decline. An approved request becomes the developer’s ticket.</p>
+      <p className="panel-intro">Developers ask for these tickets. Approve accepts the request as asked, and it becomes the developer’s ticket. To change the title, project, estimate, date, or priority first, choose Edit.</p>
       {pending.length
         ? <div className="request-list">{pending.map(request => <RequestCard key={request.id} data={data} request={request} actions={<>
             <Button variant="outline" size="sm" onClick={() => setDeclining(request)} disabled={busy}><X data-icon="inline-start" />Decline</Button>
-            <Button size="sm" onClick={() => setApproving(request)} disabled={busy}><Check data-icon="inline-start" />Approve</Button>
+            <Button variant="outline" size="sm" onClick={() => setApproving(request)} disabled={busy} aria-label={`Edit before approving: ${request.title}`}><Pencil data-icon="inline-start" />Edit</Button>
+            <Button size="sm" onClick={() => approveRequest(request)} disabled={busy}><Check data-icon="inline-start" />Approve</Button>
           </>} />)}</div>
         : <EmptyState title="No ticket requests" description="When a developer asks for a ticket, it waits here for you." />}
     </Panel>
 
     <Panel title="More hours on tickets">
-      <p className="panel-intro">Developers ask for extra hours on a ticket. Approving adds the hours to the estimate, moves the date by them, and keeps the reason in the ticket’s history.</p>
+      <p className="panel-intro">Developers ask for extra hours on a ticket. Approving adds the hours to the estimate, moves the date by them, and keeps the reason in the ticket’s history. To approve a different number of hours, choose Edit.</p>
       {extensions.length
         ? <div className="request-list">{extensions.map(request => <ExtensionCard key={request.id} data={data} request={request} onOpen={onOpen} actions={<>
             <Button variant="outline" size="sm" onClick={() => setDecliningExtension(request)} disabled={busy}><X data-icon="inline-start" />Decline</Button>
-            <Button size="sm" onClick={() => setApprovingExtension(request)} disabled={busy}><Check data-icon="inline-start" />Approve</Button>
+            <Button variant="outline" size="sm" onClick={() => setApprovingExtension(request)} disabled={busy} aria-label="Edit the hours before approving"><Pencil data-icon="inline-start" />Edit</Button>
+            <Button size="sm" onClick={() => approveExtension(request)} disabled={busy}><Check data-icon="inline-start" />Approve</Button>
           </>} />)}</div>
         : <EmptyState title="No extensions to review" description="When a developer asks for more hours on a ticket, it waits here for you." />}
     </Panel>
@@ -97,7 +112,7 @@ function DeveloperApprovals({ data, onOpen, onAction, onRequest, mutate, busy }:
   const extensions = [...data.dueDateRequests].sort((a, b) => order[a.status] - order[b.status] || b.createdAt.localeCompare(a.createdAt)).slice(0, 8);
   const finished = finishedWork(data);
   return <>
-    <LeaveRequests data={data} mutate={mutate} busy={busy} />
+    <LeaveRequests data={data} mutate={mutate} busy={busy} pendingOnly />
     <Panel title="Your ticket requests" action={mine.length > 0 && <Button variant="link" size="sm" onClick={onRequest}><Plus data-icon="inline-start" />Request ticket</Button>}>
       {mine.length
         ? <div className="request-list">{mine.map(request => <RequestCard key={request.id} data={data} request={request} mine actions={
@@ -209,7 +224,7 @@ function ApproveExtensionForm({ data, request, mutate, busy, onClose }: { data: 
       `Approved +${granted} h.${preview?.dueDate ? ` ${item?.key ?? 'The ticket'} is now dated ${displayDate(preview.dueDate)}.` : ''}`);
     if (ok) onClose();
   }
-  return <Modal title="Approve more hours" subtitle={item ? `${item.key} · ${item.title}` : undefined} onClose={onClose}>
+  return <Modal title="Edit and approve more hours" subtitle={item ? `${item.key} · ${item.title}` : undefined} onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
         <div className="request-context">
@@ -279,7 +294,7 @@ function ApproveRequestForm({ data, request, mutate, busy, onClose }: { data: Da
       `Approved. ${person ? firstName(person) : 'The developer'} has a new ticket.`);
     if (ok) onClose();
   }
-  return <Modal title="Approve ticket request" subtitle={`${person?.name ?? 'A developer'} asked for this ticket. Adjust anything before you approve.`} onClose={onClose}>
+  return <Modal title="Edit and approve ticket request" subtitle={`${person?.name ?? 'A developer'} asked for this ticket. Change anything, then approve.`} onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
         <FormField>Title<Input name="title" required minLength={3} maxLength={200} defaultValue={request.title} /></FormField>

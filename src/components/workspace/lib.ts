@@ -206,13 +206,48 @@ export function groupLeaves(data: DashboardData, leaves: Leave[]): LeaveGroup[] 
   }
   return groups;
 }
-/** The working days a leave request covers. Mirrors the server, which skips weekends and holidays in a range. */
-export function leaveDays(data: DashboardData, start: string, end: string) {
-  if (!start || !end || end < start) return [];
+/** The working days among the picked days, in order. Mirrors the server: weekends and holidays are skipped, and one picked day is kept as it is. */
+export function leaveDays(data: DashboardData, picked: string[]) {
+  const days = [...new Set(picked)].sort();
+  if (days.length <= 1) return days;
+  const calendar = getWorkCalendar(data);
+  return days.filter(date => isWorkingDay(date, calendar));
+}
+/** Days in runs, so "13, 16, 17, 18 Nov" reads "Fri 13 Nov, 16 Nov – 18 Nov". Weekends and holidays between two days do not break a run. */
+export function dayRuns(data: DashboardData, days: string[]) {
+  const calendar = getWorkCalendar(data);
+  const runs: { start: string; end: string; days: number }[] = [];
+  for (const day of [...new Set(days)].sort()) {
+    const last = runs.at(-1);
+    let joined = false;
+    if (last) {
+      let date = shiftDate(last.end, 1, data.settings.timezone);
+      for (let guard = 0; date < day && guard < 10 && !isWorkingDay(date, calendar); guard++) date = shiftDate(date, 1, data.settings.timezone);
+      joined = date === day;
+    }
+    if (last && joined) { last.end = day; last.days++; } else runs.push({ start: day, end: day, days: 1 });
+  }
+  return runs;
+}
+export function displayDays(data: DashboardData, days: string[]) {
+  return dayRuns(data, days).map(run => displayRange(run.start, run.end)).join(', ');
+}
+/** Checks picked days like the server does, then returns the working days among them. */
+function pickedLeaveDays(data: DashboardData, picked: string[], type: Leave['type']) {
+  if (!picked.length) throw new Error('Pick at least one day.');
+  if (picked.length > 62) throw new Error('Pick up to 62 days at a time.');
+  if (type === 'half_day' && picked.length > 1) throw new Error('A half day covers one date only.');
+  const days = leaveDays(data, picked);
+  if (!days.length) throw new Error('These dates are weekends or holidays. No leave is needed.');
+  return days;
+}
+/** Every working day from `start` to `end`, for filling in a run of days at once. */
+export function workingDaysBetween(data: DashboardData, start: string, end: string) {
+  const [first, last] = start <= end ? [start, end] : [end, start];
   const calendar = getWorkCalendar(data);
   const days: string[] = [];
-  for (let date = start, guard = 0; date <= end && guard < 62; date = shiftDate(date, 1, data.settings.timezone), guard++) {
-    if (start === end || isWorkingDay(date, calendar)) days.push(date);
+  for (let date = first, guard = 0; date <= last && guard < 62; date = shiftDate(date, 1, data.settings.timezone), guard++) {
+    if (isWorkingDay(date, calendar)) days.push(date);
   }
   return days;
 }
@@ -246,11 +281,11 @@ export type Mutation =
   | { action: 'createPhase'; projectId: string; name: string; description: string }
   | { action: 'updatePhase'; id: string; name?: string; description?: string }
   | { action: 'saveSettings'; settings: Settings }
-  | { action: 'requestLeave'; date: string; endDate?: string; type: Leave['type']; note: string }
+  | { action: 'requestLeave'; dates: string[]; type: Leave['type']; note: string }
   | { action: 'approveLeaveRequest'; id: string }
   | { action: 'declineLeaveRequest'; id: string; reason: string }
   | { action: 'withdrawLeaveRequest'; id: string }
-  | ({ action: 'addLeave'; userIds: string[]; endDate?: string } & Omit<Leave, 'id' | 'userId'>)
+  | ({ action: 'addLeave'; userIds: string[]; dates: string[] } & Omit<Leave, 'id' | 'userId' | 'date'>)
   | ({ action: 'addHoliday' } & Omit<Holiday, 'id'>)
   | { action: 'deleteLeave'; ids: string[] }
   | { action: 'deleteHoliday'; id: string }
@@ -269,7 +304,7 @@ export type ModalState =
   | { type: 'member'; member?: Member; role?: Member['role']; departmentId?: string }
   | { type: 'department'; department?: Department }
   | { type: 'project'; project?: Project }
-  | { type: 'leave'; userId?: string }
+  | { type: 'leave'; userId?: string; days?: string[] }
   | { type: 'holiday' }
   | { type: 'teamTicket' }
   | { type: 'extend'; target: ExtendTarget }
@@ -474,10 +509,8 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       break;
     case 'requestLeave': {
       if (actor.role !== 'developer' || !actor.isActive) throw new Error('Only active developers can request leave.');
-      if (mutation.endDate && (mutation.endDate < mutation.date || mutation.endDate > shiftDate(mutation.date, 61, next.settings.timezone))) throw new Error('Choose a range of up to two months.');
-      if (mutation.type === 'half_day' && mutation.endDate && mutation.endDate !== mutation.date) throw new Error('A half day covers one date only.');
       const taken = new Set([...next.leaves.filter(l => l.userId === actor.id).map(l => l.date), ...(next.leaveRequests ?? []).filter(r => r.requesterId === actor.id && r.status === 'pending').flatMap(r => r.dates)]);
-      const dates = leaveDays(next, mutation.date, mutation.endDate ?? mutation.date).filter(d => !taken.has(d));
+      const dates = pickedLeaveDays(next, mutation.dates, mutation.type).filter(d => !taken.has(d));
       if (!dates.length) throw new Error('Leave is already recorded or waiting for approval for these days.');
       (next.leaveRequests ??= []).unshift({ id, requesterId: actor.id, dates, type: mutation.type, note: mutation.note, status: 'pending', reviewedById: null, reviewedAt: null, reviewNote: null, createdAt: now });
       log(id, 'leave.requested', { dates, type: mutation.type });
@@ -504,7 +537,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       break;
     }
     case 'addLeave': {
-      const days = leaveDays(next, mutation.date, mutation.endDate ?? mutation.date);
+      const days = pickedLeaveDays(next, mutation.dates, mutation.type);
       // Days someone already has leave on are skipped, so one form can cover a whole team.
       const fresh = mutation.userIds.flatMap(userId => {
         const taken = new Set(next.leaves.filter(l => l.userId === userId).map(l => l.date));

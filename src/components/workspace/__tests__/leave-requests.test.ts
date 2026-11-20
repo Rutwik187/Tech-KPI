@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { createDemoData } from '@/lib/demo';
 import { calculateMemberKpi } from '@/lib/kpi';
 import { actionSchema } from '@/server/validation';
-import { mutateDemo, viewAs } from '../lib';
+import { displayDays, mutateDemo, viewAs, workingDaysBetween } from '../lib';
 
 const fixture = () => createDemoData(new Date('2026-11-04T12:00:00+05:30'));
-const ask = { action: 'requestLeave', date: '2026-11-06', endDate: '2026-11-10', type: 'full_day', note: 'Family trip' } as const;
+// Friday 6 to Tuesday 10 November 2026, picked day by day. Saturday and Sunday are picked too, and are skipped.
+const ask = { action: 'requestLeave' as const, dates: ['2026-11-06', '2026-11-07', '2026-11-08', '2026-11-09', '2026-11-10'], type: 'full_day' as const, note: 'Family trip' };
 
 describe('leave requests', () => {
   it('keeps bulk leave pending without changing capacity, then records only working days on approval', () => {
@@ -50,8 +51,16 @@ describe('leave requests', () => {
   it('validates dates, half days, and ownership at the API boundary', () => {
     expect(actionSchema.safeParse(ask).success).toBe(true);
     expect(actionSchema.safeParse({ ...ask, type: 'half_day' }).success).toBe(false);
-    expect(actionSchema.safeParse({ ...ask, date: '2026-02-30' }).success).toBe(false);
-    expect(actionSchema.safeParse({ ...ask, endDate: '2026-01-01' }).success).toBe(false);
+    expect(actionSchema.safeParse({ ...ask, dates: ['2026-02-30'] }).success).toBe(false);
+    expect(actionSchema.safeParse({ ...ask, dates: [] }).success).toBe(false);
+    expect(actionSchema.safeParse({ ...ask, dates: ['2026-11-06', '2026-11-06'] }).success).toBe(false);
+    expect(actionSchema.safeParse({ ...ask, date: '2026-11-06' }).success).toBe(false);
+    // Pages loaded before this change send a first and last day. The server still accepts them.
+    const range = { action: 'requestLeave', date: '2026-11-06', endDate: '2026-11-10', type: 'full_day' };
+    expect(actionSchema.safeParse(range).success).toBe(true);
+    expect(actionSchema.safeParse({ ...range, endDate: '2026-01-01' }).success).toBe(false);
+    expect(actionSchema.safeParse({ ...range, type: 'half_day' }).success).toBe(false);
+    expect(actionSchema.safeParse({ action: 'requestLeave', type: 'full_day' }).success).toBe(false);
     expect(actionSchema.safeParse({ ...ask, userIds: ['someone-else'] }).success).toBe(false);
     expect(actionSchema.safeParse({ action: 'declineLeaveRequest', id: crypto.randomUUID(), reason: ' ' }).success).toBe(false);
   });
@@ -59,12 +68,40 @@ describe('leave requests', () => {
   it('approves half days and skips dates already entered by the admin', () => {
     const data = fixture();
     const developer = data.members.find(m => m.role === 'developer')!;
-    let next = mutateDemo(data, { ...ask, endDate: undefined, type: 'half_day' }, developer);
+    let next = mutateDemo(data, { ...ask, dates: ['2026-11-06'], type: 'half_day' }, developer);
     next = mutateDemo(next, { action: 'approveLeaveRequest', id: next.leaveRequests[0].id }, data.currentUser);
-    expect(next.leaves.find(l => l.userId === developer.id && l.date === ask.date)?.type).toBe('half_day');
+    expect(next.leaves.find(l => l.userId === developer.id && l.date === '2026-11-06')?.type).toBe('half_day');
     const pending = mutateDemo(data, ask, developer);
-    const withRecorded = mutateDemo(pending, { action: 'addLeave', userIds: [developer.id], date: ask.date, type: 'full_day', note: '' }, data.currentUser);
+    const withRecorded = mutateDemo(pending, { action: 'addLeave', userIds: [developer.id], dates: ['2026-11-06'], type: 'full_day', note: '' }, data.currentUser);
     const approved = mutateDemo(withRecorded, { action: 'approveLeaveRequest', id: pending.leaveRequests[0].id }, data.currentUser);
-    expect(approved.leaves.filter(l => l.userId === developer.id && l.date === ask.date)).toHaveLength(1);
+    expect(approved.leaves.filter(l => l.userId === developer.id && l.date === '2026-11-06')).toHaveLength(1);
+  });
+
+  it('records separate days, not only a range, and shows them as short runs', () => {
+    const data = fixture();
+    const developer = data.members.find(m => m.role === 'developer')!;
+    // Friday 13 and Monday 16 to Wednesday 18 November. Thursday and the next Friday are not picked.
+    const dates = ['2026-11-13', '2026-11-16', '2026-11-17', '2026-11-18', '2026-11-20'];
+    const pending = mutateDemo(data, { action: 'requestLeave', dates, type: 'full_day', note: '' }, developer);
+    expect(pending.leaveRequests[0].dates).toEqual(dates);
+    expect(displayDays(pending, dates)).toBe('13 Nov – 18 Nov, Fri 20 Nov');
+    const approved = mutateDemo(pending, { action: 'approveLeaveRequest', id: pending.leaveRequests[0].id }, data.currentUser);
+    expect(approved.leaves.filter(l => l.userId === developer.id && l.date >= '2026-11-13').map(l => l.date).sort()).toEqual(dates);
+  });
+
+  it('keeps days already waiting out of a new request, and refuses a half day over several days', () => {
+    const data = fixture();
+    const developer = data.members.find(m => m.role === 'developer')!;
+    const first = mutateDemo(data, { action: 'requestLeave', dates: ['2026-11-16'], type: 'full_day', note: '' }, developer);
+    const second = mutateDemo(first, { action: 'requestLeave', dates: ['2026-11-13', '2026-11-16'], type: 'full_day', note: '' }, developer);
+    expect(second.leaveRequests[0].dates).toEqual(['2026-11-13']);
+    expect(() => mutateDemo(data, { action: 'requestLeave', dates: ['2026-11-13', '2026-11-16'], type: 'half_day', note: '' }, developer)).toThrow('half day');
+    expect(() => mutateDemo(data, { action: 'requestLeave', dates: ['2026-11-14', '2026-11-15'], type: 'full_day', note: '' }, developer)).toThrow('weekends or holidays');
+  });
+
+  it('fills a run of working days for Shift and click, in either direction', () => {
+    const data = fixture();
+    expect(workingDaysBetween(data, '2026-11-13', '2026-11-17')).toEqual(['2026-11-13', '2026-11-16', '2026-11-17']);
+    expect(workingDaysBetween(data, '2026-11-17', '2026-11-13')).toEqual(['2026-11-13', '2026-11-16', '2026-11-17']);
   });
 });

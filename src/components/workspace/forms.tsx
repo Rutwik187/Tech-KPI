@@ -6,8 +6,8 @@ import { toast } from 'sonner';
 import { Activity as ActivityIcon, Bug, CalendarClock, CalendarPlus, Check, ChevronDown, CircleHelp, Clock3, FileText, ListTodo, LoaderCircle, Plus, ShieldCheck, Star, X } from 'lucide-react';
 import type { DashboardData, Holiday, Leave, Member, Phase, Project, WorkItem } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
-import { addWorkingHours, getWeekStart, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
-import { Avatar, FormCheckbox, FormDate, FormDateRange, FormField, FormSelect, Modal } from '@/components/ui';
+import { addWorkingHours, getWeekStart, getWorkCalendar, isWorkingDay } from '@/lib/kpi';
+import { Avatar, FormCheckbox, FormDate, FormDays, FormField, FormSelect, Modal } from '@/components/ui';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,7 @@ import { FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { activeDepartments, displayDate, displayDateTime, ESTIMATE_PRESETS, findDepartment, findProject, hours, isAdhocProject, isDone, leaveDays, MAX_TICKET_HOURS, ownerChoices, ownerHomeProject, projectMembers, projectPhases, selectableProjects, techMembers, today, withOwner, withProject, WORKDAY_HOURS, type MutationFn, type PickedByHand, type PhaseDraft, type QuickAction, type WorkClassification } from './lib';
+import { activeDepartments, displayDate, displayDateTime, displayDays, ESTIMATE_PRESETS, findDepartment, findProject, hours, isAdhocProject, isDone, leaveDays, MAX_TICKET_HOURS, ownerChoices, ownerHomeProject, projectMembers, projectPhases, selectableProjects, techMembers, today, withOwner, withProject, workingDaysBetween, WORKDAY_HOURS, type MutationFn, type PickedByHand, type PhaseDraft, type QuickAction, type WorkClassification } from './lib';
 
 export function FormChoice({ name, value, defaultValue, onValueChange, options, disabled, id, 'aria-labelledby': labelledBy, 'aria-describedby': describedBy }: { name?: string; value?: string; defaultValue?: string; onValueChange?: (value: string) => void; options: { value: string; label: string; disabled?: boolean }[]; disabled?: boolean; id?: string; 'aria-labelledby'?: string; 'aria-describedby'?: string }) {
   const [localValue, setLocalValue] = useState(defaultValue ?? options[0]?.value ?? '');
@@ -327,32 +327,37 @@ export function ProjectForm({ data, editing, mutate, onClose, onExtend, busy }: 
   </Modal>;
 }
 
-export function LeaveForm({ data, userId, mutate, onClose, busy }: { data: DashboardData; userId?: string; mutate: MutationFn; onClose: () => void; busy: boolean }) {
+/** Who has leave on which day: recorded leave, and for a developer, their requests still waiting. */
+export function leaveTaken(data: DashboardData, userId: string) {
+  const recorded = new Set(data.leaves.filter(l => l.userId === userId).map(l => l.date));
+  const waiting = new Set((data.leaveRequests ?? []).filter(r => r.requesterId === userId && r.status === 'pending').flatMap(r => r.dates));
+  return { recorded, waiting };
+}
+
+export function LeaveForm({ data, userId, initialDays = [], mutate, onClose, busy }: { data: DashboardData; userId?: string; initialDays?: string[]; mutate: MutationFn; onClose: () => void; busy: boolean }) {
   const requesting = data.currentUser.role === 'developer';
   // Leave lowers tracked hours, and only developers are tracked.
   const people = data.members.filter(m => m.isActive && m.role === 'developer');
-  const day = today(data.settings.timezone);
+  const calendar = getWorkCalendar(data);
   const [personIds, setPersonIds] = useState<string[]>(requesting ? [data.currentUser.id] : userId ? [userId] : []);
   const [length, setLength] = useState<Leave['type']>('full_day');
-  const [start, setStart] = useState(day);
-  const [end, setEnd] = useState(day);
-  const oneDay = start === end;
-  // The server records up to two months of leave at a time.
-  const tooLong = end > shiftDate(start, 61, data.settings.timezone);
+  const [picked, setPicked] = useState<string[]>(initialDays);
   const chosen = people.filter(m => personIds.includes(m.id));
-  const days = tooLong ? [] : leaveDays(data, start, end);
+  // One person's leave and waiting requests cannot be picked again. With several people, those days are only marked.
+  const taken = chosen.map(person => ({ person, ...leaveTaken(data, person.id) }));
+  const single = taken.length === 1 ? taken[0] : null;
+  const oneDay = picked.length === 1;
+  const days = leaveDays(data, picked);
   const workingDays = new Set(data.settings.workingDays).size || 1;
-  const singleOffDay = oneDay && !isWorkingDay(start, getWorkCalendar(data));
-  function chooseDates(first: string, last: string) {
-    setStart(first);
-    setEnd(last);
+  const singleOffDay = oneDay && !isWorkingDay(picked[0], calendar);
+  function choose(next: string[]) {
+    setPicked(next);
     // A half day covers one date only.
-    if (first !== last) setLength('full_day');
+    if (next.length !== 1) setLength('full_day');
   }
   // Each person loses only the days they do not already have leave on.
-  const effects = chosen.map(person => {
-    const taken = new Set(data.leaves.filter(l => l.userId === person.id).map(l => l.date).concat(requesting ? (data.leaveRequests ?? []).filter(r => r.requesterId === person.id && r.status === 'pending').flatMap(r => r.dates) : []));
-    const fresh = days.filter(date => !taken.has(date));
+  const effects = taken.map(({ person, recorded, waiting }) => {
+    const fresh = days.filter(date => !recorded.has(date) && !(requesting && waiting.has(date)));
     return { fresh: fresh.length, lost: singleOffDay ? 0 : person.capacity / workingDays * fresh.length * (length === 'half_day' ? .5 : 1) };
   });
   const freshDays = effects.reduce((sum, effect) => sum + effect.fresh, 0);
@@ -362,27 +367,44 @@ export function LeaveForm({ data, userId, mutate, onClose, busy }: { data: Dashb
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const note = String(new FormData(event.currentTarget).get('note') ?? '').trim();
-    const ok = await mutate({ ...(requesting ? { action: 'requestLeave' as const } : { action: 'addLeave' as const, userIds: personIds }), date: start, ...(oneDay ? {} : { endDate: end }), type: length, note },
-      requesting ? 'Leave request sent for admin approval.' : chosen.length > 1 ? `Leave added for ${chosen.length} developers. Hours at work updated.` : 'Leave added. Hours at work updated.');
+    const ok = await mutate({ ...(requesting ? { action: 'requestLeave' as const } : { action: 'addLeave' as const, userIds: personIds }), dates: picked, type: length, note },
+      requesting ? `Leave request for ${days.length} day${days.length === 1 ? '' : 's'} sent for admin approval.` : chosen.length > 1 ? `Leave added for ${chosen.length} developers. Hours at work updated.` : 'Leave added. Hours at work updated.');
     if (ok) onClose();
   }
-  return <Modal title={requesting ? "Request leave" : "Add leave"} subtitle={requesting ? "Request one date or a range of days. Your admin approves it before your hours at work change." : "Leave lowers hours at work for that week, so the score stays fair. Pick several people for a team day off."} onClose={onClose}>
+  const daysLabel = length === 'half_day' ? 'Half a day' : `${days.length} working day${days.length === 1 ? '' : 's'}`;
+  return <Modal title={requesting ? 'Request leave' : 'Add leave'} subtitle={requesting ? 'Pick every day you need off. Your admin approves it before your hours at work change.' : 'Leave lowers hours at work for that week, so the score stays fair. Pick several people for a team day off.'} onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
         {!requesting && <DeveloperPicker people={people} value={personIds} onChange={setPersonIds} disabled={busy} />}
-        <FormField>Dates<FormDateRange start={start} end={end} onValueChange={chooseDates} /></FormField>
+        <FormField>Days off
+          <FormDays value={picked} onValueChange={choose} defaultMonth={today(data.settings.timezone)}
+            daysBetween={(from, to) => workingDaysBetween(data, from, to)}
+            isDisabled={day => !isWorkingDay(day, calendar) || !!single && (single.recorded.has(day) || single.waiting.has(day))}
+            marks={{ leave: day => taken.some(t => t.recorded.has(day)), waiting: day => taken.some(t => t.waiting.has(day)) }} />
+          <span className="field-help">Click each day you need. Click a day again to remove it. To pick a run of days, click the first day, then hold Shift and click the last day.</span>
+        </FormField>
+        <div className="leave-legend" aria-hidden="true">
+          <span><i className="legend-picked" />Picked</span>
+          {taken.length > 0 && <><span><i className="legend-leave" />{single ? 'Already on leave' : 'Someone is on leave'}</span><span><i className="legend-waiting" />Waiting for approval</span></>}
+          <span><i className="legend-off" />Weekend or holiday</span>
+        </div>
+        {picked.length > 0 && <div className="picked-days">
+          <strong>{picked.length === 1 ? '1 day picked' : `${picked.length} days picked`}</strong>
+          <span>{displayDays(data, picked)}</span>
+          <Button type="button" variant="link" size="sm" onClick={() => choose([])}>Clear</Button>
+        </div>}
         <FormField>Length<FormChoice value={length} onValueChange={value => setLength(value as Leave['type'])} options={[{ value: 'full_day', label: 'Full day' }, { value: 'half_day', label: 'Half day', disabled: !oneDay }]} />
-          {!oneDay && <span className="field-help">A half day covers one date only.</span>}</FormField>
+          {picked.length > 1 && <span className="field-help">A half day covers one date only.</span>}</FormField>
         <Alert className="form-tip"><CircleHelp size={17} /><AlertDescription><p>{
-          tooLong ? 'Record up to two months of leave at a time.'
-          : !chosen.length ? 'Choose who is on leave.'
+          !chosen.length ? 'Choose who is on leave.'
+          : !picked.length ? 'Pick the days on the calendar.'
           : !days.length ? 'These dates are weekends or holidays. No leave is needed.'
           : freshDays === 0 ? 'Leave is already recorded or waiting for approval for these days.'
-          : `${length === 'half_day' ? 'Half a day' : `${days.length} working day${days.length === 1 ? '' : 's'}`}${oneDay ? ` on ${displayDate(start, { weekday: 'short' })}` : ` from ${displayDate(start)} to ${displayDate(end)}`}. ${requesting ? 'After approval, lowers' : 'Lowers'} ${whose} hours at work by ${hours(lostHours)} h${chosen.length > 1 ? ' in total' : ''}.${oneDay ? '' : ' Weekends and holidays are skipped.'}${singleOffDay ? ' This date is already a day off.' : ''}${skipped > 0 ? ` ${skipped} day(s) already recorded will be skipped.` : ''}`
+          : `${daysLabel}: ${displayDays(data, days)}. ${requesting ? 'After approval, lowers' : 'Lowers'} ${whose} hours at work by ${hours(lostHours)} h${chosen.length > 1 ? ' in total' : ''}.${singleOffDay ? ' This date is already a day off.' : ''}${skipped > 0 ? ` ${skipped} day(s) already recorded will be skipped.` : ''}`
         }</p></AlertDescription></Alert>
         <FormField>Note <span className="optional">optional</span><Input name="note" placeholder="e.g. Family function" maxLength={200} /></FormField>
       </FieldGroup>
-      <FormFooter busy={busy} disabled={!chosen.length || freshDays === 0 || tooLong || end < start} onClose={onClose} label={requesting ? 'Send for approval' : chosen.length > 1 ? `Add leave for ${chosen.length}` : 'Add leave'} />
+      <FormFooter busy={busy} disabled={!chosen.length || freshDays === 0} onClose={onClose} label={requesting ? (days.length ? `Request ${daysLabel.toLowerCase()}` : 'Send for approval') : chosen.length > 1 ? `Add leave for ${chosen.length}` : 'Add leave'} />
     </form>
   </Modal>;
 }

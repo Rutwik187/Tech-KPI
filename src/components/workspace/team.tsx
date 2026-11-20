@@ -93,7 +93,8 @@ export function Team({ data, week, onEdit, onLeave, mutate, onOpen }: TeamProps)
   </>;
 }
 
-function LeaveList({ data, groups, mutate, showName = true }: { data: DashboardData; groups: LeaveGroup[]; mutate: MutationFn; showName?: boolean }) {
+/** Leave as ranges of days. Only admins can remove leave, so `canRemove` hides the remove button for others. */
+export function LeaveList({ data, groups, mutate, showName = true, canRemove = true }: { data: DashboardData; groups: LeaveGroup[]; mutate: MutationFn; showName?: boolean; canRemove?: boolean }) {
   const [confirming, setConfirming] = useState<string | null>(null);
   return <div className="availability-list">{groups.map(group => {
     const person = findMember(data, group.userId);
@@ -104,7 +105,7 @@ function LeaveList({ data, groups, mutate, showName = true }: { data: DashboardD
       <div>{showName && <strong>{person?.name ?? 'Team member'}</strong>}<span>{group.note || (group.type === 'half_day' ? 'Half day leave' : 'Leave')}</span></div>
       <Badge variant="outline" className="subtle-tag">{label}</Badge>
       <span className="leave-dates">{displayRange(group.start, group.end)}</span>
-      {confirming === key
+      {!canRemove ? null : confirming === key
         ? <span className="confirm-inline"><Button size="sm" variant="destructive" onClick={async () => { if (await mutate({ action: 'deleteLeave', ids: group.ids }, 'Leave removed')) setConfirming(null); }}>Remove</Button><Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>Keep</Button></span>
         : <Button variant="ghost" size="icon" aria-label={`Remove ${person?.name ?? 'this'} leave on ${displayRange(group.start, group.end)}`} onClick={() => setConfirming(key)}><X size={14} /></Button>}
     </div>;

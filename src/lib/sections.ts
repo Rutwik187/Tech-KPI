@@ -1,5 +1,5 @@
 /** Every page in the workspace. The demo uses the same list under /demo. */
-export const SECTIONS = ['dashboard', 'tickets', 'bugs', 'approvals', 'requests', 'standup', 'team', 'other-teams', 'projects', 'settings', 'account'] as const;
+export const SECTIONS = ['dashboard', 'tickets', 'bugs', 'approvals', 'leave', 'requests', 'standup', 'team', 'other-teams', 'projects', 'settings', 'account'] as const;
 export type Section = (typeof SECTIONS)[number];
 export const ADMIN_SECTIONS: readonly Section[] = ['standup', 'team', 'other-teams', 'settings'];
 /** The whole workspace of someone from another team. Their overview is their list of requests. */

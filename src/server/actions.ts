@@ -38,14 +38,23 @@ async function workCalendar(tx: Tx, userId?: string): Promise<WorkCalendar> {
     holidays: daysOff(holidayRows), ...(userId ? { extraDaysOff: new Set(leaveRows.map((row) => row.date)) } : {}),
   };
 }
-/** One leave row per working day. Weekends and holidays are skipped because they already cost no hours. */
-async function leaveDates(tx: Tx, first: string, last: string) {
+/**
+ * One leave row per working day. Weekends and holidays are skipped because they already cost no hours.
+ * The days come as a list of picked days, or as a first and last day from older pages. One picked day is kept as it is.
+ */
+async function leaveDates(tx: Tx, asked: { dates?: string[]; date?: string; endDate?: string }) {
   const calendar = await workCalendar(tx);
-  const dates: string[] = [];
-  for (let date = first, days = 0; date <= last; date = shiftDate(date, 1, calendar.timezone), days++) {
-    if (days >= 62) throw new AppError("Record up to two months of leave at a time.");
-    if (first === last || isWorkingDay(date, calendar)) dates.push(date);
+  let days: string[];
+  if (asked.dates) days = [...new Set(asked.dates)].sort();
+  else {
+    const first = asked.date!, last = asked.endDate ?? first;
+    days = [];
+    for (let date = first; date <= last; date = shiftDate(date, 1, calendar.timezone)) {
+      if (days.length >= 62) throw new AppError("Record up to two months of leave at a time.");
+      days.push(date);
+    }
   }
+  const dates = days.length === 1 ? days : days.filter((date) => isWorkingDay(date, calendar));
   if (!dates.length) throw new AppError("These dates are weekends or holidays. No leave is needed.");
   return dates;
 }
@@ -645,7 +654,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         await assertAssignee(tx, actor.id);
         // Serialize requests for this person so overlapping submissions cannot both pass.
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${actor.id}), 12)`);
-        const dates = await leaveDates(tx, action.date, action.endDate ?? action.date);
+        const dates = await leaveDates(tx, action);
         const recorded = await tx.select().from(leaves).where(eq(leaves.userId, actor.id));
         const pending = await tx.select().from(leaveRequests).where(and(eq(leaveRequests.requesterId, actor.id), eq(leaveRequests.status, "pending")));
         const taken = new Set([...recorded.map(l => l.date), ...pending.flatMap(r => r.dates)]);
@@ -682,7 +691,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
       }
       case "addLeave": {
         for (const userId of action.userIds) await assertAssignee(tx, userId);
-        const dates = await leaveDates(tx, action.date, action.endDate ?? action.date);
+        const dates = await leaveDates(tx, action);
         // Days someone already has leave on are skipped, so one form can cover a whole team.
         const saved = await tx.insert(leaves).values(action.userIds.flatMap((userId) => dates.map((date) => ({ userId, date, type: action.type, note: action.note ?? "" }))))
           .onConflictDoNothing({ target: [leaves.userId, leaves.date] }).returning();

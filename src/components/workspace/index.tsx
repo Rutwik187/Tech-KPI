@@ -18,6 +18,7 @@ import { isSection, REQUESTER_SECTIONS } from '@/lib/sections';
 import { adminOnlyPages, attentionItems, bands, DEMO_DATA_KEY, demoSnapshot, demoViewer, displayDate, findMember, firstName, isDone, mutateDemo, OPEN_PARAM, roleLabel, routeFor, saveDemo, setDemoViewer, statusLabels, subscribeDemo, viewAs, downloadCsv, type ModalState, type Mutation, type MutationFn, type QuickAction } from './lib';
 import { Dashboard } from './dashboard';
 import { Approvals } from './approvals';
+import { LeavePage } from './leave';
 import { MyRequests, RequestInbox, TechRequestForm } from './requests';
 import { DepartmentForm, OtherTeams } from './other-teams';
 import { WorkList } from './work-list';
@@ -40,6 +41,7 @@ const workPages: PageLink[] = [
   { id: 'tickets', label: 'Tickets', icon: ListTodo },
   { id: 'bugs', label: 'Bugs', icon: Bug },
   { id: 'approvals', label: 'Approvals', icon: ClipboardCheck },
+  { id: 'leave', label: 'Leave', icon: CalendarDays },
   { id: 'requests', label: 'Requests', icon: Inbox, admin: true },
 ];
 const teamPages: PageLink[] = [
@@ -63,6 +65,9 @@ function headings(page: string, data: DashboardData, brief: string): { title: st
     case 'approvals': return admin
       ? { title: 'Approvals', description: 'Leave requests, ticket requests, asks for more hours, and finished work that wait for you.' }
       : { title: 'Approvals', description: 'The leave, tickets, and hours you asked for, and finished work that waits for your admin.' };
+    case 'leave': return admin
+      ? { title: 'Leave', description: 'Who is away and when. Approve leave requests, and add leave for the team.' }
+      : { title: 'My leave', description: 'Request leave, follow your requests, and see every day of leave you took or will take.' };
     case 'requests': return { title: 'Requests', description: 'Tech requests from Sales, E-commerce, and other teams. Assign each one to a developer, or decline it with a reason.' };
     case 'team': return { title: 'Team', description: 'People, their hours at work, leave, and scores.' };
     case 'other-teams': return { title: 'Other teams', description: 'Teams outside tech, such as Sales, and the people in them. Everyone you add to a team signs in with their Microsoft work account and raises requests for it.' };
@@ -234,6 +239,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
   const actions: Record<string, ReactNode> = isRequester ? { dashboard: newRequest, requests: newRequest } : {
     dashboard: <>{!isAdmin && <Button variant="outline" onClick={() => setModal({ type: 'leave' })}><CalendarPlus data-icon="inline-start" />Request leave</Button>}{isAdmin && <Button variant="outline" onClick={exportScores}><ArrowDownToLine data-icon="inline-start" size={16} />Export report</Button>}{newTicket}</>,
     tickets: newTicket,
+    leave: <Button onClick={() => setModal({ type: 'leave' })}><CalendarPlus data-icon="inline-start" />{isAdmin ? 'Add leave' : 'Request leave'}</Button>,
     approvals: !isAdmin && <><Button variant="outline" onClick={() => setModal({ type: 'leave' })}><CalendarPlus data-icon="inline-start" />Request leave</Button>{newTicket}</>,
     standup: newTicket,
     bugs: isAdmin && <Button onClick={() => addItem('bug')}><Plus data-icon="inline-start" size={17} />Log bug</Button>,
@@ -290,6 +296,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
         </> : <>
           {page === 'dashboard' && <Dashboard data={data} week={week} scores={scores} onOpen={openItem} onOpenProject={setProjectId} onAction={act} onExtend={extendTicket} onAddHours={addHours} onAdd={addItem} busy={busy} />}
           {(page === 'tickets' || page === 'bugs') && <WorkList key={`${page}?${listQuery}`} data={data} kind={page === 'tickets' ? 'task' : 'bug'} onOpen={openItem} onAction={act} onExtend={extendTicket} onAddHours={addHours} onAdd={addItem} busy={busy} />}
+          {page === 'leave' && <LeavePage data={data} mutate={mutate} busy={busy} onAdd={start => setModal({ type: 'leave', userId: start?.userId, days: start?.days })} />}
           {page === 'approvals' && <Approvals data={data} onOpen={openItem} onAction={act} onRequest={() => addItem('task')} mutate={mutate} busy={busy} />}
           {page === 'requests' && <RequestInbox key={listQuery} data={data} onOpenItem={openItem} mutate={mutate} busy={busy} />}
           {page === 'standup' && <Standup data={data} week={week} onOpen={openItem} onAction={act} onAdd={addItem} mutate={mutate} busy={busy} />}
@@ -311,7 +318,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     {modal?.type === 'member' && <MemberForm data={data} editing={modal.member} role={modal.role} departmentId={modal.departmentId} mutate={mutate} onClose={() => setModal(null)} onLeave={userId => setModal({ type: 'leave', userId })} busy={busy} />}
     {modal?.type === 'department' && <DepartmentForm editing={modal.department && data.departments.find(d => d.id === modal.department!.id)} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {modal?.type === 'project' && <ProjectForm data={data} editing={data.projects.find(p => p.id === modal.project?.id) ?? modal.project} mutate={mutate} onClose={() => setModal(null)} onExtend={extendProject} busy={busy} />}
-    {modal?.type === 'leave' && <LeaveForm data={data} userId={modal.userId} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
+    {modal?.type === 'leave' && <LeaveForm data={data} userId={modal.userId} initialDays={modal.days} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {modal?.type === 'holiday' && <HolidayForm mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {modal?.type === 'teamTicket' && <TeamTicketForm data={data} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {extendTarget && <ExtendForm target={extendTarget} data={data} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
@@ -351,13 +358,14 @@ function WorkspaceSidebar({ data, page }: { data: DashboardData; page: string })
   const waiting = isAdmin ? pendingRequests + data.items.filter(i => i.type === 'task' ? i.status === 'in_review' : i.status === 'fixed').length : pendingRequests;
   const close = () => setOpenMobile(false);
   const newRequests = data.techRequests.filter(r => r.status === 'new').length;
-  const count = (id: string) => id === 'tickets' ? open.filter(i => i.type === 'task').length : id === 'bugs' ? open.filter(i => i.type === 'bug').length : id === 'approvals' ? waiting : id === 'requests' ? newRequests : 0;
+  const leaveWaiting = (data.leaveRequests ?? []).filter(r => r.status === 'pending' && (isAdmin || r.requesterId === data.currentUser.id)).length;
+  const count = (id: string) => id === 'tickets' ? open.filter(i => i.type === 'task').length : id === 'bugs' ? open.filter(i => i.type === 'bug').length : id === 'approvals' ? waiting : id === 'leave' ? leaveWaiting : id === 'requests' ? newRequests : 0;
   const link = (p: PageLink) => {
     const Icon = p.icon;
     const n = count(p.id);
     return <SidebarMenuItem key={p.id}>
       <SidebarMenuButton asChild isActive={page === p.id} tooltip={p.label}><Link href={routeFor(data, p.id)} onClick={close}><Icon /><span>{p.label}</span></Link></SidebarMenuButton>
-      {n > 0 && <SidebarMenuBadge className={(p.id === 'approvals' || p.id === 'requests') && isAdmin ? 'sidebar-count-attention' : undefined}>{n}</SidebarMenuBadge>}
+      {n > 0 && <SidebarMenuBadge className={(p.id === 'approvals' || p.id === 'leave' || p.id === 'requests') && isAdmin ? 'sidebar-count-attention' : undefined}>{n}</SidebarMenuBadge>}
     </SidebarMenuItem>;
   };
   const team = teamPages.filter(p => isAdmin || !p.admin);
@@ -414,8 +422,8 @@ function AttentionMenu({ data, onOpen }: { data: DashboardData; onOpen: (id: str
       {teamRequests > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'requests'))} className="attention-menu-item">
         <Inbox className="attention-menu-icon" /><span className="attention-menu-title">{teamRequests} new {teamRequests === 1 ? 'request' : 'requests'} from other teams</span><span className="attention-menu-reason">Assign or decline on Requests</span>
       </DropdownMenuItem>}
-      {leaveCount > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'approvals'))} className="attention-menu-item">
-        <CalendarPlus className="attention-menu-icon" /><span className="attention-menu-title">{leaveCount} leave {leaveCount === 1 ? 'request waits' : 'requests wait'} for approval</span><span className="attention-menu-reason">Review on Approvals</span>
+      {leaveCount > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'leave'))} className="attention-menu-item">
+        <CalendarPlus className="attention-menu-icon" /><span className="attention-menu-title">{leaveCount} leave {leaveCount === 1 ? 'request waits' : 'requests wait'} for approval</span><span className="attention-menu-reason">Review on Leave</span>
       </DropdownMenuItem>}
       {requests > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'approvals'))} className="attention-menu-item">
         <ClipboardCheck className="attention-menu-icon" /><span className="attention-menu-title">{requests} ticket {requests === 1 ? 'request waits' : 'requests wait'} for approval</span><span className="attention-menu-reason">Review on Approvals</span>
