@@ -129,7 +129,7 @@ export function ItemDrawer({ item, data, busy, onClose, onOpen, onAction, onAddH
             <span className={clsx(overdue && 'due-overdue')}>{item.dueDate ? displayDate(item.dueDate) : '—'}</span>{overdue && <small> · carried over</small>}
           </Fact>
           {item.completedAt
-            ? <Fact label="Approved on">{displayDate(item.completedAt)} <small>· {item.estimateHours} h credited</small></Fact>
+            ? <Fact label="Credited on">{displayDate(item.completedAt)} <small>· {item.estimateHours} h credited</small></Fact>
             : <Fact label="Extended">{extendedDays ? `+${dayCount(extendedDays)}` : extensionCount ? 'Moved' : 'No'} <small>{extensionCount ? `· ${extensionCount} time${extensionCount === 1 ? '' : 's'}` : item.dueDate ? '· on its first date' : '· no date yet'}</small></Fact>}
         </> : <>
           <Fact label="Reported">{displayDateTime(item.reportedAt)}</Fact>

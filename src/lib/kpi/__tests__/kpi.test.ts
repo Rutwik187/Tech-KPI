@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DashboardData, Member, WorkItem } from '../../types';
 import {
-  addWorkingHours, calculateCapacity, dueDateAfterHours, calculateMemberKpi, calculateTeamKpi, defaultSettings,
+  addWorkingHours, calculateCapacity, creditedAt, dueDateAfterHours, calculateMemberKpi, calculateTeamKpi, defaultSettings,
   getBugKpi, getWeekRange, getWeekStart, getWorkCalendar, isWorkingDay, monthWeekStarts,
   workingHoursBetween,
 } from '../index';
@@ -418,5 +418,17 @@ describe('locked weekly reports', () => {
     fixture.snapshots = [{ userId: developer.id, weekStart: week, value: { efficiency: 'bad-data' } }];
     expect(calculateMemberKpi(developer, fixture, week, now)).toMatchObject({ creditedHours: 30, efficiency: 92.73, isLocked: false });
     expect(calculateTeamKpi(fixture, week, now).teamEfficiency).toBe(92.73);
+  });
+});
+
+describe('creditedAt', () => {
+  const approved = instant('2026-11-23T12:24:00');
+  it('credits approved work on the ticket date, not the approval day', () => {
+    expect(creditedAt('2026-11-20', '19:00', 'Asia/Kolkata', approved)).toEqual(instant('2026-11-20T19:00:00'));
+  });
+  it('credits now when the ticket has no date, or its date is today or ahead', () => {
+    expect(creditedAt(null, '19:00', 'Asia/Kolkata', approved)).toEqual(approved);
+    expect(creditedAt('2026-11-23', '19:00', 'Asia/Kolkata', approved)).toEqual(approved);
+    expect(creditedAt('2026-11-27', '19:00', 'Asia/Kolkata', approved)).toEqual(approved);
   });
 });

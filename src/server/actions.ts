@@ -7,7 +7,7 @@ import { memberRole, requireAdmin, storedRole } from "./authz";
 import { AppError } from "./errors";
 import type { DataAction } from "./validation";
 import { DEFAULT_SETTINGS } from "./default-settings";
-import { dateKey, dueDateAfterHours, isWorkingDay, localDate, shiftDate, workingHoursBetween, type WorkCalendar } from "@/lib/kpi/calendar";
+import { creditedAt, dateKey, dueDateAfterHours, isWorkingDay, shiftDate, workingHoursBetween, type WorkCalendar } from "@/lib/kpi/calendar";
 import { linkMicrosoftAccount } from "./microsoft-accounts";
 import { ADHOC_PROJECT_ID } from "@/lib/project-defaults";
 
@@ -267,7 +267,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
           const calendar = await workCalendar(tx);
           if (doneOn > dateKey(new Date(), calendar.timezone)) throw new AppError("Work that is already done needs a date of today or earlier.");
           // Done at the end of that workday, or now if the workday has not ended yet.
-          completedAt = new Date(Math.min(Date.now(), localDate(doneOn, calendar.workdayEnd, calendar.timezone).getTime()));
+          completedAt = creditedAt(doneOn, calendar.workdayEnd, calendar.timezone);
         }
         for (const assigneeId of assigneeIds) {
           const item = await insertItem(tx, actor, { type: "task", title, description, projectId, phaseId, priority, estimateHours, assigneeId, dueDate: doneOn ? null : dueDate });
@@ -474,6 +474,16 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         }
         if (item.status === "done" && patch.status !== "in_progress" && Object.keys(patch).some((key) => ["estimateHours", "assigneeId", "projectId", "phaseId"].includes(key))) throw new AppError("Reopen this task before changing its estimate, owner, project, or phase.");
         const transition = patch.status ? statusChange(item, patch.status, actor, action.reason) : {};
+        if (item.type === "task" && transition.completedAt) {
+          // Approved work counts on the ticket's date, not on the day the admin approves it.
+          const calendar = await workCalendar(tx);
+          const at = creditedAt(patch.dueDate !== undefined ? patch.dueDate : item.dueDate, calendar.workdayEnd, calendar.timezone, transition.completedAt as Date);
+          transition.completedAt = at;
+          for (const key of ["startedAt", "submittedAt"] as const) {
+            const value = (transition[key] ?? item[key]) as Date | null;
+            if (value && value > at) transition[key] = at;
+          }
+        }
         const nextStatus = patch.status ?? item.status;
         if (nextStatus === "blocked" && !(patch.blocker ?? item.blocker)?.trim()) throw new AppError("Add what is blocking this task.");
         if (item.type === "bug" && patch.blocker !== undefined) throw new AppError("Only tasks can be marked blocked.");
@@ -511,7 +521,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
           }
           await audit(tx, actor, item.id, event, {
             from: item.status, to: nextStatus,
-            ...(nextStatus === "done" ? { creditedHours: patch.estimateHours ?? item.estimateHours, completedOn: new Date().toISOString() } : {}),
+            ...(nextStatus === "done" ? { creditedHours: patch.estimateHours ?? item.estimateHours, completedOn: (transition.completedAt as Date).toISOString() } : {}),
             ...(nextStatus === "open" ? { reopenCount: item.reopenCount + 1 } : {}),
             ...(resolutionWorkingHours !== undefined ? { workingHours: resolutionWorkingHours } : {}),
             ...reasonPayload,
