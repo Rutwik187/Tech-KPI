@@ -33,6 +33,15 @@ export function localDate(date: string, time = '00:00', timezone = 'Asia/Kolkata
   return result;
 }
 
+/**
+ * When finished work counts. A ticket counts on its own date, at the end of that workday, not on the day it was approved.
+ * Work with no date, or with a date still ahead, counts now.
+ */
+export function creditedAt(date: string | null | undefined, workdayEnd: string, timezone: string, now = new Date()): Date {
+  if (!date) return now;
+  return new Date(Math.min(now.getTime(), localDate(date, workdayEnd, timezone).getTime()));
+}
+
 export function shiftDate(date: string, days: number, timezone = 'Asia/Kolkata'): string {
   const result = localDate(date, '12:00', timezone);
   result.setDate(result.getDate() + days);

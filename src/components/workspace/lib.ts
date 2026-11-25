@@ -1,6 +1,6 @@
 import type { BugStatus, DashboardData, Department, DueDateRequest, Holiday, Leave, Member, Project, RequestCategory, RequestWork, Settings, TaskStatus, TechRequest, TicketRequest, WorkItem } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
-import { dateKey, dueDateAfterHours, getBugKpi, getWorkCalendar, isWorkingDay, localDate, shiftDate } from '@/lib/kpi';
+import { creditedAt, dateKey, dueDateAfterHours, getBugKpi, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
 
 /** The database calls a ticket a "task". Everything a person reads says "ticket". */
 export const kindLabels = { task: 'Ticket', bug: 'Bug' } as const;
@@ -410,7 +410,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       const { timezone, workdayEnd } = next.settings;
       if (mutation.doneOn && mutation.doneOn > dateKey(new Date(), timezone)) throw new Error('Work that is already done needs a date of today or earlier.');
       // Done at the end of that workday, or now if the workday has not ended yet.
-      const doneAt = mutation.doneOn ? new Date(Math.min(Date.now(), localDate(mutation.doneOn, workdayEnd, timezone).getTime())).toISOString() : null;
+      const doneAt = mutation.doneOn ? creditedAt(mutation.doneOn, workdayEnd, timezone).toISOString() : null;
       for (const assigneeId of mutation.assigneeIds) {
         const ticketId = crypto.randomUUID();
         next.items.unshift({
@@ -444,7 +444,12 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       Object.assign(item, patch, { updatedAt: now });
       if (patch.status && patch.status !== before.status) {
         if (['in_progress', 'in_review', 'done'].includes(patch.status) && !item.startedAt) item.startedAt = now;
-        if (patch.status === 'done') item.completedAt = now;
+        if (patch.status === 'done') {
+          // Approved work counts on the ticket's date, not on the day the admin approves it.
+          const at = item.type === 'task' ? creditedAt(item.dueDate, next.settings.workdayEnd, next.settings.timezone, new Date(now)).toISOString() : now;
+          item.completedAt = at;
+          if (item.startedAt && item.startedAt > at) item.startedAt = at;
+        }
         if (before.status === 'done') { item.completedAt = null; item.reopenCount++; }
         if (patch.status === 'fixed') item.fixedAt = now;
         if (patch.status === 'open' && ['fixed', 'verified'].includes(before.status)) { item.fixedAt = null; item.reopenCount++; }
