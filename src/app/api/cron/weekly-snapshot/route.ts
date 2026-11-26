@@ -18,7 +18,7 @@ export async function GET(request: Request) {
   if (!isAuthorized(request)) return Response.json({ error: "Unauthorized" }, { status: 401 });
   try {
     const data = await getSnapshotSource();
-    if (!data) return Response.json({ skipped: "Set up an active admin first." });
+    if (!data) return Response.json({ skipped: "Set up an active tech lead first." });
     const now = new Date();
     const weekStart = previousWeekStart(getWeekStart(now, data.settings.timezone), data.settings.timezone);
     if (weekStart < getWeekStart(data.settings.trackingStartDate, data.settings.timezone)) return Response.json({ weekStart, skipped: "This week is before tracking started." });

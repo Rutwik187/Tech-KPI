@@ -39,6 +39,7 @@ export function Account({ data }: { data: DashboardData }) {
       <p>{user.email}</p>
       <Badge variant="outline" className="role-tag">{role}</Badge>
       {requester ? <div className="profile-fact"><span>Team</span><strong>{findDepartment(data, user.departmentId)?.name ?? 'Chosen with your first request'}</strong></div>
+        : user.role === 'project_manager' ? <div className="profile-fact"><span>Reviews</span><strong>Requests from every team</strong></div>
         : <div className="profile-fact"><span>Hours per week</span><strong>{user.capacity} hours</strong></div>}
       <div className="profile-fact"><span>Workspace</span><strong>Urban Gabru</strong></div>
       <Button variant="outline" disabled={busy} onClick={signOut}>{busy ? <LoaderCircle data-icon="inline-start" size={15} className="spin" /> : <LogOut data-icon="inline-start" size={15} />}Sign out</Button>

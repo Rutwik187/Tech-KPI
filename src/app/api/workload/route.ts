@@ -1,9 +1,9 @@
-import { requireAdmin, requireSession } from '@/server/authz';
+import { requireCapability, requireSession } from '@/server/authz';
 import { errorResponse, AppError } from '@/server/errors';
 export const runtime = 'nodejs';
 export async function GET(request: Request) {
   try {
-    requireAdmin(await requireSession(request.headers));
+    requireCapability(await requireSession(request.headers), "work.manage");
     const url = process.env.NEON_FUNCTION_WORKLOAD_BASE_URL;
     if (!url || !process.env.WORKLOAD_SECRET) throw new AppError('Workload function is not configured.',503);
     const response = await fetch(url,{headers:{Authorization:`Bearer ${process.env.WORKLOAD_SECRET}`},signal:AbortSignal.timeout(20000),cache:'no-store'});

@@ -72,16 +72,16 @@ async function pickDateRange(page: Page, trigger: Locator, start: string, end: s
 /** Removes a demo ticket's date, like a ticket made before every ticket had one. */
 async function clearDemoDate(page: Page, title: string) {
   await page.evaluate((title) => {
-    const data = JSON.parse(localStorage.getItem('urban-gabru-kpi-demo-v9')!) as DashboardData;
+    const data = JSON.parse(localStorage.getItem('urban-gabru-kpi-demo-v11')!) as DashboardData;
     data.items = data.items.map(item => item.title === title ? { ...item, dueDate: null, originalDueDate: null } : item);
-    localStorage.setItem('urban-gabru-kpi-demo-v9', JSON.stringify(data));
+    localStorage.setItem('urban-gabru-kpi-demo-v11', JSON.stringify(data));
   }, title);
   await page.reload();
 }
 
 async function readDemoData(page: Page): Promise<DashboardData> {
   return page.evaluate(() => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v9');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v11');
     if (!saved) throw new Error('Demo changes did not persist.');
     return JSON.parse(saved) as DashboardData;
   });
@@ -192,6 +192,8 @@ test('demo navigation keeps every page in the demo workspace', async ({ page }) 
     { label: /^Team$/, path: 'team', heading: /^Team/ },
     { label: /^Other teams$/, path: 'other-teams', heading: /^Other teams/ },
     { label: /^Projects$/, path: 'projects', heading: /^Projects/ },
+    { label: /^People$/, path: 'people', heading: /^People/ },
+    { label: /^Activity$/, path: 'activity', heading: /^Activity/ },
     { label: /^Settings$/, path: 'settings', heading: /^Settings/ },
     { label: /Rohan Desai/, path: 'account', heading: /^My account/ },
     { label: /^Overview$/, path: 'dashboard', heading: OVERVIEW },
@@ -324,7 +326,7 @@ test('a ticket needs only a title, owner and estimate, survives reload, and appe
   await dialog.getByRole('button', { name: 'Create ticket', exact: true }).click();
   await expect(dialog).toBeHidden();
   const savedDescription = await page.evaluate(title => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v9');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v11');
     if (!saved) throw new Error('Demo ticket did not persist.');
     return (JSON.parse(saved) as { items: { title: string; description: string }[] }).items.find(item => item.title === title)?.description;
   }, title);
@@ -567,7 +569,7 @@ test('logging a linked bug fills its owner and project, then supports fix and ve
   await page.getByRole('textbox', { name: 'Search bugs' }).fill(standaloneTitle);
   await expect(page.getByRole('row').filter({ hasText: standaloneTitle })).toBeVisible();
   const storedTaskId = await page.evaluate(title => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v9');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v11');
     if (!saved) throw new Error('Demo bug did not persist.');
     return (JSON.parse(saved) as { items: { title: string; taskId: string | null }[] }).items.find(item => item.title === title)?.taskId;
   }, standaloneTitle);
@@ -584,7 +586,7 @@ test('working-day buttons save ISO weekdays including Sunday as seven in the dem
   await sunday.click();
   await page.getByRole('button', { name: /^Save settings/ }).click();
   const workingDays = await page.evaluate(() => {
-    const saved = localStorage.getItem('urban-gabru-kpi-demo-v9');
+    const saved = localStorage.getItem('urban-gabru-kpi-demo-v11');
     if (!saved) throw new Error('Demo settings did not persist.');
     return (JSON.parse(saved) as { settings: { workingDays: number[] } }).settings.workingDays;
   });
@@ -621,7 +623,7 @@ test('mobile navigation and dialogs work at 375 pixels with keyboard focus', asy
   await expect(trigger).toBeFocused();
 });
 
-test('a developer requests a ticket, asks for more hours, and completes it after the admin approves both', async ({ page }) => {
+test('a developer requests a ticket, asks for more hours, and completes it after the tech lead approves both', async ({ page }) => {
   await openDemo(page, 'tickets');
   const viewAs = page.getByRole('combobox', { name: 'View the demo as', exact: true });
   await chooseOption(page, viewAs, 'Aarav Mehta · Developer');
@@ -644,7 +646,7 @@ test('a developer requests a ticket, asks for more hours, and completes it after
   await dialog.getByLabel(/^Estimate/).fill('6');
   await pickDate(page, dialog.getByRole('button', { name: /^Date/ }), due);
   await dialog.getByRole('textbox', { name: /^Description/ }).fill('Verify webhook signatures before processing.');
-  await dialog.getByRole('textbox', { name: /^Note for your admin/ }).fill('The payment provider now signs every callback.');
+  await dialog.getByRole('textbox', { name: /^Note for your tech lead/ }).fill('The payment provider now signs every callback.');
   await dialog.getByRole('button', { name: 'Send for approval', exact: true }).click();
   await expect(dialog).toBeHidden();
   let data = await readDemoData(page);
@@ -732,7 +734,7 @@ test('a developer requests a ticket, asks for more hours, and completes it after
   await expect.poll(async () => (await readDemoData(page)).items.find(item => item.id === ticket.id)?.status).toBe('in_review');
 });
 
-test('an admin declines a ticket request with a reason the developer can read', async ({ page }) => {
+test('the tech lead declines a ticket request with a reason the developer can read', async ({ page }) => {
   await openDemo(page, 'approvals');
   const card = page.locator('.request-card').filter({ hasText: 'Low-stock email digest for warehouse leads' });
   await card.getByRole('button', { name: 'Decline', exact: true }).click();
@@ -777,7 +779,7 @@ test('an approved request’s ticket is completed from its request card', async 
   expect((await readDemoData(page)).items.find(item => item.id === itemId)).toMatchObject({ status: 'done' });
 });
 
-test('an admin extends a project timeline with a reason and the history shows why', async ({ page }) => {
+test('the tech lead extends a project timeline with a reason and the history shows why', async ({ page }) => {
   await openDemo(page, 'projects');
   const sample = createDemoData().projects.find(project => project.id === 'demo-inventory')!;
   const later = shiftDate(sample.targetDate!, 14, 'Asia/Kolkata');
@@ -913,7 +915,7 @@ test('a developer reads why their project moved but cannot extend it', async ({ 
   await expect(drawer.getByRole('button', { name: /Extend/ })).toHaveCount(0);
 });
 
-test('an admin records several days of leave from the team table and sees one range', async ({ page }) => {
+test('the tech lead records several days of leave from the team table and sees one range', async ({ page }) => {
   await openDemo(page, 'team');
   await expect(page.locator('.member-table .person-text').first()).toHaveCSS('flex-direction', 'column');
   const nextMonday = shiftDate(getWeekStart(new Date(), 'Asia/Kolkata'), 7, 'Asia/Kolkata');
@@ -1107,7 +1109,7 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
   });
 });
 
-test('an admin gives every developer the same half day of leave in one step', async ({ page }) => {
+test('the tech lead gives every developer the same half day of leave in one step', async ({ page }) => {
   await openDemo(page, 'team');
   const nextMonday = shiftDate(getWeekStart(new Date(), 'Asia/Kolkata'), 7, 'Asia/Kolkata');
   await page.getByRole('button', { name: 'Add leave', exact: true }).first().click();
@@ -1182,7 +1184,7 @@ test('a half-day holiday is listed and saved as a half day', async ({ page }) =>
   await expect(page.locator('.holiday-list')).toContainText('Founders dayHalf day');
 });
 
-test('an admin filters projects by developer', async ({ page }) => {
+test('the tech lead filters projects by developer', async ({ page }) => {
   await openDemo(page, 'projects');
   const card = (name: string) => page.locator('.project-card').filter({ has: page.getByRole('button', { name, exact: true }) });
   await expect(card('Inventory management')).toBeVisible();
@@ -1257,7 +1259,7 @@ test('a developer’s overview starts with their own work, with what needs them 
   await expect(work.getByRole('button', { name: /^Complete/ }).first()).toBeVisible();
 });
 
-test('someone from another team raises a request, the admin assigns it, and they follow it without seeing tickets', async ({ page }) => {
+test('someone from another team raises a request, a project manager forwards it, the tech lead assigns it, and they follow it without seeing tickets', async ({ page }) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await openDemo(page, 'requests');
@@ -1283,10 +1285,10 @@ test('someone from another team raises a request, the admin assigns it, and they
   await dialog.getByRole('button', { name: 'Send request', exact: true }).click();
   await expect(dialog).toBeHidden();
   const card = page.locator('.tech-request-card').filter({ hasText: 'Invoice download for B2B orders' });
-  await expect(card).toContainText('Waiting for review');
+  await expect(card).toContainText('With project manager');
   await expect(card.getByRole('link', { name: 'https://example.com/sample-invoice' })).toHaveAttribute('target', '_blank');
 
-  // Until the tech team reviews it, the requester can change it.
+  // Until a project manager forwards it, the requester can change it.
   await card.getByRole('button', { name: 'Edit', exact: true }).click();
   await dialog.getByRole('textbox', { name: 'What do you need?', exact: true }).fill('GST invoice download for B2B orders');
   await dialog.getByRole('button', { name: 'Save changes', exact: true }).click();
@@ -1294,9 +1296,46 @@ test('someone from another team raises a request, the admin assigns it, and they
   const raised = (await readDemoData(page)).techRequests.find(request => request.title === 'GST invoice download for B2B orders')!;
   expect(raised).toMatchObject({ status: 'new', category: 'data', priority: 'high', requesterId: 'demo-priya', departmentId: 'demo-team-1' });
 
-  // The admin assigns it to a developer. That makes the developer's ticket.
+  // A project manager reviews it first. They ask a question, then forward it with a note only the tech side reads.
+  await chooseOption(page, viewAs, 'Kavya Menon · Project manager');
+  await expect(page.getByRole('heading', { level: 1, name: 'Requests' })).toBeVisible();
+  await expect(page.locator('[data-slot="sidebar"]').getByRole('link', { name: /^Tickets/ })).toHaveCount(0);
+  const review = page.locator('.tech-request-card').filter({ hasText: 'GST invoice download for B2B orders' });
+  await expect(review.getByRole('button', { name: 'Assign', exact: true })).toHaveCount(0);
+  await review.getByRole('button', { name: 'Details', exact: true }).click();
+  const drawer = page.locator('.drawer');
+  await expect(drawer.getByRole('heading', { name: 'GST invoice download for B2B orders' })).toBeVisible();
+  await drawer.getByRole('textbox', { name: 'Write a comment', exact: true }).fill('Is this for every B2B order, or only GST-registered customers?');
+  await drawer.getByRole('button', { name: 'Comment', exact: true }).click();
+  await expect(drawer.locator('.comment')).toContainText('only GST-registered customers?');
+  await drawer.getByRole('button', { name: 'Forward to the tech lead', exact: true }).click();
+  await expect(dialog.getByRole('heading', { name: 'Forward to the tech lead' })).toBeVisible();
+  await dialog.getByRole('textbox', { name: /^Note for the tech lead/ }).fill('Only GST-registered customers. Finance confirmed.');
+  await dialog.getByRole('button', { name: 'Forward request', exact: true }).click();
+  // The details panel opens again, now with the tech lead.
+  await expect(drawer.locator('.detail-status-row')).toContainText('With tech lead');
+  await expect(drawer.locator('.comment.is-internal')).toContainText('Finance confirmed.');
+  await expect(drawer.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
+
+  // The requester sees the question and the new step, never the note for the tech lead. They answer in the comments.
+  await chooseOption(page, viewAs, 'Priya Kapoor · Sales team lead');
+  await expect(card).toContainText('With tech lead');
+  await expect(card.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
+  await card.getByRole('button', { name: 'Details', exact: true }).click();
+  await expect(drawer.locator('.comment')).toHaveCount(1);
+  await expect(drawer).not.toContainText('Finance confirmed.');
+  await expect(drawer.getByRole('switch')).toHaveCount(0);
+  await drawer.getByRole('textbox', { name: 'Write a comment', exact: true }).fill('Only GST-registered customers.');
+  await drawer.getByRole('button', { name: 'Comment', exact: true }).click();
+  await expect(drawer.locator('.comment')).toHaveCount(2);
+  await page.keyboard.press('Escape');
+
+  // The tech lead assigns it to a developer. That makes the developer's ticket.
   await chooseOption(page, viewAs, 'Rohan Desai · Admin');
   await expect(page.getByRole('heading', { level: 1, name: 'Requests' })).toBeVisible();
+  await expect(page.getByRole('radio', { name: /^To assign/ })).toHaveAttribute('aria-checked', 'true');
   await page.locator('.tech-request-card').filter({ hasText: 'GST invoice download for B2B orders' }).getByRole('button', { name: 'Assign', exact: true }).click();
   await expect(dialog.getByRole('button', { name: 'Choose an owner', exact: true })).toBeDisabled();
   await chooseOption(page, dialog.getByRole('combobox', { name: 'Owner', exact: true }), 'Aarav Mehta');
@@ -1322,7 +1361,7 @@ test('someone from another team raises a request, the admin assigns it, and they
   expect(pageErrors).toEqual([]);
 });
 
-test('an admin declines a request with a reason, and a requester withdraws one that waits', async ({ page }) => {
+test('the tech lead declines a forwarded request with a reason, and a requester withdraws one that waits', async ({ page }) => {
   await openDemo(page, 'requests');
   const viewAs = page.getByRole('combobox', { name: 'View the demo as', exact: true });
   const pixel = page.locator('.tech-request-card').filter({ hasText: 'Add the Meta pixel to the new landing page' });
@@ -1348,7 +1387,7 @@ test('an admin declines a request with a reason, and a requester withdraws one t
   expect((await readDemoData(page)).techRequests.some(request => request.title === 'Bulk order form for corporate gifting')).toBe(false);
 });
 
-test('an admin creates a team and adds its members, who raise requests and see each other\'s', async ({ page }) => {
+test('the tech lead creates a team and adds its members, who raise requests and see each other\'s', async ({ page }) => {
   await openDemo(page, 'other-teams');
   const viewAs = page.getByRole('combobox', { name: 'View the demo as', exact: true });
   // Only the people the admin adds to a team can sign in, unless the admin lets a work email domain in.
@@ -1415,9 +1454,10 @@ test('an admin creates a team and adds its members, who raise requests and see e
   await page.getByRole('radio', { name: /^Customer support team/ }).click();
   await expect(page.locator('.tech-request-card').filter({ hasText: 'Coupon field rejects valid codes' })).toContainText('Farah Ali');
 
-  // Something broken starts as a bug, and an urgent one is critical.
+  // Something broken starts as a bug, and an urgent one is critical. The tech lead can assign it before a project manager reviews it.
   await chooseOption(page, viewAs, 'Rohan Desai · Admin');
   await page.locator('[data-slot="sidebar"]').getByRole('link', { name: /^Requests/ }).click();
+  await page.getByRole('radio', { name: /^With project manager/ }).click();
   await page.locator('.tech-request-card').filter({ hasText: 'Coupon field rejects valid codes' }).getByRole('button', { name: 'Assign', exact: true }).click();
   await expect(dialog.getByRole('radio', { name: 'Bug', exact: true })).toHaveAttribute('aria-checked', 'true');
   await expect(dialog.getByRole('radio', { name: 'Critical', exact: true })).toHaveAttribute('aria-checked', 'true');
@@ -1430,7 +1470,7 @@ test('an admin creates a team and adds its members, who raise requests and see e
   expect(after.items.find(item => item.id === request.itemId)).toMatchObject({ type: 'bug', status: 'open', severity: 'critical', assigneeId: 'demo-arjun', estimateHours: 0 });
 });
 
-test('a teammate picks separate days of leave and the admin approves them', async ({ page }) => {
+test('a teammate picks separate days of leave and the tech lead approves them', async ({ page }) => {
   await openDemo(page, 'approvals');
   const viewer = page.getByRole('combobox', { name: 'View the demo as', exact: true });
   await chooseOption(page, viewer, 'Aarav Mehta · Developer');
@@ -1498,4 +1538,50 @@ test('a developer requests leave from a day on the leave calendar', async ({ pag
   // The day now shows as waiting, and can no longer be picked.
   await expect(cell.locator('.leave-mark-waiting')).toHaveCount(1);
   await expect(page.getByRole('button', { name: label ?? '', exact: true })).toHaveCount(0);
+});
+
+test('an admin changes a role on People and reads it in the activity log, and a tech lead runs the tech team without organisation pages', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await openDemo(page, 'people');
+  const viewAs = page.getByRole('combobox', { name: 'View the demo as', exact: true });
+  await expect(page.getByRole('heading', { level: 1, name: 'People' })).toBeVisible();
+  // Everyone in the organisation is listed, in every role.
+  await expect(page.locator('.people-table')).toContainText('Priya Kapoor');
+  await expect(page.locator('.people-table')).toContainText('Kavya Menon');
+  await page.getByRole('radio', { name: /^Tech leads/ }).click();
+  await expect(page.locator('.people-table tbody tr')).toHaveCount(1);
+  await page.getByRole('radio', { name: /^Everyone/ }).click();
+  await page.getByRole('button', { name: 'Edit Kabir Sethi', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('radio', { name: 'Admin', exact: true })).toBeVisible();
+  await dialog.getByRole('radio', { name: 'Tech lead', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Save member', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect((await readDemoData(page)).members.find(m => m.id === 'demo-kabir')?.role).toBe('tech_lead');
+  await page.locator('[data-slot="sidebar"]').getByRole('link', { name: 'Activity', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Search the activity log', exact: true }).fill('Kabir');
+  await expect(page.locator('.activity-line').first()).toContainText('Rohan Desai changed Kabir Sethi’s role to tech lead');
+  await page.getByRole('button', { name: 'Clear search', exact: true }).click();
+  await page.getByRole('radio', { name: /^Requests/ }).click();
+  await expect(page.locator('.activity-line').first()).toContainText('REQ-');
+
+  // The tech lead has the tech team's pages and settings, but no organisation pages, and changes only developers and project managers.
+  await chooseOption(page, viewAs, 'Siddharth Rao · Tech lead');
+  const sidebar = page.locator('[data-slot="sidebar"]');
+  await expect(page.getByRole('heading', { name: 'This page is for admins' })).toBeVisible();
+  for (const name of ['People', 'Other teams', 'Activity']) await expect(sidebar.getByRole('link', { name, exact: true })).toHaveCount(0);
+  for (const name of ['Team', 'Settings', 'Daily standup']) await expect(sidebar.getByRole('link', { name, exact: true })).toBeVisible();
+  await sidebar.getByRole('link', { name: 'Team', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Edit Rohan Desai', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Edit Kavya Menon', exact: true })).toBeVisible();
+  await page.locator('.page-actions').getByRole('button', { name: 'Add member', exact: true }).click();
+  await expect(dialog.getByRole('radio', { name: 'Project manager', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('radio', { name: 'Admin', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('radio', { name: 'Tech lead', exact: true })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  // Forwarded requests wait for the tech lead too.
+  await sidebar.getByRole('link', { name: /^Requests/ }).click();
+  await expect(page.getByRole('radio', { name: /^To assign/ })).toHaveAttribute('aria-checked', 'true');
+  expect(pageErrors).toEqual([]);
 });

@@ -5,6 +5,7 @@ import clsx from 'clsx';
 import { toast } from 'sonner';
 import { Activity as ActivityIcon, Bug, CalendarClock, CalendarPlus, Check, ChevronDown, CircleHelp, Clock3, FileText, ListTodo, LoaderCircle, Plus, ShieldCheck, Star, X } from 'lucide-react';
 import type { DashboardData, Holiday, Leave, Member, Phase, Project, WorkItem } from '@/lib/types';
+import { leadsWork, manageableRoles, ROLE_HELP, ROLE_NAMES } from '@/lib/permissions';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
 import { addWorkingHours, getWeekStart, getWorkCalendar, isWorkingDay } from '@/lib/kpi';
 import { Avatar, FormCheckbox, FormDate, FormDays, FormField, FormSelect, Modal } from '@/components/ui';
@@ -63,7 +64,7 @@ export function FormFooter({ busy, disabled = false, onClose, label }: { busy: b
 
 /** Project, phase, and owner. A developer always owns the tickets they add, so the owner is fixed for them. */
 export function ClassificationFields({ data, value, onChange, lockProjectPhase = false, retained, ownerPicked = false }: { data: DashboardData; value: WorkClassification; onChange: (value: WorkClassification) => void; lockProjectPhase?: boolean; retained?: WorkItem; ownerPicked?: boolean }) {
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   // An existing ticket already has both values, so they count as picked by hand.
   const [picked, setPicked] = useState<PickedByHand>({ project: !!retained, owner: !!retained || ownerPicked });
   const projectPicked = picked.project || lockProjectPhase;
@@ -95,7 +96,7 @@ export function ClassificationFields({ data, value, onChange, lockProjectPhase =
 }
 
 export function ItemForm({ data, kind: initialKind, assigneeId, mutate, onClose, busy }: { data: DashboardData; kind: 'task' | 'bug'; assigneeId?: string; mutate: MutationFn; onClose: () => void; busy: boolean }) {
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   const [kind, setKind] = useState<'task' | 'bug'>(admin ? initialKind : 'task');
   const defaultOwner = admin ? assigneeId ?? data.members.find(m => m.role === 'developer' && m.isActive)?.id ?? data.currentUser.id : data.currentUser.id;
   // A known owner (a developer adding their own ticket, or "Add ticket" on someone's card) starts in their main project.
@@ -104,7 +105,7 @@ export function ItemForm({ data, kind: initialKind, assigneeId, mutate, onClose,
   const [taskId, setTaskId] = useState('');
   const [severity, setSeverity] = useState<WorkItem['severity']>('normal');
   const target = severity === 'critical' ? data.settings.criticalTargetHours : data.settings.normalTargetHours;
-  // A developer's new work is a request. It becomes a ticket when an admin approves it.
+  // A developer's new work is a request. It becomes a ticket when the tech lead approves it.
   const requesting = !admin;
   const fixBy = kind === 'bug' ? addWorkingHours(new Date(), target, getWorkCalendar(data, classification.assigneeId)) : null;
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -135,7 +136,7 @@ export function ItemForm({ data, kind: initialKind, assigneeId, mutate, onClose,
     }
   }
   const tickets = data.items.filter(item => item.type === 'task').sort((a, b) => Number(isDone(a)) - Number(isDone(b)) || b.createdAt.localeCompare(a.createdAt));
-  return <Modal title={requesting ? 'Request a ticket' : kind === 'task' ? 'New ticket' : 'Log a bug'} subtitle={requesting ? 'Your admin checks the estimate and approves it. Then it becomes your ticket.' : kind === 'task' ? 'A title, an owner, and an estimate are enough to start.' : 'Describe the problem and choose who fixes it.'} onClose={onClose}>
+  return <Modal title={requesting ? 'Request a ticket' : kind === 'task' ? 'New ticket' : 'Log a bug'} subtitle={requesting ? 'Your tech lead checks the estimate and approves it. Then it becomes your ticket.' : kind === 'task' ? 'A title, an owner, and an estimate are enough to start.' : 'Describe the problem and choose who fixes it.'} onClose={onClose}>
     <form onSubmit={submit} className="item-form">
       {admin && <ToggleGroup type="single" variant="outline" value={kind} onValueChange={value => { if (value) { setKind(value as 'task' | 'bug'); if (value === 'task') setTaskId(''); } }} className="form-kind-toggle" aria-label="Type">
         <ToggleGroupItem value="task"><ListTodo data-icon="inline-start" />Ticket</ToggleGroupItem><ToggleGroupItem value="bug"><Bug data-icon="inline-start" />Bug</ToggleGroupItem>
@@ -154,7 +155,7 @@ export function ItemForm({ data, kind: initialKind, assigneeId, mutate, onClose,
         </FieldGroup>
         {requesting ? <>
           <FormField>Description <span className="optional">optional</span><Textarea name="description" placeholder="What is the work? What does done look like?" rows={3} /></FormField>
-          <FormField>Note for your admin <span className="optional">optional</span><Textarea name="note" placeholder="Why it matters now, links, or anything that helps the approval." rows={2} /></FormField>
+          <FormField>Note for your tech lead <span className="optional">optional</span><Textarea name="note" placeholder="Why it matters now, links, or anything that helps the approval." rows={2} /></FormField>
         </> : <Collapsible className="optional-details">
           <CollapsibleTrigger asChild><Button type="button" variant="ghost" className="w-full justify-start"><FileText data-icon="inline-start" />Add details<Badge variant="secondary">Optional</Badge><ChevronDown className="ml-auto" data-icon="inline-end" /></Button></CollapsibleTrigger>
           <CollapsibleContent forceMount className="pt-3 data-[state=closed]:hidden"><FormField>Description<Textarea name="description" placeholder={kind === 'task' ? 'What does done look like? Add links or acceptance criteria.' : 'How can someone reproduce this? Add steps or links.'} rows={4} /></FormField></CollapsibleContent>
@@ -165,11 +166,7 @@ export function ItemForm({ data, kind: initialKind, assigneeId, mutate, onClose,
   </Modal>;
 }
 
-const roleHelp: Record<Member['role'], string> = {
-  admin: 'Admins manage the team, assign work, approve tickets, and see every score.',
-  developer: 'Developers see and update their own tickets and bugs, and can add tickets for themselves.',
-  requester: 'People from other teams, such as Sales, raise requests for their team and follow them. They see their team’s requests, never tickets or scores.',
-};
+const roleHelp: Record<Member['role'], string> = ROLE_HELP;
 
 /** Adds or edits a person. Opened with a role, such as from a team on Other teams, the role is already decided and does not show. */
 export function MemberForm({ data, editing, role: initialRole, departmentId: initialTeam, mutate, onClose, onLeave, busy }: { data: DashboardData; editing?: Member; role?: Member['role']; departmentId?: string; mutate: MutationFn; onClose: () => void; onLeave: (userId: string) => void; busy: boolean }) {
@@ -181,7 +178,9 @@ export function MemberForm({ data, editing, role: initialRole, departmentId: ini
   const teamName = findDepartment(data, departmentId)?.name;
   // The first person added to a team is usually the one who leads it.
   const firstInTeam = !!initialTeam && !data.members.some(m => m.role === 'requester' && m.departmentId === initialTeam);
-  const roleDecided = !editing && !!initialRole;
+  // An admin gives any role. A tech lead adds developers and project managers. Someone from another team is added on Other teams.
+  const roleChoices = manageableRoles(data.currentUser).filter(value => value !== 'requester' || role === 'requester' || !!editing);
+  const roleDecided = (!editing && !!initialRole) || roleChoices.length < 2;
   const own = editing?.id === data.currentUser.id;
   // A live member without a linked Microsoft account has not signed in yet. Until then, the email can be corrected.
   const pending = !!editing && data.mode === 'live' && !editing.microsoftObjectId;
@@ -206,12 +205,12 @@ export function MemberForm({ data, editing, role: initialRole, departmentId: ini
         <FormField>Work email<Input name="email" type="email" required disabled={!!editing && !pending} defaultValue={editing?.email} placeholder="firstname.lastname@urbangabru.in" />
           <span className="field-help">{pending ? 'Not signed in yet. You can correct the email until they do.' : editing ? 'Their Microsoft work account is linked.' : 'They sign in with the Microsoft account for this email.'}</span></FormField>
         <FieldGroup className="form-grid">
-          {!roleDecided && <FormField>Role<FormChoice value={role} disabled={own} onValueChange={next => { const value = next as Member['role']; setRole(value); if (!editing) setCapacity(value === 'admin' ? data.settings.defaultLeadCapacityHours : data.settings.defaultDevCapacityHours); }} options={[{ value: 'developer', label: 'Developer' }, { value: 'admin', label: 'Admin' }, { value: 'requester', label: 'Other team' }]} /></FormField>}
+          {!roleDecided && <FormField>Role<FormChoice value={role} disabled={own} onValueChange={next => { const value = next as Member['role']; setRole(value); if (!editing) setCapacity(leadsWork(value) ? data.settings.defaultLeadCapacityHours : data.settings.defaultDevCapacityHours); }} options={roleChoices.map(value => ({ value, label: ROLE_NAMES[value] }))} /></FormField>}
           {role === 'developer' && <FormField>Hours per week<Input type="number" min={.5} max={168} step={.5} required value={capacity} onChange={event => setCapacity(Number(event.target.value))} /><span className="field-help">Leave and holidays lower this for that week.</span></FormField>}
           {requester && <FormField>Team<FormSelect required value={departmentId} onValueChange={setDepartmentId}><option value="" disabled>Choose their team</option>{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</FormSelect><span className="field-help">{teams.length ? 'They raise requests for this team, and see its requests.' : 'Create a team on Other teams first.'}</span></FormField>}
         </FieldGroup>
         {requester && <FormField className="checkbox-label member-lead-control"><FormCheckbox name="isTeamLead" defaultChecked={editing ? !!editing.isTeamLead : firstInTeam} />Team lead<span className="field-help">Everyone in a team can raise requests. Team leads are listed first on the team.</span></FormField>}
-        {editing && editing.isActive && !requester && <div className="member-leave-row"><div><strong>Leave</strong><span>{upcomingLeave.length ? `${upcomingLeave.reduce((sum, l) => sum + (l.type === 'half_day' ? .5 : 1), 0)} upcoming day(s) recorded` : 'No upcoming leave'}</span></div><Button type="button" variant="outline" size="sm" onClick={() => onLeave(editing.id)}><CalendarPlus data-icon="inline-start" />Add leave</Button></div>}
+        {editing && editing.isActive && role === 'developer' && <div className="member-leave-row"><div><strong>Leave</strong><span>{upcomingLeave.length ? `${upcomingLeave.reduce((sum, l) => sum + (l.type === 'half_day' ? .5 : 1), 0)} upcoming day(s) recorded` : 'No upcoming leave'}</span></div><Button type="button" variant="outline" size="sm" onClick={() => onLeave(editing.id)}><CalendarPlus data-icon="inline-start" />Add leave</Button></div>}
         {editing && <FormField className="checkbox-label member-access-control"><FormCheckbox name="isActive" defaultChecked={editing.isActive} disabled={own} />Active workspace access<span className="field-help">Inactive members keep their history and cannot sign in.</span></FormField>}
         <Alert className="form-tip"><ShieldCheck size={17} /><AlertDescription><p>{roleHelp[role]}</p></AlertDescription></Alert>
       </FieldGroup>
@@ -303,7 +302,7 @@ export function ProjectForm({ data, editing, mutate, onClose, onExtend, busy }: 
             const selected = memberIds.includes(m.id);
             const primary = selected && primaryId === m.id;
             return <div key={m.id} className={clsx('project-member-row', primary && 'is-primary')}><FormField className="project-member-choice"><FormCheckbox checked={selected} disabled={busy || (selected && openCount > 0)} onCheckedChange={checked => toggleMember(m.id, checked)} />
-              <span className="project-member-name"><span aria-hidden="true"><Avatar member={m} size="small" /></span>{m.name}<Badge variant="outline">{m.role === 'admin' ? 'Admin' : 'Developer'}</Badge></span>
+              <span className="project-member-name"><span aria-hidden="true"><Avatar member={m} size="small" /></span>{m.name}<Badge variant="outline">{ROLE_NAMES[m.role]}</Badge></span>
               {openCount > 0 && <span className="field-help">{openCount} open item{openCount === 1 ? '' : 's'} here. Finish or reassign them before removing this person.</span>}
               {!m.isActive && <span className="field-help">Inactive team member</span>}</FormField>
               {primary ? <Badge className="primary-badge"><Star data-icon="inline-start" />Primary</Badge>
@@ -368,11 +367,11 @@ export function LeaveForm({ data, userId, initialDays = [], mutate, onClose, bus
     event.preventDefault();
     const note = String(new FormData(event.currentTarget).get('note') ?? '').trim();
     const ok = await mutate({ ...(requesting ? { action: 'requestLeave' as const } : { action: 'addLeave' as const, userIds: personIds }), dates: picked, type: length, note },
-      requesting ? `Leave request for ${days.length} day${days.length === 1 ? '' : 's'} sent for admin approval.` : chosen.length > 1 ? `Leave added for ${chosen.length} developers. Hours at work updated.` : 'Leave added. Hours at work updated.');
+      requesting ? `Leave request for ${days.length} day${days.length === 1 ? '' : 's'} sent for tech lead approval.` : chosen.length > 1 ? `Leave added for ${chosen.length} developers. Hours at work updated.` : 'Leave added. Hours at work updated.');
     if (ok) onClose();
   }
   const daysLabel = length === 'half_day' ? 'Half a day' : `${days.length} working day${days.length === 1 ? '' : 's'}`;
-  return <Modal title={requesting ? 'Request leave' : 'Add leave'} subtitle={requesting ? 'Pick every day you need off. Your admin approves it before your hours at work change.' : 'Leave lowers hours at work for that week, so the score stays fair. Pick several people for a team day off.'} onClose={onClose}>
+  return <Modal title={requesting ? 'Request leave' : 'Add leave'} subtitle={requesting ? 'Pick every day you need off. Your tech lead approves it before your hours at work change.' : 'Leave lowers hours at work for that week, so the score stays fair. Pick several people for a team day off.'} onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
         {!requesting && <DeveloperPicker people={people} value={personIds} onChange={setPersonIds} disabled={busy} />}
@@ -500,7 +499,7 @@ export function ReasonForm({ action, mutate, onClose, busy }: { action: QuickAct
     const patch = { ...action.patch };
     if (due) patch.dueDate = String(f.get('dueDate'));
     if (blocked) patch.blocker = reason;
-    const message = blocked ? 'Blocker saved. Your admin can see it.' : firstDue ? 'Date set' : 'Saved. The reason is in the timeline.';
+    const message = blocked ? 'Blocker saved. Your tech lead can see it.' : firstDue ? 'Date set' : 'Saved. The reason is in the timeline.';
     const ok = await mutate({ action: 'updateItem', id: action.item.id, patch, ...(reason ? { reason } : {}) }, message);
     if (ok) onClose();
   }

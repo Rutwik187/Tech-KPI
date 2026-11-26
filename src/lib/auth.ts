@@ -13,7 +13,7 @@ const clientId = z.uuid().safeParse(process.env.MICROSOFT_CLIENT_ID);
 const microsoftConfigured = tenantId.success && clientId.success && !!process.env.MICROSOFT_CLIENT_SECRET?.trim();
 
 export const auth = betterAuth({
-  appName: "UrbanGabru Tech KPI",
+  appName: "Urban Gabru Tech Workspace",
   secret: process.env.BETTER_AUTH_SECRET,
   baseURL: process.env.BETTER_AUTH_URL,
   database: drizzleAdapter(db, { provider: "pg", schema, transaction: true }),

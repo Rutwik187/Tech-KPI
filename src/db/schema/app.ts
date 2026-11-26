@@ -106,8 +106,9 @@ export const ticketRequests = pgTable("tech_kpi_ticket_request", {
   check("tech_kpi_ticket_request_reviewed", sql`(${t.status} = 'pending') = (${t.reviewedAt} IS NULL)`),
 ]);
 /**
- * Work another team asks the tech team for. An admin assigns it to a developer, which creates a ticket or a bug,
- * or declines it with a reason. After that, its progress is the progress of that ticket or bug.
+ * Work another team asks the tech team for. A project manager reviews it and forwards it to the tech lead (`forwarded`).
+ * The tech lead assigns it to a developer, which creates a ticket or a bug, or declines it with a reason.
+ * After that, its progress is the progress of that ticket or bug. The tech lead can also act on a `new` request directly.
  */
 export const techRequests = pgTable("tech_kpi_tech_request", {
   id: uuid("id").defaultRandom().primaryKey(), sequence: integer("sequence").generatedAlwaysAsIdentity().notNull().unique(),
@@ -115,8 +116,11 @@ export const techRequests = pgTable("tech_kpi_tech_request", {
   departmentId: uuid("department_id").notNull().references(() => departments.id),
   title: text("title").notNull(), description: text("description").notNull(),
   category: text("category").$type<RequestCategory>().notNull(),
+  // The tool or system the request is about, such as Shopify or the CRM. Empty when the requester did not say.
+  tool: text("tool").notNull().default(""),
   priority: priority("priority").notNull().default("medium"), neededBy: date("needed_by", { mode: "string" }),
   status: text("status").$type<TechRequest["status"]>().notNull().default("new"),
+  forwardedById: text("forwarded_by_id").references(() => user.id, { onDelete: "set null" }), forwardedAt: stamp("forwarded_at"),
   reviewedById: text("reviewed_by_id").references(() => user.id, { onDelete: "set null" }), reviewedAt: stamp("reviewed_at"), reviewNote: text("review_note"),
   itemId: uuid("item_id").references(() => workItems.id, { onDelete: "set null" }),
   createdAt: stamp("created_at").defaultNow().notNull(), updatedAt: stamp("updated_at").defaultNow().notNull(),
@@ -125,10 +129,23 @@ export const techRequests = pgTable("tech_kpi_tech_request", {
   index("tech_kpi_tech_request_requester_idx").on(t.requesterId),
   index("tech_kpi_tech_request_department_idx").on(t.departmentId),
   uniqueIndex("tech_kpi_tech_request_item_idx").on(t.itemId).where(sql`${t.itemId} IS NOT NULL`),
-  check("tech_kpi_tech_request_category", sql`${t.category} IN ('feature', 'change', 'problem', 'data', 'access', 'other')`),
-  check("tech_kpi_tech_request_status", sql`${t.status} IN ('new', 'assigned', 'declined')`),
-  check("tech_kpi_tech_request_reviewed", sql`(${t.status} = 'new') = (${t.reviewedAt} IS NULL)`),
+  check("tech_kpi_tech_request_category", sql`${t.category} IN ('feature', 'tool', 'change', 'problem', 'data', 'access', 'other')`),
+  check("tech_kpi_tech_request_status", sql`${t.status} IN ('new', 'forwarded', 'assigned', 'declined')`),
+  check("tech_kpi_tech_request_reviewed", sql`(${t.status} IN ('new', 'forwarded')) = (${t.reviewedAt} IS NULL)`),
+  check("tech_kpi_tech_request_forwarded", sql`${t.status} <> 'forwarded' OR ${t.forwardedAt} IS NOT NULL`),
   check("tech_kpi_tech_request_decline_reason", sql`${t.status} <> 'declined' OR length(btrim(coalesce(${t.reviewNote}, ''))) > 0`),
+  check("tech_kpi_tech_request_tool_length", sql`length(${t.tool}) <= 120`),
+]);
+/** A message on a request. Internal messages are for the tech side only, so a requester never receives them. */
+export const requestComments = pgTable("tech_kpi_request_comment", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  requestId: uuid("request_id").notNull().references(() => techRequests.id, { onDelete: "cascade" }),
+  authorId: text("author_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  body: text("body").notNull(), internal: boolean("internal").notNull().default(false),
+  createdAt: stamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  index("tech_kpi_request_comment_request_idx").on(t.requestId, t.createdAt),
+  check("tech_kpi_request_comment_body", sql`length(btrim(${t.body})) > 0 AND length(${t.body}) <= 5000`),
 ]);
 /**
  * A developer's ask for more hours on their ticket. When an admin approves, the hours join the estimate
@@ -174,12 +191,17 @@ export const snapshots = pgTable("tech_kpi_weekly_snapshot", {
   userId: text("user_id").notNull().references(() => user.id), weekStart: date("week_start", { mode: "string" }).notNull(),
   value: jsonb("value").$type<Record<string, unknown>>().notNull(), computedAt: stamp("computed_at").defaultNow().notNull(),
 }, (t) => [primaryKey({ columns: [t.userId, t.weekStart] })]);
+/** A file on one ticket or bug (`itemId`), or on one request (`requestId`). The file itself is in the private storage bucket. */
 export const attachments = pgTable("tech_kpi_attachment", {
-  id: uuid("id").defaultRandom().primaryKey(), itemId: uuid("item_id").notNull().references(() => workItems.id, { onDelete: "cascade" }),
+  id: uuid("id").defaultRandom().primaryKey(), itemId: uuid("item_id").references(() => workItems.id, { onDelete: "cascade" }),
+  requestId: uuid("request_id").references(() => techRequests.id, { onDelete: "cascade" }),
   uploadedById: text("uploaded_by_id").notNull().references(() => user.id), name: text("name").notNull(),
   mimeType: text("mime_type").notNull(), size: integer("size").notNull(), objectKey: text("object_key").notNull(),
   createdAt: stamp("created_at").defaultNow().notNull(),
-}, (t) => [index("tech_kpi_attachment_item_idx").on(t.itemId)]);
+}, (t) => [
+  index("tech_kpi_attachment_item_idx").on(t.itemId), index("tech_kpi_attachment_request_idx").on(t.requestId),
+  check("tech_kpi_attachment_one_target", sql`(${t.itemId} IS NULL) <> (${t.requestId} IS NULL)`),
+]);
 
 /** Pending leave does not affect capacity. Approval creates the leave rows atomically. */
 export const leaveRequests = pgTable("tech_kpi_leave_request", {

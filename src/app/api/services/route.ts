@@ -2,12 +2,12 @@ import { sql } from 'drizzle-orm';
 import { HeadBucketCommand } from '@aws-sdk/client-s3';
 import { db } from '@/db';
 import { storageClient, ATTACHMENT_BUCKET } from '@/lib/storage';
-import { requireAdmin, requireSession } from '@/server/authz';
+import { requireCapability, requireSession } from '@/server/authz';
 import { errorResponse } from '@/server/errors';
 export const runtime = 'nodejs';
 export async function GET(request: Request) {
   try {
-    requireAdmin(await requireSession(request.headers));
+    requireCapability(await requireSession(request.headers), "org.manage");
     const results = await Promise.allSettled([
       db.execute(sql`select 1 as connected`),
       storageClient().send(new HeadBucketCommand({Bucket:ATTACHMENT_BUCKET})),

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import clsx from 'clsx';
 import { Activity as ActivityIcon, ArrowRight, ArrowUpRight, Bug, CalendarClock, CalendarDays, Check, CheckCheck, ChevronDown, CircleCheck, Clock3, Hourglass, ListTodo, Plus, ShieldCheck, Sun, TriangleAlert, WandSparkles } from 'lucide-react';
 import type { DashboardData, WorkItem } from '@/lib/types';
+import { leadsWork } from '@/lib/permissions';
 import { calculateMemberKpi, dateKey, getBugKpi, getMemberTrend, getTeamTrend, getWeekStart, shiftDate, type calculateTeamKpi } from '@/lib/kpi';
 import { Avatar, EmptyState, Panel, ProgressBar, StatusIcon } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
@@ -22,7 +23,7 @@ type TeamScores = ReturnType<typeof calculateTeamKpi>;
 type DashboardProps = { data: DashboardData; week: string; scores: TeamScores; onOpen: (id: string) => void; onOpenProject: (id: string) => void; onAction: OnAction; onExtend: (item: WorkItem) => void; onAddHours: (item: WorkItem) => void; onAdd: (kind: 'task' | 'bug') => void; busy: boolean };
 
 export function Dashboard({ data, week, scores, onOpen, onOpenProject, onAction, onExtend, onAddHours, onAdd, busy }: DashboardProps) {
-  const isAdmin = data.currentUser.role === 'admin';
+  const isAdmin = leadsWork(data.currentUser);
   const own = calculateMemberKpi(data.currentUser, data, week);
   const currentWeek = getWeekStart(new Date(), data.settings.timezone);
   const current = week === currentWeek;
@@ -128,7 +129,7 @@ function MyWork({ data, onOpen, onAction, onExtend, onAddHours, onAdd, busy }: P
   ].map(group => ({ ...group, items: group.items.sort(byDate) })).filter(group => group.items.length > 0);
   return <Panel title="My work" count={mine.length} className="my-work-panel" action={<Button variant="link" size="sm" asChild><Link href={routeFor(data, 'tickets')}>All my tickets<ArrowUpRight data-icon="inline-end" size={14} /></Link></Button>}>
     {mine.length === 0
-      ? <EmptyState title="No open work" description="Request a ticket for new work, or wait for your admin to assign one." action={<Button onClick={() => onAdd('task')}><Plus data-icon="inline-start" />Request ticket</Button>} />
+      ? <EmptyState title="No open work" description="Request a ticket for new work, or wait for your tech lead to assign one." action={<Button onClick={() => onAdd('task')}><Plus data-icon="inline-start" />Request ticket</Button>} />
       : groups.map(group => <section key={group.id} className={clsx('my-work-group', `my-work-${group.id}`)} aria-label={group.label}>
           <h3 className="my-work-heading">{group.icon}{group.label}<span>{group.items.length}</span></h3>
           <ul className="my-work-list">{group.items.map(item => <li key={item.id}><MyWorkRow data={data} item={item} reason={group.id === 'attention' ? reasons.get(item.id) ?? null : null} onOpen={onOpen} onAction={onAction} onExtend={onExtend} onAddHours={onAddHours} busy={busy} /></li>)}</ul>
@@ -156,7 +157,7 @@ function MyWorkRow({ data, item, reason, onOpen, onAction, onExtend, onAddHours,
   </div>;
 }
 
-/** A developer's open asks: ticket requests and more hours that still wait for the admin. */
+/** A developer's open asks: ticket requests and more hours that still wait for the tech lead. */
 function MyRequests({ data }: { data: DashboardData }) {
   const requests = data.requests.filter(r => r.status === 'pending').length;
   const extensions = data.dueDateRequests.filter(r => r.status === 'pending').length;
@@ -175,7 +176,7 @@ function MyRequests({ data }: { data: DashboardData }) {
 }
 
 function AttentionRow({ data, item, reason, onOpen, onAction, onExtend, busy }: { data: DashboardData; item: WorkItem; reason: string; onOpen: (id: string) => void; onAction: OnAction; onExtend: (item: WorkItem) => void; busy: boolean }) {
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   const review = item.status === 'in_review';
   const verify = item.status === 'fixed';
   const overdue = item.type === 'task' && !!item.dueDate && item.dueDate < today(data.settings.timezone) && item.status !== 'blocked';

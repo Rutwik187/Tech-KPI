@@ -11,7 +11,7 @@ export default function ErrorPage({reset}: {error: Error; reset: () => void}) {
           <CardDescription>URBAN GABRU / TECH WORKSPACE</CardDescription>
           <CardTitle><h1>We couldn’t load your workspace.</h1></CardTitle>
         </CardHeader>
-        <CardContent><p className="text-muted-foreground">Please try again. If this continues, contact your team admin.</p></CardContent>
+        <CardContent><p className="text-muted-foreground">Please try again. If this continues, contact your tech lead.</p></CardContent>
         <CardFooter><Button onClick={reset}><RefreshCw data-icon="inline-start" aria-hidden="true" />Try again</Button></CardFooter>
       </Card>
     </main>

@@ -24,7 +24,7 @@ describe('leave requests', () => {
     expect(() => mutateDemo(approved, { action: 'approveLeaveRequest', id: request.id }, data.currentUser)).toThrow('already reviewed');
   });
 
-  it('restricts review to admins and withdrawal and reads to the requester', () => {
+  it('restricts review to the tech lead and withdrawal and reads to the requester', () => {
     const data = fixture();
     const [one, two] = data.members.filter(m => m.role === 'developer');
     const pending = mutateDemo(data, ask, one);
@@ -32,7 +32,7 @@ describe('leave requests', () => {
     expect(viewAs(pending, two.id).leaveRequests).toEqual([]);
     expect(viewAs(pending, one.id).leaveRequests).toHaveLength(1);
     expect(viewAs(pending, 'demo-rahul').leaveRequests).toEqual([]);
-    expect(() => mutateDemo(pending, { action: 'approveLeaveRequest', id }, one)).toThrow('Only admins');
+    expect(() => mutateDemo(pending, { action: 'approveLeaveRequest', id }, one)).toThrow('Only the tech lead or an admin');
     expect(() => mutateDemo(pending, { action: 'withdrawLeaveRequest', id }, two)).toThrow('not found');
     expect(mutateDemo(pending, { action: 'withdrawLeaveRequest', id }, one).leaveRequests).toEqual([]);
   });

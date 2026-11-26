@@ -21,7 +21,7 @@ export async function linkMicrosoftAccount(tx: Tx, userId: string, rawObjectId: 
 }
 
 /**
- * First sign-in of a member an admin added by email. The claims come from the code exchange with this tenant's token endpoint.
+ * First sign-in of a member the tech lead added by email. The claims come from the code exchange with this tenant's token endpoint.
  * The sign-in name (UPN) is set by the tenant's administrators, and guest names carry #EXT#, so they cannot match a work email.
  * The link is made once. Later sign-ins match the Object ID only, so a renamed account cannot take over another member.
  */
@@ -56,7 +56,7 @@ export function nameFromEmail(email: string): string {
 
 /**
  * The first sign-in of someone from another team, such as Sales. When their work email is on a domain in Settings,
- * they get a requester account: they raise requests for tech work and see only requests. An admin can change the role later.
+ * they get a requester account: they raise requests for tech work and see only requests. The tech lead can change the role later.
  * Guests and people the team already knows by this email, active or not, never get a new account this way.
  */
 export async function provisionRequester(claims: { oid?: unknown; tid?: unknown; preferred_username?: unknown; name?: unknown; acct?: unknown }, tenantId: string): Promise<{ email: string; name: string } | null> {

@@ -30,7 +30,7 @@ export function LoginForm({ configured, oauthError }: { configured: boolean; oau
     try {
       const result = await authClient.signIn.social({ provider: 'microsoft', callbackURL: '/dashboard', errorCallbackURL: '/login' });
       if (result.error) {
-        setError('Microsoft sign-in could not start. Please try again or contact your team admin.');
+        setError('Microsoft sign-in could not start. Please try again or contact your tech lead.');
         setBusy(false);
       }
     } catch {
@@ -52,14 +52,14 @@ export function LoginForm({ configured, oauthError }: { configured: boolean; oau
           <div className="login-story-content">
             <p className="login-eyebrow">GOOD WORK STARTS WITH CLARITY</p>
             <h1 id="login-story-title">Less chasing.<br /><span>More shipping.</span></h1>
-            <p className="login-story-description">One shared view of what matters.<br />From the morning standup to the final review.</p>
+            <p className="login-story-description">Every team asks for tools and changes in one place.<br />The tech team plans, assigns, and ships them here.</p>
             <div className="login-benefits">
-              {['Capture a task or bug in seconds', 'Know what’s pending and who owns it', 'Raise a request from any team, and follow it'].map(text => (
+              {['Ask for a new tool, a change, or a fix, with files', 'Follow each request from review to done', 'Plan, assign, and deliver the work as a team'].map(text => (
                 <div key={text}><span><Check aria-hidden="true" /></span>{text}</div>
               ))}
             </div>
           </div>
-          <p className="login-bottom">Built for the Urban Gabru tech team.</p>
+          <p className="login-bottom">Built for everyone at Urban Gabru.</p>
         </section>
         <section className="login-panel" aria-labelledby="login-title">
           <Card className="login-card">
@@ -85,10 +85,10 @@ export function LoginForm({ configured, oauthError }: { configured: boolean; oau
               {!configured && (
                 <Alert>
                   <ShieldCheck aria-hidden="true" />
-                  <AlertDescription>Microsoft sign-in is being connected. Please contact your team admin.</AlertDescription>
+                  <AlertDescription>Microsoft sign-in is being connected. Please contact your tech lead.</AlertDescription>
                 </Alert>
               )}
-              <p className="login-help">Your team admin manages access. Microsoft handles your sign-in.</p>
+              <p className="login-help">Your tech lead manages access. Microsoft handles your sign-in.</p>
             </CardContent>
             <CardFooter className="flex-col items-stretch gap-3">
               <p className="login-demo-copy">Take a look around first.</p>

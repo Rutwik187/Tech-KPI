@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import Link from 'next/link';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { toast } from 'sonner';
-import { Activity as ActivityIcon, AlertTriangle, ArrowDown, ArrowUpRight, Bug, CalendarClock, CalendarDays, CircleDot, ClipboardCopy, FileText, Flag, Link2, ListTodo, LoaderCircle, Pencil, Plus, RotateCcw } from 'lucide-react';
-import type { Activity, DashboardData, WorkItem } from '@/lib/types';
+import { Activity as ActivityIcon, AlertTriangle, ArrowDown, ArrowUpRight, Bug, CalendarClock, CalendarDays, CircleDot, ClipboardCopy, Flag, Link2, ListTodo, Pencil, Plus, RotateCcw } from 'lucide-react';
+import type { Activity, DashboardData, TechRequest, WorkItem } from '@/lib/types';
+import { leadsWork } from '@/lib/permissions';
 import { getBugKpi } from '@/lib/kpi';
 import { Avatar, FormField, FormSelect, Modal, PriorityBadge, StatusBadge, StatusIcon } from '@/components/ui';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -14,11 +14,12 @@ import { FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { extensionHistory, reasonLabel, ticketExtendedDays } from '@/lib/timeline';
-import { displayDate, displayDateTime, findMember, findProject, hours, isAdhocProject, kindLabels, pendingExtension, percent, projectMembers, requestForItem, routeFor, statusLabels, today, type MutationFn, type OnAction, type WorkClassification } from './lib';
+import { displayDate, displayDateTime, findMember, findProject, hours, isAdhocProject, kindLabels, pendingExtension, percent, projectMembers, requestForItem, statusLabels, today, type MutationFn, type OnAction, type WorkClassification } from './lib';
 import { TeamTag } from './requests';
 import { canAddHours, canMoveDueDate, copyItemLink, ItemActions, PendingExtensionBadge, PhaseTag, ProjectTag, SeverityBadge } from './parts';
 import { dayCount, ExtensionHistory, TicketExtendedBadge } from './timeline';
 import { ClassificationFields, FormChoice } from './forms';
+import { AttachmentPanel } from './attachments';
 
 function activityText(event: Activity, item: WorkItem) {
   const noun = kindLabels[item.type].toLowerCase();
@@ -65,14 +66,14 @@ function Fact({ label, children, action, className }: { label: string; children:
   return <div className={clsx('detail-fact', className)}><span className="detail-fact-label">{label}</span><strong className="detail-fact-value">{children}</strong>{action}</div>;
 }
 
-type DrawerProps = { item: WorkItem; data: DashboardData; busy: boolean; onClose: () => void; onOpen: (id: string) => void; onAction: OnAction; onAddHours: () => void; onExtend: () => void; mutate: MutationFn };
+type DrawerProps = { item: WorkItem; data: DashboardData; busy: boolean; onClose: () => void; onOpen: (id: string) => void; onOpenRequest: (request: TechRequest) => void; onAction: OnAction; onAddHours: () => void; onExtend: () => void; mutate: MutationFn };
 
-export function ItemDrawer({ item, data, busy, onClose, onOpen, onAction, onAddHours, onExtend, mutate }: DrawerProps) {
+export function ItemDrawer({ item, data, busy, onClose, onOpen, onOpenRequest, onAction, onAddHours, onExtend, mutate }: DrawerProps) {
   // Editing belongs to one item. Opening a linked item shows it unedited, without closing the panel.
   const [editingId, setEditingId] = useState<string | null>(null);
   const editing = editingId === item.id;
   const setEditing = (on: boolean) => setEditingId(on ? item.id : null);
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   const owner = item.assigneeId === data.currentUser.id;
   const person = findMember(data, item.assigneeId);
   const phase = item.phaseId ? data.phases.find(p => p.id === item.phaseId) : undefined;
@@ -88,7 +89,7 @@ export function ItemDrawer({ item, data, busy, onClose, onOpen, onAction, onAddH
   const project = findProject(data, item.projectId);
   const pastProjectTarget = item.type === 'task' && !closed && !!item.dueDate && !!project?.targetDate && !isAdhocProject(project) && item.dueDate > project.targetDate;
   const overdue = item.type === 'task' && !closed && !!item.dueDate && item.dueDate < today(data.settings.timezone);
-  const actorName = (id: string) => id === data.currentUser.id ? 'You' : findMember(data, id)?.name ?? 'Your admin';
+  const actorName = (id: string) => id === data.currentUser.id ? 'You' : findMember(data, id)?.name ?? 'Your tech lead';
   const creatorName = creator ? actorName(creator.actorId) : null;
   const ticket = item.type === 'task';
   // Work another team asked for shows who asked, so the developer knows whom it is for.
@@ -136,13 +137,13 @@ export function ItemDrawer({ item, data, busy, onClose, onOpen, onAction, onAddH
           <Fact label="Fix by" className={clsx(bugKpi && bugKpi.overdueHours > 0 && !closed && 'detail-fact-late')}>{bugKpi ? displayDateTime(bugKpi.deadline1) : '—'} <small>· {item.severity === 'critical' ? data.settings.criticalTargetHours : data.settings.normalTargetHours} working h target</small></Fact>
           <Fact label={closed ? 'Bug points' : 'Time left'}>{closed ? percent(bugKpi?.score ?? null) : bugKpi && bugKpi.overdueHours > 0 ? `${hours(bugKpi.overdueHours)} h late` : `${hours(bugKpi?.hoursRemaining ?? 0)} h`} <small>{closed ? `· ${hours(bugKpi?.resolutionWorkingHours ?? 0)} working h to fix` : '· working hours only'}</small></Fact>
         </>}
-        <Fact label="Created">{displayDate(item.createdAt)}{creatorName && <small> · by {creatorName === 'You' ? 'you' : creatorName === 'Your admin' ? 'your admin' : creatorName}</small>}</Fact>
-        {request && <Fact label="Requested by" className="detail-fact-request" action={admin && <Button variant="link" size="sm" asChild><Link href={routeFor(data, `requests?q=${request.key}`)}>{request.key}<ArrowUpRight data-icon="inline-end" size={11} /></Link></Button>}>
+        <Fact label="Created">{displayDate(item.createdAt)}{creatorName && <small> · by {creatorName === 'You' ? 'you' : creatorName === 'Your tech lead' ? 'your tech lead' : creatorName}</small>}</Fact>
+        {request && <Fact label="Requested by" className="detail-fact-request" action={<Button variant="link" size="sm" onClick={() => onOpenRequest(request)} title="Open the request, its files, and its comments">{request.key}<ArrowUpRight data-icon="inline-end" size={11} /></Button>}>
           {request.requesterName}<TeamTag data={data} id={request.departmentId} />{request.neededBy && <small>· needs it by {displayDate(request.neededBy)}</small>}
         </Fact>}
       </div>
       {phase?.description && <p className="phase-note"><strong>{phase.name}:</strong> {phase.description}</p>}
-      {pastProjectTarget && <Alert className="detail-blocker"><CalendarClock /><AlertTitle>Dated after the project target</AlertTitle><AlertDescription>{project!.name} targets {displayDate(project!.targetDate)}. {admin ? 'Extend the project if the whole project slips.' : 'Your admin may need to extend the project.'}</AlertDescription></Alert>}
+      {pastProjectTarget && <Alert className="detail-blocker"><CalendarClock /><AlertTitle>Dated after the project target</AlertTitle><AlertDescription>{project!.name} targets {displayDate(project!.targetDate)}. {admin ? 'Extend the project if the whole project slips.' : 'Your tech lead may need to extend the project.'}</AlertDescription></Alert>}
 
       {!editing && <section className="drawer-section detail-description"><h3 className="detail-section-heading">Details</h3><p className={clsx(!item.description && 'detail-empty')}>{item.description || 'No details yet.'}</p></section>}
       {(linkedTicket || linkedBugs.length > 0) && <section className="drawer-section">
@@ -152,7 +153,8 @@ export function ItemDrawer({ item, data, busy, onClose, onOpen, onAction, onAddH
         </button>)}</div>
       </section>}
       {ticket && item.dueDate && <section className="drawer-section"><h3 className="detail-section-heading">Date history <span>{extensionCount}</span></h3><ExtensionHistory data={data} entityId={item.id} empty={`Still on its first date, ${displayDate(item.originalDueDate ?? item.dueDate)}.`} /></section>}
-      <Attachments data={data} itemId={item.id} />
+      {request && <p className="request-files-note"><ArrowUpRight size={13} aria-hidden="true" />{request.requesterName} raised this in {request.key}. <Button variant="link" size="sm" onClick={() => onOpenRequest(request)}>Open the request</Button> to read its comments{request.attachmentCount ? ` and ${request.attachmentCount === 1 ? 'its file' : `its ${request.attachmentCount} files`}` : ''}.</p>}
+      <AttachmentPanel data={data} target={{ itemId: item.id }} />
       <section className="activity-section">
         <h3 className="detail-section-heading">Timeline <span>{events.length}</span></h3>
         <div className="timeline">{events.length === 0 ? <p className="form-help">Changes to this {kindLabels[item.type].toLowerCase()} will appear here.</p>
@@ -169,9 +171,9 @@ export function ItemDrawer({ item, data, busy, onClose, onOpen, onAction, onAddH
   </Modal>;
 }
 
-/** Admins can change everything here. An owner can change the wording and priority, not the owner, project, or estimate. */
+/** The tech lead can change everything here. An owner can change the wording and priority, not the owner, project, or estimate. */
 function ItemDetailsForm({ item, data, mutate, busy, onClose }: { item: WorkItem; data: DashboardData; mutate: MutationFn; busy: boolean; onClose: () => void }) {
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   const [classification, setClassification] = useState<WorkClassification>({ projectId: item.projectId, phaseId: item.phaseId, assigneeId: item.assigneeId });
   const [taskId, setTaskId] = useState(item.taskId ?? '');
   const hasLinkedBugs = item.type === 'task' && data.items.some(bug => bug.type === 'bug' && bug.taskId === item.id);
@@ -197,53 +199,7 @@ function ItemDetailsForm({ item, data, mutate, busy, onClose }: { item: WorkItem
     {admin && (hasLinkedBugs || (item.type === 'bug' && taskId)) && <Alert><Link2 /><AlertDescription>{hasLinkedBugs ? 'This ticket has linked bugs. Unlink them before you change its project or phase.' : 'Project and phase come from the linked ticket. Choose No linked ticket to move this bug.'}</AlertDescription></Alert>}
     <FormField>Priority<FormChoice name="priority" defaultValue={item.priority} options={['low', 'medium', 'high', 'urgent'].map(priority => ({ value: priority, label: priority[0].toUpperCase() + priority.slice(1) }))} /></FormField>
     <FormField>Details<Textarea name="description" rows={4} defaultValue={item.description} /></FormField>
-    {!admin && <p className="form-help">Your admin changes the owner, project, phase, and estimate.</p>}
+    {!admin && <p className="form-help">Your tech lead changes the owner, project, phase, and estimate.</p>}
     <div className="detail-edit-actions"><Button variant="outline" size="sm" type="button" onClick={onClose}>Cancel</Button><Button size="sm" disabled={busy || !classification.assigneeId} type="submit">Save details</Button></div>
   </FieldGroup></form>;
-}
-
-function Attachments({ data, itemId }: { data: DashboardData; itemId: string }) {
-  const uploadInputId = useId();
-  const uploadInputRef = useRef<HTMLInputElement>(null);
-  const [files, setFiles] = useState<{ id: string; name: string; url: string; createdAt: string }[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    if (data.mode === 'demo') return;
-    const controller = new AbortController();
-    async function load() {
-      try {
-        const response = await fetch(`/api/attachments?itemId=${encodeURIComponent(itemId)}`, { signal: controller.signal });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error ?? 'Attachments could not be loaded.');
-        setFiles(result.attachments ?? []);
-      } catch (e) { if (e instanceof Error && e.name !== 'AbortError') setError(e.message); }
-    }
-    void load();
-    return () => controller.abort();
-  }, [data.mode, itemId]);
-  async function upload(file?: File) {
-    if (!file) return;
-    if (file.size > 10 * 1024 * 1024) { toast.error('Choose a file smaller than 10 MB.'); return; }
-    const form = new FormData();
-    form.append('itemId', itemId); form.append('file', file);
-    setLoading(true);
-    try {
-      const response = await fetch('/api/attachments', { method: 'POST', body: form });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error ?? 'Could not attach this file.');
-      setFiles(result.attachments ?? []); setError(''); toast.success('File attached');
-    } catch (e) { toast.error(e instanceof Error ? e.message : 'Could not attach this file.'); }
-    finally { setLoading(false); }
-  }
-  return <section className="drawer-section attachments-section">
-    <div className="detail-section-heading">Attachments{data.mode === 'live' && <>
-      <Button variant="outline" size="sm" type="button" disabled={loading} onClick={() => uploadInputRef.current?.click()}>{loading ? <LoaderCircle data-icon="inline-start" className="spin" /> : <Plus data-icon="inline-start" />}{loading ? 'Uploading…' : 'Attach file'}</Button>
-      <Input ref={uploadInputRef} id={uploadInputId} aria-label="Choose an attachment" className="sr-only" type="file" accept="image/png,image/jpeg,image/webp,.pdf,.txt,.log,.csv,.json" disabled={loading} onChange={e => { void upload(e.target.files?.[0]); e.target.value = ''; }} />
-    </>}</div>
-    {data.mode === 'demo' ? <p className="attachment-help">Attach screenshots, PDFs, and logs in your live workspace.</p>
-      : error ? <p className="attachment-help">{error}</p>
-      : files.length === 0 ? <p className="attachment-help">Add a screenshot, document, or log. Up to 10 MB each.</p>
-      : files.map(file => <a key={file.id} className="attachment-row" href={file.url} target="_blank" rel="noopener noreferrer"><FileText size={17} /><span>{file.name}</span><ArrowUpRight size={14} /></a>)}
-  </section>;
 }

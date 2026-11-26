@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDownToLine, ArrowRight, Bell, Briefcase, Bug, CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, ClipboardCheck, Coffee, Eye, FolderKanban, FolderPlus, Inbox, LayoutDashboard, ListTodo, Plus, RotateCcw, Search, Settings2, UserPlus, Users, UsersRound } from 'lucide-react';
-import type { DashboardData, Project, WorkItem } from '@/lib/types';
+import { ArrowDownToLine, ArrowRight, Bell, Briefcase, Bug, Building2, CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, ClipboardCheck, Coffee, Contact, Eye, FolderKanban, FolderPlus, History, Inbox, LayoutDashboard, ListTodo, Plus, RotateCcw, Search, Settings2, UserPlus, Users, UsersRound } from 'lucide-react';
+import type { DashboardData, Project, TechRequest, WorkItem } from '@/lib/types';
+import { can, isOrgAdmin, leadsWork } from '@/lib/permissions';
 import { calculateTeamKpi, getWeekStart, shiftDate } from '@/lib/kpi';
 import { Avatar, EmptyState, FormSelect, Kbd, Panel, StatusIcon } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
@@ -14,12 +15,15 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { calculateMemberKpi } from '@/lib/kpi';
-import { isSection, REQUESTER_SECTIONS } from '@/lib/sections';
-import { adminOnlyPages, attentionItems, bands, DEMO_DATA_KEY, demoSnapshot, demoViewer, displayDate, findMember, firstName, isDone, mutateDemo, OPEN_PARAM, roleLabel, routeFor, saveDemo, setDemoViewer, statusLabels, subscribeDemo, viewAs, downloadCsv, type ModalState, type Mutation, type MutationFn, type QuickAction } from './lib';
+import { canOpen, isSection, type Section } from '@/lib/sections';
+import { attentionItems, bands, DEMO_DATA_KEY, demoSnapshot, demoViewer, displayDate, findMember, firstName, isDone, mutateDemo, OPEN_PARAM, REQUEST_PARAM, roleLabel, roleNames, routeFor, saveDemo, setDemoViewer, statusLabels, subscribeDemo, viewAs, downloadCsv, type ModalState, type Mutation, type MutationFn, type QuickAction, type RequestActionKind } from './lib';
 import { Dashboard } from './dashboard';
 import { Approvals } from './approvals';
 import { LeavePage } from './leave';
-import { MyRequests, RequestInbox, TechRequestForm } from './requests';
+import { MyRequests, RequestActionForm, RequestDrawer, RequestInbox, TechRequestForm } from './requests';
+import { People } from './people';
+import { ActivityLog } from './activity';
+import { OrgOverview } from './org-overview';
 import { DepartmentForm, OtherTeams } from './other-teams';
 import { WorkList } from './work-list';
 import { Standup } from './standup';
@@ -35,28 +39,43 @@ import { celebrate, dayBrief, greeting } from './engagement';
 import { CommandPalette, type PaletteModal } from './command-palette';
 import { useSearchShortcut } from './use-choice';
 
-type PageLink = { id: string; label: string; icon: typeof LayoutDashboard; admin?: boolean };
-const workPages: PageLink[] = [
-  { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
-  { id: 'tickets', label: 'Tickets', icon: ListTodo },
-  { id: 'bugs', label: 'Bugs', icon: Bug },
-  { id: 'approvals', label: 'Approvals', icon: ClipboardCheck },
-  { id: 'leave', label: 'Leave', icon: CalendarDays },
-  { id: 'requests', label: 'Requests', icon: Inbox, admin: true },
-];
-const teamPages: PageLink[] = [
-  { id: 'standup', label: 'Daily standup', icon: Coffee, admin: true },
-  { id: 'team', label: 'Team', icon: Users, admin: true },
-  { id: 'other-teams', label: 'Other teams', icon: Briefcase, admin: true },
-  { id: 'projects', label: 'Projects', icon: FolderKanban },
+type PageLink = { id: Section; label: string; icon: typeof LayoutDashboard };
+/**
+ * The menu, in three groups. Each person sees only the pages their role may open (`canOpen`), so the same menu serves
+ * someone from Sales, a project manager, a developer, the tech lead, and an admin.
+ */
+const NAV: { label: string; pages: PageLink[] }[] = [
+  { label: 'Workspace', pages: [
+    { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
+    { id: 'requests', label: 'Requests', icon: Inbox },
+  ] },
+  { label: 'Tech team', pages: [
+    { id: 'tickets', label: 'Tickets', icon: ListTodo },
+    { id: 'bugs', label: 'Bugs', icon: Bug },
+    { id: 'approvals', label: 'Approvals', icon: ClipboardCheck },
+    { id: 'leave', label: 'Leave', icon: CalendarDays },
+    { id: 'standup', label: 'Daily standup', icon: Coffee },
+    { id: 'team', label: 'Team', icon: Users },
+    { id: 'projects', label: 'Projects', icon: FolderKanban },
+  ] },
+  { label: 'Organisation', pages: [
+    { id: 'people', label: 'People', icon: Contact },
+    { id: 'other-teams', label: 'Other teams', icon: Briefcase },
+    { id: 'activity', label: 'Activity', icon: History },
+  ] },
 ];
 
 function headings(page: string, data: DashboardData, brief: string): { title: string; description: string } {
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   if (data.currentUser.role === 'requester') {
-    const intro = 'Ask the tech team for what your team needs, and follow each request here until it is done.';
+    const intro = 'Ask the tech team for a new tool, a change, or a fix, and follow each request here until it is done.';
     return page === 'account' ? { title: 'My account', description: 'Your profile and sign-in.' }
       : { title: page === 'requests' ? 'My requests' : greeting(data.currentUser.name, new Date(), data.settings.timezone), description: intro };
+  }
+  if (data.currentUser.role === 'project_manager') {
+    const intro = 'Review what other teams ask for. Ask questions in the comments, correct the details, then forward each request to the tech lead or decline it.';
+    return page === 'account' ? { title: 'My account', description: 'Your profile and sign-in.' }
+      : { title: page === 'requests' ? 'Requests' : greeting(data.currentUser.name, new Date(), data.settings.timezone), description: intro };
   }
   switch (page) {
     case 'standup': return { title: 'Daily standup', description: 'Go through each developer’s open tickets and add new ones as you talk.' };
@@ -64,15 +83,17 @@ function headings(page: string, data: DashboardData, brief: string): { title: st
     case 'bugs': return { title: admin ? 'Bugs' : 'My bugs', description: 'Fix a bug before its fix-by time to earn full bug points.' };
     case 'approvals': return admin
       ? { title: 'Approvals', description: 'Leave requests, ticket requests, asks for more hours, and finished work that wait for you.' }
-      : { title: 'Approvals', description: 'The leave, tickets, and hours you asked for, and finished work that waits for your admin.' };
+      : { title: 'Approvals', description: 'The leave, tickets, and hours you asked for, and finished work that waits for your tech lead.' };
     case 'leave': return admin
       ? { title: 'Leave', description: 'Who is away and when. Approve leave requests, and add leave for the team.' }
       : { title: 'My leave', description: 'Request leave, follow your requests, and see every day of leave you took or will take.' };
-    case 'requests': return { title: 'Requests', description: 'Tech requests from Sales, E-commerce, and other teams. Assign each one to a developer, or decline it with a reason.' };
-    case 'team': return { title: 'Team', description: 'People, their hours at work, leave, and scores.' };
+    case 'requests': return { title: 'Requests', description: 'What Sales, E-commerce, and other teams ask for. Project managers review each request and forward it. Assign forwarded requests to a developer, or decline them with a reason.' };
+    case 'team': return { title: 'Team', description: 'The tech team and project managers, their hours at work, leave, and scores.' };
+    case 'people': return { title: 'People', description: 'Everyone in the organisation: their role, their team, and their access. Change roles here.' };
+    case 'activity': return { title: 'Activity', description: 'Every change across the workspace, newest first: who did what, when, and why.' };
     case 'other-teams': return { title: 'Other teams', description: 'Teams outside tech, such as Sales, and the people in them. Everyone you add to a team signs in with their Microsoft work account and raises requests for it.' };
     case 'projects': return { title: 'Projects', description: admin ? 'Projects, their phases, members, and progress.' : 'The projects you work on and their phases.' };
-    case 'settings': return { title: 'Settings', description: 'Working hours, score weights, bug targets, and holidays.' };
+    case 'settings': return { title: 'Settings', description: isOrgAdmin(data.currentUser) ? 'Working hours, score weights, bug targets, and holidays.' : 'Working hours, score weights, bug targets, and holidays for the tech team.' };
     case 'account': return { title: 'My account', description: 'Your profile and sign-in.' };
     default: return { title: greeting(data.currentUser.name, new Date(), data.settings.timezone), description: brief };
   }
@@ -104,18 +125,25 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
   // Drawers belong to the page they were opened on.
   const [openedOn, setOpenedOn] = useState(pathname);
   if (openedOn !== pathname) { setOpenedOn(pathname); setProjectId(null); }
-  const isAdmin = data.currentUser.role === 'admin';
+  const isAdmin = leadsWork(data.currentUser);
   const isRequester = data.currentUser.role === 'requester';
+  const isManager = data.currentUser.role === 'project_manager';
+  // Requesters and project managers work with requests only. They have no tickets, scores, or search.
+  const requestsOnly = isRequester || isManager;
   const scores = useMemo(() => calculateTeamKpi(data, week), [data, week]);
   // The open ticket or bug lives in the address, so its link can be shared and survives a reload.
   const openKey = searchParams.get(OPEN_PARAM);
   const selected = openKey ? data.items.find(i => i.key === openKey) : undefined;
   const selectedProject = data.projects.find(p => p.id === projectId);
   const currentWeek = getWeekStart(new Date(), data.settings.timezone);
-  const brief = useMemo(() => page === 'dashboard' && !isRequester ? dayBrief(data, isAdmin ? undefined : calculateMemberKpi(data.currentUser, data, currentWeek)) : '', [page, data, isAdmin, isRequester, currentWeek]);
+  const brief = useMemo(() => page === 'dashboard' && !requestsOnly ? dayBrief(data, isAdmin ? undefined : calculateMemberKpi(data.currentUser, data, currentWeek)) : '', [page, data, isAdmin, requestsOnly, currentWeek]);
   const { title, description } = headings(page, data, brief);
-  // A requester's workspace is their requests and their account. The Requests page is the admin's inbox, so developers do not see it.
-  const blocked = isRequester ? !REQUESTER_SECTIONS.includes(page) : !isAdmin && (adminOnlyPages.includes(page) || page === 'requests');
+  // A requester's workspace is their requests and their account; a project manager's, every team's requests.
+  // The Requests page is the inbox for project managers and the tech lead, so developers do not see it.
+  const blocked = !canOpen(page, data.currentUser.role);
+  // The open request also lives in the address. Anyone who can see it opens the same details, from any page.
+  const requestKey = searchParams.get(REQUEST_PARAM);
+  const selectedRequest = requestKey ? data.techRequests.find(r => r.key === requestKey) : undefined;
   // The list keeps its filters while a ticket opens and closes, so the open ticket is not part of its identity.
   const listQuery = useMemo(() => { const params = new URLSearchParams(searchParams.toString()); params.delete(OPEN_PARAM); return params.toString(); }, [searchParams]);
 
@@ -123,9 +151,18 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     const item = id ? data.items.find(i => i.id === id) : undefined;
     const params = new URLSearchParams(window.location.search);
     if (item) params.set(OPEN_PARAM, item.key); else params.delete(OPEN_PARAM);
+    // A ticket opened from a request replaces the request's panel.
+    if (item) params.delete(REQUEST_PARAM);
     const query = params.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
   }, [data.items]);
+  const openRequest = useCallback((request: TechRequest | null) => {
+    const params = new URLSearchParams(window.location.search);
+    if (request) { params.set(REQUEST_PARAM, request.key); params.delete(OPEN_PARAM); } else params.delete(REQUEST_PARAM);
+    const query = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+  }, []);
+  const actOnRequest = useCallback((kind: RequestActionKind, request: TechRequest) => setModal({ type: 'requestAction', kind, request }), []);
 
   // Each save returns the whole workspace. Only the newest answer is applied, so a slow reply never undoes a later change.
   const latestRequest = useRef(0);
@@ -193,14 +230,14 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     const message = item.status === 'blocked' && status === 'in_progress' ? `${item.key} is unblocked and back in progress.`
       : status === 'done' ? `Ticket ${item.status === 'in_review' ? 'approved' : 'completed'}. +${item.estimateHours} h for ${owner}.`
       : status === 'verified' ? 'Fix verified. Nice catch.' : status === 'fixed' ? 'Marked fixed. Waiting for verification.'
-      : status === 'in_review' ? 'Completed. Waiting for admin review.' : `Moved to ${statusLabels[status].toLowerCase()}`;
+      : status === 'in_review' ? 'Completed. Waiting for tech lead review.' : `Moved to ${statusLabels[status].toLowerCase()}`;
     if (status === 'done' || status === 'verified') celebrate();
     void mutate({ action: 'updateItem', id: item.id, patch: { status } }, message, { optimistic: true });
   }
   function exportScores() {
     downloadCsv([
       ['Week starting', 'Name', 'Role', 'Hours at work', 'Ticket hours done', 'Ticket hours %', 'Bug points', 'Bugs scored', 'Efficiency %', 'Status'],
-      ...scores.members.map(s => [week, s.member.name, s.member.role === 'admin' ? 'Admin' : 'Developer', s.capacityHours, s.creditedHours, s.deliveryScore, s.bugScore, s.bugsScored, s.efficiency, bands[s.band]]),
+      ...scores.members.map(s => [week, s.member.name, roleNames[s.member.role], s.capacityHours, s.creditedHours, s.deliveryScore, s.bugScore, s.bugsScored, s.efficiency, bands[s.band]]),
     ], `urban-gabru-scores-${week}.csv`);
     toast.success('Weekly report downloaded');
   }
@@ -209,6 +246,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
   const extendTicket = (item: WorkItem) => setModal({ type: 'extend', target: { kind: 'ticket', item } });
   const addHours = (item: WorkItem) => setModal({ type: 'extend', target: { kind: 'ticket', item, hours: true } });
   const extendProject = (project: Project) => setModal({ type: 'extend', target: { kind: 'project', project } });
+  const editRequest = useCallback((request: TechRequest) => setModal({ type: 'techRequest', request }), []);
   // Someone from another team is a person with the requester role, so their form is the member form.
   const openModal = (type: PaletteModal) => setModal(type === 'otherTeamMember' ? { type: 'member', role: 'requester' } : { type } as ModalState);
   const searchKey = useSearchShortcut();
@@ -217,26 +255,26 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       // Search also works over a ticket's details, but not over a form, so nothing typed is lost.
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') { if (isRequester) return; event.preventDefault(); setPaletteOpen(open => open ? false : !document.querySelector('[role="dialog"]:not(.drawer)')); return; }
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') { if (requestsOnly) return; event.preventDefault(); setPaletteOpen(open => open ? false : !document.querySelector('[role="dialog"]:not(.drawer)')); return; }
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.repeat || typing(event.target)) return;
       if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
       if (event.key === '/') {
         event.preventDefault();
         const search = document.querySelector<HTMLInputElement>('[data-page-search]');
         if (search) search.focus(); else setPaletteOpen(true);
-      } else if (event.key.toLowerCase() === 'c' && !blocked) {
+      } else if (event.key.toLowerCase() === 'c' && !blocked && !isManager) {
         event.preventDefault();
         if (isRequester) raiseRequest(); else addItem('task');
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [addItem, raiseRequest, blocked, isRequester]);
+  }, [addItem, raiseRequest, blocked, isRequester, isManager, requestsOnly]);
 
-  // A developer's new work starts as a request that an admin approves.
+  // A developer's new work starts as a request that the tech lead approves.
   const newTicket = <Button onClick={() => addItem('task')} aria-keyshortcuts="C"><Plus data-icon="inline-start" size={17} />{isAdmin ? 'New ticket' : 'Request ticket'}</Button>;
   const newRequest = <Button onClick={raiseRequest} aria-keyshortcuts="C"><Plus data-icon="inline-start" size={17} />Raise a request</Button>;
-  const actions: Record<string, ReactNode> = isRequester ? { dashboard: newRequest, requests: newRequest } : {
+  const actions: Record<string, ReactNode> = isRequester ? { dashboard: newRequest, requests: newRequest } : isManager ? {} : {
     dashboard: <>{!isAdmin && <Button variant="outline" onClick={() => setModal({ type: 'leave' })}><CalendarPlus data-icon="inline-start" />Request leave</Button>}{isAdmin && <Button variant="outline" onClick={exportScores}><ArrowDownToLine data-icon="inline-start" size={16} />Export report</Button>}{newTicket}</>,
     tickets: newTicket,
     leave: <Button onClick={() => setModal({ type: 'leave' })}><CalendarPlus data-icon="inline-start" />{isAdmin ? 'Add leave' : 'Request leave'}</Button>,
@@ -245,6 +283,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     bugs: isAdmin && <Button onClick={() => addItem('bug')}><Plus data-icon="inline-start" size={17} />Log bug</Button>,
     team: <><Button variant="outline" onClick={() => setModal({ type: 'leave' })}><CalendarPlus data-icon="inline-start" size={16} />Add leave</Button><Button variant="outline" onClick={() => setModal({ type: 'teamTicket' })}><UsersRound data-icon="inline-start" size={16} />Team ticket</Button><Button onClick={() => setModal({ type: 'member' })}><Plus data-icon="inline-start" size={17} />Add member</Button></>,
     projects: isAdmin && <Button onClick={() => setModal({ type: 'project' })}><Plus data-icon="inline-start" size={17} />New project</Button>,
+    people: <Button onClick={() => setModal({ type: 'member' })}><UserPlus data-icon="inline-start" size={16} />Add person</Button>,
     'other-teams': <><Button variant="outline" onClick={() => setModal({ type: 'department' })}><Plus data-icon="inline-start" size={16} />New team</Button><Button onClick={() => setModal({ type: 'member', role: 'requester' })}><UserPlus data-icon="inline-start" size={16} />Add member</Button></>,
   };
   // Dialogs work on the latest copy of a record, so a refresh never shows stale dates.
@@ -260,13 +299,13 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
       <header className="topbar">
         <div className="topbar-start">
           <SidebarTrigger aria-label="Open navigation" className="topbar-trigger" />
-          {!isRequester && <button type="button" className="search-trigger" onClick={() => setPaletteOpen(true)} aria-keyshortcuts="Meta+K Control+K">
+          {!requestsOnly && <button type="button" className="search-trigger" onClick={() => setPaletteOpen(true)} aria-keyshortcuts="Meta+K Control+K">
             <Search aria-hidden="true" /><span className="search-trigger-label">Search tickets, bugs, and projects…</span><Kbd className="search-trigger-kbd">{searchKey}</Kbd>
           </button>}
         </div>
         <div className="topbar-end">
           <Badge variant="outline" className="connection-status"><i />{demo ? 'Demo workspace' : 'Live workspace'}</Badge>
-          {!blocked && !isRequester && <CreateMenu isAdmin={isAdmin} onItem={addItem} onModal={openModal} />}
+          {!blocked && !requestsOnly && <CreateMenu isAdmin={isAdmin} orgAdmin={isOrgAdmin(data.currentUser)} onItem={addItem} onModal={openModal} />}
           <ThemeToggle />
           {!isRequester && <AttentionMenu data={data} onOpen={openItem} />}
           <Link href={routeFor(data, 'account')} aria-label="Open my account" className="topbar-account"><Avatar member={data.currentUser} size="small" /></Link>
@@ -278,7 +317,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
           <div className="page-heading-text"><h1>{title}</h1>{description && <p>{description}</p>}</div>
           {!blocked && actions[page] && <div className="page-actions">{actions[page]}</div>}
         </div>
-        {!blocked && !isRequester && ['dashboard', 'standup', 'team'].includes(page) && <div className="period-toolbar">
+        {!blocked && !requestsOnly && ['dashboard', 'standup', 'team'].includes(page) && <div className="period-toolbar">
           <div className="week-control">
             <Button variant="ghost" size="icon-sm" aria-label="Previous week" onClick={() => setWeek(shiftDate(week, -7, data.settings.timezone))}><ChevronLeft size={16} /></Button>
             <span className="period-label"><CalendarDays size={15} aria-hidden="true" /><strong>{displayDate(week)} – {displayDate(shiftDate(week, 6, data.settings.timezone))}</strong></span>
@@ -287,33 +326,41 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
           <Badge variant={week === currentWeek ? 'secondary' : 'outline'} className="period-badge">{weekLabel}</Badge>
           {week !== currentWeek && <Button variant="link" size="sm" onClick={() => setWeek(currentWeek)}>Back to this week</Button>}
         </div>}
-        {blocked ? isRequester
-          ? <Panel><EmptyState title="This page is for the tech team" description="Raise a request, and follow it on My requests." action={<Button variant="outline" asChild><Link href={routeFor(data, 'requests')}>Go to my requests<ArrowRight data-icon="inline-end" /></Link></Button>} /></Panel>
-          : <Panel><EmptyState title="This page is for admins" description="Your overview, tickets, bugs, and projects are in the menu." action={<Button variant="outline" asChild><Link href={routeFor(data, 'dashboard')}>Go to my overview<ArrowRight data-icon="inline-end" /></Link></Button>} /></Panel>
+        {blocked ? requestsOnly
+          ? <Panel><EmptyState title="This page is for the tech team" description={isRequester ? 'Raise a request, and follow it on My requests.' : 'Review requests from other teams on Requests.'} action={<Button variant="outline" asChild><Link href={routeFor(data, 'requests')}>{isRequester ? 'Go to my requests' : 'Go to requests'}<ArrowRight data-icon="inline-end" /></Link></Button>} /></Panel>
+          : <Panel><EmptyState title={['people', 'other-teams', 'activity'].includes(page) ? 'This page is for admins' : 'This page is for the tech lead'} description="Every page you can use is in the menu." action={<Button variant="outline" asChild><Link href={routeFor(data, 'dashboard')}>Go to my overview<ArrowRight data-icon="inline-end" /></Link></Button>} /></Panel>
         : isRequester ? <>
-          {(page === 'dashboard' || page === 'requests') && <MyRequests data={data} onRaise={raiseRequest} onEdit={request => setModal({ type: 'techRequest', request })} mutate={mutate} busy={busy} />}
+          {(page === 'dashboard' || page === 'requests') && <MyRequests data={data} onRaise={raiseRequest} onOpen={openRequest} onEdit={editRequest} mutate={mutate} busy={busy} />}
+          {page === 'account' && <Account data={data} />}
+        </> : isManager ? <>
+          {(page === 'dashboard' || page === 'requests') && <RequestInbox key={`${data.currentUser.role}?${listQuery}`} data={data} onOpen={openRequest} onAct={actOnRequest} onOpenItem={openItem} busy={busy} />}
           {page === 'account' && <Account data={data} />}
         </> : <>
+          {page === 'dashboard' && isAdmin && <OrgOverview data={data} />}
           {page === 'dashboard' && <Dashboard data={data} week={week} scores={scores} onOpen={openItem} onOpenProject={setProjectId} onAction={act} onExtend={extendTicket} onAddHours={addHours} onAdd={addItem} busy={busy} />}
           {(page === 'tickets' || page === 'bugs') && <WorkList key={`${page}?${listQuery}`} data={data} kind={page === 'tickets' ? 'task' : 'bug'} onOpen={openItem} onAction={act} onExtend={extendTicket} onAddHours={addHours} onAdd={addItem} busy={busy} />}
           {page === 'leave' && <LeavePage data={data} mutate={mutate} busy={busy} onAdd={start => setModal({ type: 'leave', userId: start?.userId, days: start?.days })} />}
           {page === 'approvals' && <Approvals data={data} onOpen={openItem} onAction={act} onRequest={() => addItem('task')} mutate={mutate} busy={busy} />}
-          {page === 'requests' && <RequestInbox key={listQuery} data={data} onOpenItem={openItem} mutate={mutate} busy={busy} />}
+          {page === 'requests' && <RequestInbox key={`${data.currentUser.role}?${listQuery}`} data={data} onOpen={openRequest} onAct={actOnRequest} onOpenItem={openItem} busy={busy} />}
           {page === 'standup' && <Standup data={data} week={week} onOpen={openItem} onAction={act} onAdd={addItem} mutate={mutate} busy={busy} />}
           {page === 'team' && <Team data={data} week={week} onEdit={m => setModal({ type: 'member', member: m })} onLeave={userId => setModal({ type: 'leave', userId })} mutate={mutate} onOpen={openItem} />}
           {page === 'other-teams' && <OtherTeams data={data} mutate={mutate} busy={busy} onAddMember={departmentId => setModal({ type: 'member', role: 'requester', departmentId })} onEditMember={m => setModal({ type: 'member', member: m })} onTeam={department => setModal({ type: 'department', department })} />}
           {page === 'projects' && <Projects data={data} onEdit={p => setModal({ type: 'project', project: p })} onOpen={setProjectId} onExtend={extendProject} mutate={mutate} />}
+          {page === 'people' && <People data={data} onEdit={m => setModal({ type: 'member', member: m })} />}
+          {page === 'activity' && <ActivityLog data={data} onOpenItem={openItem} onOpenRequest={openRequest} />}
           {page === 'settings' && <SettingsPage key={JSON.stringify(data.settings)} data={data} mutate={mutate} busy={busy} onHoliday={() => setModal({ type: 'holiday' })} />}
           {page === 'account' && <Account data={data} />}
         </>}
         {children}
-        <footer className="workspace-footer">{isRequester
-          ? <><span>Urban Gabru tech workspace · India time (Asia/Kolkata)</span><span>Press <Kbd>C</Kbd> to raise a request</span></>
+        <footer className="workspace-footer">{requestsOnly
+          ? <><span>Urban Gabru tech workspace · India time (Asia/Kolkata)</span>{isRequester ? <span>Press <Kbd>C</Kbd> to raise a request</span> : <span>Press <Kbd>/</Kbd> to search requests</span>}</>
           : <><span>Urban Gabru tech workspace · {weekLabel === 'This week' ? 'India time (Asia/Kolkata)' : `Showing the week of ${displayDate(week)}`}</span><span>Press <Kbd>{searchKey}</Kbd> to search · <Kbd>C</Kbd> to add a ticket</span></>}</footer>
       </div>
     </SidebarInset>
-    {!isRequester && <CommandPalette data={data} open={paletteOpen} onOpenChange={setPaletteOpen} onOpenItem={openItem} onOpenProject={setProjectId} onCreate={kind => addItem(kind)} onModal={openModal} />}
-    {modal?.type === 'techRequest' && <TechRequestForm data={data} editing={modal.request && data.techRequests.find(r => r.id === modal.request!.id)} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
+    {!requestsOnly && <CommandPalette data={data} open={paletteOpen} onOpenChange={setPaletteOpen} onOpenItem={openItem} onOpenProject={setProjectId} onOpenRequest={openRequest} onCreate={kind => addItem(kind)} onModal={openModal} />}
+    {modal?.type === 'techRequest' && <TechRequestForm data={data} editing={modal.request && data.techRequests.find(r => r.id === modal.request!.id)} mutate={mutate} onClose={() => setModal(null)} busy={busy} onFilesChanged={() => void refresh()} />}
+    {modal?.type === 'requestAction' && (() => { const request = data.techRequests.find(r => r.id === modal.request.id); return request ? <RequestActionForm data={data} kind={modal.kind} request={request} mutate={mutate} busy={busy} onClose={() => setModal(null)} /> : null; })()}
+    {selectedRequest && !modal && !selected && <RequestDrawer data={data} request={selectedRequest} mutate={mutate} busy={busy} onClose={() => openRequest(null)} onAct={actOnRequest} onEdit={editRequest} onOpenItem={isRequester ? undefined : openItem} onFilesChanged={() => void refresh()} />}
     {modal?.type === 'item' && <ItemForm data={data} kind={modal.kind} assigneeId={modal.assigneeId} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {modal?.type === 'member' && <MemberForm data={data} editing={modal.member} role={modal.role} departmentId={modal.departmentId} mutate={mutate} onClose={() => setModal(null)} onLeave={userId => setModal({ type: 'leave', userId })} busy={busy} />}
     {modal?.type === 'department' && <DepartmentForm editing={modal.department && data.departments.find(d => d.id === modal.department!.id)} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
@@ -323,13 +370,13 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
     {modal?.type === 'teamTicket' && <TeamTicketForm data={data} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {extendTarget && <ExtendForm target={extendTarget} data={data} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
     {selectedProject && !modal && <ProjectDrawer data={data} project={selectedProject} onClose={() => setProjectId(null)} onEdit={() => setModal({ type: 'project', project: selectedProject })} onExtend={() => extendProject(selectedProject)} onOpenItem={id => { setProjectId(null); openItem(id); }} />}
-    {selected && !quickAction && !modal && <ItemDrawer item={selected} data={data} busy={busy} onClose={() => openItem(null)} onOpen={openItem} onAction={act} onAddHours={() => addHours(selected)} onExtend={() => extendTicket(selected)} mutate={mutate} />}
+    {selected && !quickAction && !modal && <ItemDrawer item={selected} data={data} busy={busy} onClose={() => openItem(null)} onOpen={openItem} onOpenRequest={openRequest} onAction={act} onAddHours={() => addHours(selected)} onExtend={() => extendTicket(selected)} mutate={mutate} />}
     {quickAction && <ReasonForm action={quickAction} busy={busy} mutate={mutate} onClose={() => setQuickAction(null)} />}
   </SidebarProvider>;
 }
 
 /** One place to start new work from any page. Each choice opens the same form as the page buttons. */
-function CreateMenu({ isAdmin, onItem, onModal }: { isAdmin: boolean; onItem: (kind: 'task' | 'bug') => void; onModal: (type: PaletteModal) => void }) {
+function CreateMenu({ isAdmin, orgAdmin, onItem, onModal }: { isAdmin: boolean; orgAdmin: boolean; onItem: (kind: 'task' | 'bug') => void; onModal: (type: PaletteModal) => void }) {
   return <DropdownMenu>
     <DropdownMenuTrigger asChild><Button variant="outline" size="icon-sm" aria-label="Create" title="Create"><Plus /></Button></DropdownMenuTrigger>
     <DropdownMenuContent align="end" className="w-56">
@@ -340,8 +387,8 @@ function CreateMenu({ isAdmin, onItem, onModal }: { isAdmin: boolean; onItem: (k
         <DropdownMenuItem onSelect={() => onModal('teamTicket')}><UsersRound />Team ticket</DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => onModal('project')}><FolderPlus />New project</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => onModal('member')}><UserPlus />Add member</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => onModal('otherTeamMember')}><Briefcase />Add someone from another team</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onModal('member')}><UserPlus />Add a person</DropdownMenuItem>
+        {orgAdmin && <DropdownMenuItem onSelect={() => onModal('otherTeamMember')}><Briefcase />Add someone from another team</DropdownMenuItem>}
         <DropdownMenuItem onSelect={() => onModal('leave')}><CalendarPlus />Add leave</DropdownMenuItem>
       </>}
     </DropdownMenuContent>
@@ -350,56 +397,44 @@ function CreateMenu({ isAdmin, onItem, onModal }: { isAdmin: boolean; onItem: (k
 
 function WorkspaceSidebar({ data, page }: { data: DashboardData; page: string }) {
   const { setOpenMobile } = useSidebar();
-  const isAdmin = data.currentUser.role === 'admin';
-  if (data.currentUser.role === 'requester') return <RequesterSidebar data={data} page={page} onNavigate={() => setOpenMobile(false)} />;
-  const open = data.items.filter(i => !isDone(i));
-  // Admins see everything waiting for a decision. A developer sees their own requests still waiting.
-  const pendingRequests = data.requests.filter(r => r.status === 'pending').length + data.dueDateRequests.filter(r => r.status === 'pending').length + (data.leaveRequests ?? []).filter(r => r.status === 'pending').length;
-  const waiting = isAdmin ? pendingRequests + data.items.filter(i => i.type === 'task' ? i.status === 'in_review' : i.status === 'fixed').length : pendingRequests;
+  const me = data.currentUser;
+  const lead = leadsWork(me);
   const close = () => setOpenMobile(false);
-  const newRequests = data.techRequests.filter(r => r.status === 'new').length;
-  const leaveWaiting = (data.leaveRequests ?? []).filter(r => r.status === 'pending' && (isAdmin || r.requesterId === data.currentUser.id)).length;
-  const count = (id: string) => id === 'tickets' ? open.filter(i => i.type === 'task').length : id === 'bugs' ? open.filter(i => i.type === 'bug').length : id === 'approvals' ? waiting : id === 'leave' ? leaveWaiting : id === 'requests' ? newRequests : 0;
+  const open = data.items.filter(i => !isDone(i));
+  // A lead sees everything waiting for a decision. A developer sees their own asks still waiting.
+  const pendingAsks = data.requests.filter(r => r.status === 'pending').length + data.dueDateRequests.filter(r => r.status === 'pending').length + (data.leaveRequests ?? []).filter(r => r.status === 'pending').length;
+  const waiting = lead ? pendingAsks + data.items.filter(i => i.type === 'task' ? i.status === 'in_review' : i.status === 'fixed').length : pendingAsks;
+  // Requests that wait for this person: forwarded ones for a lead, new ones for a project manager, and a requester's own under review.
+  const requestCount = lead ? data.techRequests.filter(r => r.status === 'forwarded').length
+    : me.role === 'project_manager' ? data.techRequests.filter(r => r.status === 'new').length
+    : data.techRequests.filter(r => r.requesterId === me.id && (r.status === 'new' || r.status === 'forwarded')).length;
+  const leaveWaiting = (data.leaveRequests ?? []).filter(r => r.status === 'pending' && (lead || r.requesterId === me.id)).length;
+  const counts: Partial<Record<Section, number>> = {
+    tickets: open.filter(i => i.type === 'task').length, bugs: open.filter(i => i.type === 'bug').length, approvals: waiting, leave: leaveWaiting, requests: requestCount,
+  };
+  const attention = new Set<Section>(lead ? ['approvals', 'leave', 'requests'] : me.role === 'project_manager' ? ['requests'] : []);
+  // A requester's and a project manager's overview is the request list, so the menu shows it once.
+  const requestsHome = me.role === 'requester' || me.role === 'project_manager';
+  const label = (p: PageLink) => p.id === 'requests' && me.role === 'requester' ? 'My requests' : p.label;
   const link = (p: PageLink) => {
     const Icon = p.icon;
-    const n = count(p.id);
+    const n = counts[p.id] ?? 0;
+    const active = page === p.id || (requestsHome && p.id === 'requests' && page === 'dashboard');
     return <SidebarMenuItem key={p.id}>
-      <SidebarMenuButton asChild isActive={page === p.id} tooltip={p.label}><Link href={routeFor(data, p.id)} onClick={close}><Icon /><span>{p.label}</span></Link></SidebarMenuButton>
-      {n > 0 && <SidebarMenuBadge className={(p.id === 'approvals' || p.id === 'leave' || p.id === 'requests') && isAdmin ? 'sidebar-count-attention' : undefined}>{n}</SidebarMenuBadge>}
+      <SidebarMenuButton asChild isActive={active} tooltip={label(p)}><Link href={routeFor(data, p.id)} onClick={close}><Icon /><span>{label(p)}</span></Link></SidebarMenuButton>
+      {n > 0 && <SidebarMenuBadge className={attention.has(p.id) ? 'sidebar-count-attention' : undefined}>{n}</SidebarMenuBadge>}
     </SidebarMenuItem>;
   };
-  const team = teamPages.filter(p => isAdmin || !p.admin);
+  const groups = NAV.map(group => ({ ...group, pages: group.pages.filter(p => canOpen(p.id, me.role) && !(requestsHome && p.id === 'dashboard')) })).filter(group => group.pages.length);
   return <Sidebar className="app-sidebar" variant="inset" collapsible="offcanvas">
-    <SidebarHeader><Link className="brand" href={routeFor(data, 'dashboard')} onClick={close} aria-label="Urban Gabru tech workspace"><div>urban<span className="brand-light">gabru</span><small>Tech workspace</small></div></Link></SidebarHeader>
+    <SidebarHeader><Link className="brand" href={routeFor(data, requestsHome ? 'requests' : 'dashboard')} onClick={close} aria-label="Urban Gabru workspace"><div>urban<span className="brand-light">gabru</span><small>{requestsHome ? 'Tech requests' : 'Tech workspace'}</small></div></Link></SidebarHeader>
     <SidebarContent>
-      <SidebarGroup><SidebarGroupLabel>Workspace</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{[...workPages.filter(p => isAdmin || !p.admin), ...(isAdmin ? [] : team)].map(link)}</SidebarMenu></SidebarGroupContent></SidebarGroup>
-      {isAdmin && <SidebarGroup><SidebarGroupLabel>Team</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{team.map(link)}</SidebarMenu></SidebarGroupContent></SidebarGroup>}
+      {groups.map(group => <SidebarGroup key={group.label}><SidebarGroupLabel>{groups.length === 1 ? 'Requests' : group.label}</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{group.pages.map(link)}</SidebarMenu></SidebarGroupContent></SidebarGroup>)}
     </SidebarContent>
     <SidebarFooter>
       <SidebarMenu>
-        {isAdmin && <SidebarMenuItem><SidebarMenuButton asChild isActive={page === 'settings'}><Link href={routeFor(data, 'settings')} onClick={close}><Settings2 /><span>Settings</span></Link></SidebarMenuButton></SidebarMenuItem>}
-        <SidebarMenuItem><SidebarMenuButton asChild isActive={page === 'account'} className="profile-link h-auto"><Link href={routeFor(data, 'account')} onClick={close}><Avatar member={data.currentUser} /><div>{data.currentUser.name}<span>{isAdmin ? 'Admin' : 'Developer'}</span></div><ChevronRight size={16} /></Link></SidebarMenuButton></SidebarMenuItem>
-      </SidebarMenu>
-    </SidebarFooter>
-  </Sidebar>;
-}
-
-/** Someone from another team needs one place: their requests. Their profile shows their team. */
-function RequesterSidebar({ data, page, onNavigate }: { data: DashboardData; page: string; onNavigate: () => void }) {
-  const waiting = data.techRequests.filter(r => r.requesterId === data.currentUser.id && r.status === 'new').length;
-  return <Sidebar className="app-sidebar" variant="inset" collapsible="offcanvas">
-    <SidebarHeader><Link className="brand" href={routeFor(data, 'requests')} onClick={onNavigate} aria-label="Urban Gabru tech workspace"><div>urban<span className="brand-light">gabru</span><small>Tech requests</small></div></Link></SidebarHeader>
-    <SidebarContent>
-      <SidebarGroup><SidebarGroupLabel>Requests</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>
-        <SidebarMenuItem>
-          <SidebarMenuButton asChild isActive={page === 'requests' || page === 'dashboard'} tooltip="My requests"><Link href={routeFor(data, 'requests')} onClick={onNavigate}><Inbox /><span>My requests</span></Link></SidebarMenuButton>
-          {waiting > 0 && <SidebarMenuBadge title={`${waiting} waiting for review`}>{waiting}</SidebarMenuBadge>}
-        </SidebarMenuItem>
-      </SidebarMenu></SidebarGroupContent></SidebarGroup>
-    </SidebarContent>
-    <SidebarFooter>
-      <SidebarMenu>
-        <SidebarMenuItem><SidebarMenuButton asChild isActive={page === 'account'} className="profile-link h-auto"><Link href={routeFor(data, 'account')} onClick={onNavigate}><Avatar member={data.currentUser} /><div>{data.currentUser.name}<span>{roleLabel(data, data.currentUser)}</span></div><ChevronRight size={16} /></Link></SidebarMenuButton></SidebarMenuItem>
+        {can(me, 'settings.manage') && <SidebarMenuItem><SidebarMenuButton asChild isActive={page === 'settings'}><Link href={routeFor(data, 'settings')} onClick={close}><Settings2 /><span>Settings</span></Link></SidebarMenuButton></SidebarMenuItem>}
+        <SidebarMenuItem><SidebarMenuButton asChild isActive={page === 'account'} className="profile-link h-auto"><Link href={routeFor(data, 'account')} onClick={close}><Avatar member={me} /><div>{me.name}<span>{roleLabel(data, me)}</span></div><ChevronRight size={16} /></Link></SidebarMenuButton></SidebarMenuItem>
       </SidebarMenu>
     </SidebarFooter>
   </Sidebar>;
@@ -408,10 +443,12 @@ function RequesterSidebar({ data, page, onNavigate }: { data: DashboardData; pag
 function AttentionMenu({ data, onOpen }: { data: DashboardData; onOpen: (id: string) => void }) {
   const router = useRouter();
   const items = attentionItems(data);
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
+  const manager = data.currentUser.role === 'project_manager';
   const requests = admin ? data.requests.filter(r => r.status === 'pending').length : 0;
   const extensions = admin ? data.dueDateRequests.filter(r => r.status === 'pending').length : 0;
-  const teamRequests = admin ? data.techRequests.filter(r => r.status === 'new').length : 0;
+  // A project manager acts on new requests. The tech lead acts on the ones forwarded to them.
+  const teamRequests = admin ? data.techRequests.filter(r => r.status === 'forwarded').length : manager ? data.techRequests.filter(r => r.status === 'new').length : 0;
   const leaveCount = admin ? (data.leaveRequests ?? []).filter(r => r.status === 'pending').length : 0;
   const total = items.length + requests + extensions + teamRequests + leaveCount;
   return <DropdownMenu>
@@ -420,7 +457,7 @@ function AttentionMenu({ data, onOpen }: { data: DashboardData; onOpen: (id: str
       <DropdownMenuLabel className="attention-menu-label">Needs attention{total ? <span className="tab-count">{total}</span> : null}</DropdownMenuLabel>
       <DropdownMenuSeparator />
       {teamRequests > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'requests'))} className="attention-menu-item">
-        <Inbox className="attention-menu-icon" /><span className="attention-menu-title">{teamRequests} new {teamRequests === 1 ? 'request' : 'requests'} from other teams</span><span className="attention-menu-reason">Assign or decline on Requests</span>
+        <Inbox className="attention-menu-icon" /><span className="attention-menu-title">{admin ? `${teamRequests} forwarded ${teamRequests === 1 ? 'request waits' : 'requests wait'} for you` : `${teamRequests} new ${teamRequests === 1 ? 'request' : 'requests'} from other teams`}</span><span className="attention-menu-reason">{admin ? 'Assign or decline on Requests' : 'Review and forward on Requests'}</span>
       </DropdownMenuItem>}
       {leaveCount > 0 && <DropdownMenuItem onSelect={() => router.push(routeFor(data, 'leave'))} className="attention-menu-item">
         <CalendarPlus className="attention-menu-icon" /><span className="attention-menu-title">{leaveCount} leave {leaveCount === 1 ? 'request waits' : 'requests wait'} for approval</span><span className="attention-menu-reason">Review on Leave</span>

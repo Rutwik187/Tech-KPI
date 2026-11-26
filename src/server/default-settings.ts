@@ -1,6 +1,6 @@
 import type { Settings } from "@/lib/types";
 export const DEFAULT_SETTINGS: Settings = {
-  // Only the people an admin adds to a team can sign in to raise requests. An admin can also let a whole work email domain in, on Other teams.
+  // Only the people the tech lead adds to a team can sign in to raise requests. The tech lead can also let a whole work email domain in, on Other teams.
   requestDomains: [],
   timezone: "Asia/Kolkata", trackingStartDate: "2026-10-12", workingDays: [1, 2, 3, 4, 5],
   workdayStart: "10:00", workdayEnd: "19:00", defaultDevCapacityHours: 33, defaultLeadCapacityHours: 10,

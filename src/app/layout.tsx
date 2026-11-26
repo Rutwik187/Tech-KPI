@@ -14,7 +14,7 @@ const geist = localFont({
 
 export const metadata: Metadata = {
   title: 'Tech workspace · Urban Gabru',
-  description: 'A practical workspace for your tech team. Track work, clear blockers, and understand weekly delivery.',
+  description: 'One place for the whole company to ask the tech team for new tools, changes, and fixes, and follow each request. The tech team plans, assigns, and delivers the work here.',
 };
 export default function RootLayout({ children }: Readonly<{children: React.ReactNode}>) {
   return (

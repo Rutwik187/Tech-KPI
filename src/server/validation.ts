@@ -8,7 +8,7 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a valid calendar date.
 const uuid = z.uuid();
 const priority = z.enum(["low", "medium", "high", "urgent"]);
 const severity = z.enum(["normal", "critical"]);
-const role = z.enum(["admin", "developer", "requester"]);
+const role = z.enum(["admin", "tech_lead", "project_manager", "developer", "requester"]);
 const capacity = z.number().min(0.01).max(168).multipleOf(0.01);
 const color = z.string().regex(/^#[a-fA-F0-9]{6}$/, "Use a six digit color code.");
 const description = z.string().trim().max(20_000);
@@ -26,12 +26,14 @@ const reason = z.string().trim().max(2000);
 const domain = z.string().trim().toLowerCase().max(253)
   .regex(/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/, "Enter a domain such as urbangabru.in, without the @.");
 const departmentName = z.string().trim().min(1, "Enter a team name.").max(60);
-const requestCategory = z.enum(["feature", "change", "problem", "data", "access", "other"]);
+const requestCategory = z.enum(["feature", "tool", "change", "problem", "data", "access", "other"]);
 /** What a requester fills in. Details are required, so the tech team can act without a meeting. */
 const techRequestFields = {
   title: shortText, description: z.string().trim().min(10, "Describe what you need in a sentence or two.").max(20_000),
   category: requestCategory, priority, neededBy: date.nullable(), departmentId: uuid,
+  tool: z.string().trim().max(120, "Keep the tool name under 120 characters.").optional(),
 };
+const commentBody = z.string().trim().min(1, "Write a comment first.").max(5000, "Keep a comment under 5,000 characters.");
 const timelineOrder = (value: { startDate?: string | null; targetDate?: string | null }) => !value.startDate || !value.targetDate || value.targetDate >= value.startDate;
 const timelineOrderMessage = "The target date must be on or after the start date.";
 const itemFields = {
@@ -108,20 +110,28 @@ export const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("addHoliday"), date, name: shortText, type: dayLength.default("full_day") }).strict(),
   z.object({ action: z.literal("deleteLeave"), ids: z.array(uuid).min(1).max(62) }).strict(),
   z.object({ action: z.literal("deleteHoliday"), id: uuid }).strict(),
-  // A developer asks for a ticket. It becomes one only after an admin approves it.
+  // A developer asks for a ticket. It becomes one only after the tech lead approves it.
   z.object({ action: z.literal("requestTicket"), ...requestFields, description: description.optional(), note: description.optional() }).strict(),
   z.object({ action: z.literal("approveTicketRequest"), id: uuid, patch: z.object(requestFields).partial().strict().optional(), note: reason.optional() }).strict(),
   z.object({ action: z.literal("declineTicketRequest"), id: uuid, reason: z.string().trim().min(3, "Say why you are declining, so the developer can adjust.").max(2000) }).strict(),
   z.object({ action: z.literal("withdrawTicketRequest"), id: uuid }).strict(),
-  // A ticket needs more hours. An admin's extension applies at once. A developer's waits for an admin to approve it.
+  // A ticket needs more hours. The tech lead's extension applies at once. A developer's waits for the tech lead to approve it.
   z.object({ action: z.literal("extendTicket"), itemId: uuid, hours: extraHours, reasonCategory: extensionReason, reason: z.string().trim().min(3, "Say why the ticket needs more time.").max(2000) }).strict(),
   z.object({ action: z.literal("approveDueDateRequest"), id: uuid, hours: extraHours.optional(), note: reason.optional() }).strict(),
   z.object({ action: z.literal("declineDueDateRequest"), id: uuid, reason: z.string().trim().min(3, "Say why you are declining, so the developer can adjust.").max(2000) }).strict(),
   z.object({ action: z.literal("withdrawDueDateRequest"), id: uuid }).strict(),
-  // Another team asks for tech work. Only requesters raise, change, and withdraw these; only admins assign or decline them.
-  z.object({ action: z.literal("createTechRequest"), ...techRequestFields }).strict(),
+  // Another team asks for tech work. Only requesters raise, change, and withdraw these.
+  // The page may choose the new request's id, so it can attach files to it right after.
+  z.object({ action: z.literal("createTechRequest"), id: uuid.optional(), ...techRequestFields }).strict(),
   z.object({ action: z.literal("updateTechRequest"), id: uuid, patch: z.object(techRequestFields).partial().strict() }).strict(),
   z.object({ action: z.literal("withdrawTechRequest"), id: uuid }).strict(),
+  // A project manager or the tech lead corrects a request before it is assigned, forwards it, or returns it.
+  z.object({ action: z.literal("editTechRequest"), id: uuid, patch: z.object(techRequestFields).partial().strict() }).strict(),
+  z.object({ action: z.literal("forwardTechRequest"), id: uuid, priority: priority.optional(), note: z.string().trim().max(5000).optional() }).strict(),
+  z.object({ action: z.literal("returnTechRequest"), id: uuid, reason: z.string().trim().min(3, "Say what the project manager should check.").max(5000) }).strict(),
+  // Anyone who can see a request can comment on it. Only the tech side can mark a comment internal.
+  z.object({ action: z.literal("addRequestComment"), requestId: uuid, body: commentBody, internal: z.boolean().optional() }).strict(),
+  z.object({ action: z.literal("deleteRequestComment"), id: uuid }).strict(),
   // Assigning makes a ticket, which needs an estimate, or a bug, which runs on its fix-by time instead.
   z.object({ action: z.literal("assignTechRequest"), id: uuid, type: z.enum(["task", "bug"]), assigneeId: z.string().min(1), title: shortText,
     projectId: uuid.optional(), phaseId: uuid.nullable().optional(), priority: priority.optional(), severity: severity.optional(),

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { ArrowUpRight, CalendarClock, CalendarPlus, FolderKanban, Pencil } from 'lucide-react';
 import type { DashboardData, Project } from '@/lib/types';
+import { leadsWork } from '@/lib/permissions';
 import { burnUp, projectTimeline } from '@/lib/timeline';
 import { Avatar, Modal, StatusBadge } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
@@ -12,7 +13,7 @@ import { BurnUpChart } from './charts';
 import { ExtendedBadge, ExtensionHistory, HealthBadge, TimelineStrip, daysLeftText, plural } from './timeline';
 
 export function ProjectDrawer({ data, project, onClose, onEdit, onExtend, onOpenItem }: { data: DashboardData; project: Project; onClose: () => void; onEdit: () => void; onExtend: () => void; onOpenItem: (id: string) => void }) {
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   const day = today(data.settings.timezone);
   const timeline = projectTimeline(data, project, day);
   const editable = admin && !isAdhocProject(project) && !project.isArchived;

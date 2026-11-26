@@ -4,7 +4,9 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
 import { Briefcase, Bug, CalendarDays, CalendarPlus, ClipboardCheck, Coffee, CornerDownLeft, FolderKanban, FolderPlus, Inbox, LayoutDashboard, ListTodo, Moon, Plus, Settings2, Sun, UserPlus, UserRound, Users, UsersRound } from 'lucide-react';
-import type { DashboardData, WorkItem } from '@/lib/types';
+import type { DashboardData, TechRequest, WorkItem } from '@/lib/types';
+import { can, leadsWork, type Capability } from '@/lib/permissions';
+import { canOpen, type Section } from '@/lib/sections';
 import { Avatar, Kbd, StatusIcon } from '@/components/ui';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator, CommandShortcut } from '@/components/ui/command';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
@@ -13,7 +15,7 @@ import { attentionItems, findDepartment, findMember, findProject, firstName, isD
 export type PaletteModal = 'project' | 'member' | 'leave' | 'teamTicket' | 'otherTeamMember' | 'department';
 type PaletteProps = {
   data: DashboardData; open: boolean; onOpenChange: (open: boolean) => void;
-  onOpenItem: (id: string) => void; onOpenProject: (id: string) => void; onCreate: (kind: 'task' | 'bug') => void; onModal: (type: PaletteModal) => void;
+  onOpenItem: (id: string) => void; onOpenProject: (id: string) => void; onOpenRequest: (request: TechRequest) => void; onCreate: (kind: 'task' | 'bug') => void; onModal: (type: PaletteModal) => void;
 };
 
 /** How well a ticket or bug matches the search. A key or its number ("14" for UG-014) ranks first, then the title. */
@@ -33,11 +35,11 @@ function rank(item: WorkItem, query: string, owner: string, project: string) {
 }
 
 /** Find any ticket, bug, project, person, or page, and start common actions, from the keyboard. */
-export function CommandPalette({ data, open, onOpenChange, onOpenItem, onOpenProject, onCreate, onModal }: PaletteProps) {
+export function CommandPalette({ data, open, onOpenChange, onOpenItem, onOpenProject, onOpenRequest, onCreate, onModal }: PaletteProps) {
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
   const [query, setQuery] = useState('');
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   const needle = query.trim().toLowerCase();
 
   const items = useMemo(() => {
@@ -57,36 +59,40 @@ export function CommandPalette({ data, open, onOpenChange, onOpenItem, onOpenPro
   const projects = needle ? data.projects.filter(p => !p.isArchived && p.name.toLowerCase().includes(needle)).slice(0, 5) : [];
   const people = needle && admin ? data.members.filter(m => m.isActive && m.role === 'developer' && `${m.name} ${m.email}`.toLowerCase().includes(needle)).slice(0, 5) : [];
   // Requests from other teams, by key ("REQ-004" or "4" after "req"), title, or who raised them.
-  const teamRequests = needle && admin ? data.techRequests.filter(r => `${r.key} ${r.title} ${r.requesterName}`.toLowerCase().includes(needle)).slice(0, 5) : [];
+  // A developer finds the requests behind their own work. The tech lead finds every request.
+  const teamRequests = needle ? data.techRequests.filter(r => `${r.key} ${r.title} ${r.requesterName} ${r.tool}`.toLowerCase().includes(needle)).slice(0, 5) : [];
 
-  const pages: { id: string; label: string; icon: ReactNode; admin?: boolean }[] = [
+  const pages: { id: Section; label: string; icon: ReactNode }[] = [
     { id: 'dashboard', label: 'Overview', icon: <LayoutDashboard /> },
     { id: 'tickets', label: admin ? 'Tickets' : 'My tickets', icon: <ListTodo /> },
     { id: 'bugs', label: admin ? 'Bugs' : 'My bugs', icon: <Bug /> },
     { id: 'approvals', label: 'Approvals', icon: <ClipboardCheck /> },
     { id: 'leave', label: admin ? 'Leave' : 'My leave', icon: <CalendarDays /> },
-    { id: 'requests', label: 'Requests from other teams', icon: <Inbox />, admin: true },
-    { id: 'standup', label: 'Daily standup', icon: <Coffee />, admin: true },
-    { id: 'team', label: 'Team', icon: <Users />, admin: true },
-    { id: 'other-teams', label: 'Other teams', icon: <Briefcase />, admin: true },
+    { id: 'requests', label: 'Requests from other teams', icon: <Inbox /> },
+    { id: 'standup', label: 'Daily standup', icon: <Coffee /> },
+    { id: 'team', label: 'Team', icon: <Users /> },
+    { id: 'other-teams', label: 'Other teams', icon: <Briefcase /> },
     { id: 'projects', label: 'Projects', icon: <FolderKanban /> },
-    { id: 'settings', label: 'Settings', icon: <Settings2 />, admin: true },
+    { id: 'people', label: 'People', icon: <Users /> },
+    { id: 'activity', label: 'Activity', icon: <ClipboardCheck /> },
+    { id: 'settings', label: 'Settings', icon: <Settings2 /> },
     { id: 'account', label: 'My account', icon: <UserRound /> },
   ];
-  const shownPages = pages.filter(page => (admin || !page.admin) && (!needle || page.label.toLowerCase().includes(needle)));
+  // Only the pages this person's role may open.
+  const shownPages = pages.filter(page => canOpen(page.id, data.currentUser.role) && (!needle || page.label.toLowerCase().includes(needle)));
   const dark = resolvedTheme === 'dark';
-  const actions: { id: string; label: string; icon: ReactNode; shortcut?: string; run: () => void; admin?: boolean }[] = [
+  const actions: { id: string; label: string; icon: ReactNode; shortcut?: string; run: () => void; needs?: Capability }[] = [
     { id: 'ticket', label: admin ? 'New ticket' : 'Request ticket', icon: <Plus />, shortcut: 'C', run: () => onCreate('task') },
-    { id: 'bug', label: 'Log bug', icon: <Bug />, run: () => onCreate('bug'), admin: true },
-    { id: 'team-ticket', label: 'Team ticket', icon: <UsersRound />, run: () => onModal('teamTicket'), admin: true },
-    { id: 'project', label: 'New project', icon: <FolderPlus />, run: () => onModal('project'), admin: true },
-    { id: 'member', label: 'Add member', icon: <UserPlus />, run: () => onModal('member'), admin: true },
-    { id: 'other-team-member', label: 'Add someone from another team', icon: <Briefcase />, run: () => onModal('otherTeamMember'), admin: true },
-    { id: 'department', label: 'New team', icon: <Plus />, run: () => onModal('department'), admin: true },
-    { id: 'leave', label: 'Add leave', icon: <CalendarPlus />, run: () => onModal('leave'), admin: true },
+    { id: 'bug', label: 'Log bug', icon: <Bug />, run: () => onCreate('bug'), needs: 'work.manage' },
+    { id: 'team-ticket', label: 'Team ticket', icon: <UsersRound />, run: () => onModal('teamTicket'), needs: 'work.manage' },
+    { id: 'project', label: 'New project', icon: <FolderPlus />, run: () => onModal('project'), needs: 'work.manage' },
+    { id: 'member', label: 'Add a person', icon: <UserPlus />, run: () => onModal('member'), needs: 'people.manage' },
+    { id: 'other-team-member', label: 'Add someone from another team', icon: <Briefcase />, run: () => onModal('otherTeamMember'), needs: 'org.manage' },
+    { id: 'department', label: 'New team', icon: <Plus />, run: () => onModal('department'), needs: 'org.manage' },
+    { id: 'leave', label: 'Add leave', icon: <CalendarPlus />, run: () => onModal('leave'), needs: 'work.manage' },
     { id: 'theme', label: dark ? 'Switch to light theme' : 'Switch to dark theme', icon: dark ? <Sun /> : <Moon />, run: () => setTheme(dark ? 'light' : 'dark') },
   ];
-  const shownActions = actions.filter(action => (admin || !action.admin) && (!needle || action.label.toLowerCase().includes(needle)));
+  const shownActions = actions.filter(action => (!action.needs || can(data.currentUser, action.needs)) && (!needle || action.label.toLowerCase().includes(needle)));
 
   function close(next: boolean) {
     onOpenChange(next);
@@ -124,7 +130,7 @@ export function CommandPalette({ data, open, onOpenChange, onOpenItem, onOpenPro
           {projects.length > 0 && <CommandGroup heading="Projects">{projects.map(project => <CommandItem key={project.id} value={`project-${project.id}`} onSelect={() => run(() => onOpenProject(project.id))}>
             <i className="palette-project-dot" style={{ background: project.color }} aria-hidden="true" />{project.name}<span className="palette-item-meta">Open project</span>
           </CommandItem>)}</CommandGroup>}
-          {teamRequests.length > 0 && <CommandGroup heading="Requests from other teams">{teamRequests.map(request => <CommandItem key={request.id} value={`request-${request.id}`} onSelect={() => run(() => router.push(routeFor(data, `requests?q=${request.key}`)))} className="palette-item">
+          {teamRequests.length > 0 && <CommandGroup heading="Requests from other teams">{teamRequests.map(request => <CommandItem key={request.id} value={`request-${request.id}`} onSelect={() => run(() => onOpenRequest(request))} className="palette-item">
             <Inbox /><span className="item-key">{request.key}</span><span className="palette-item-title">{request.title}</span>
             <span className="palette-item-meta">{findDepartment(data, request.departmentId)?.name ?? 'Another team'} · {stageLabels[requestStage(data, request)]}</span>
           </CommandItem>)}</CommandGroup>}

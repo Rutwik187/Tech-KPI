@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from 'react';
 import { Bug, CircleCheck, CornerDownLeft, Plus } from 'lucide-react';
 import type { DashboardData } from '@/lib/types';
+import { ROLE_NAMES } from '@/lib/permissions';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
 import { calculateMemberKpi } from '@/lib/kpi';
 import { Avatar, FormDate, FormField, FormSelect, Panel, ProgressBar, StatusIcon } from '@/components/ui';
@@ -14,7 +15,7 @@ import { isCarriedOver, ItemActions, ScoreBadge } from './parts';
 
 export function Standup({ data, week, onOpen, onAction, onAdd, mutate, busy }: { data: DashboardData; week: string; onOpen: (id: string) => void; onAction: OnAction; onAdd: (kind: 'task' | 'bug', assigneeId?: string) => void; mutate: MutationFn; busy: boolean }) {
   const [title, setTitle] = useState('');
-  // Admins own no tickets, so the standup covers developers only.
+  // The tech lead owns no tickets, so the standup covers developers only.
   const people = data.members.filter(m => m.isActive && m.role === 'developer');
   const [classification, setClassification] = useState<WorkClassification>({ projectId: ADHOC_PROJECT_ID, phaseId: null, assigneeId: people[0]?.id ?? '' });
   const [picked, setPicked] = useState<PickedByHand>({ project: false, owner: false });
@@ -53,7 +54,7 @@ export function Standup({ data, week, onOpen, onAction, onAdd, mutate, busy }: {
       const tickets = data.items.filter(item => item.assigneeId === person.id && item.type === 'task' && !isDone(item));
       const bugs = data.items.filter(item => item.assigneeId === person.id && item.type === 'bug' && !isDone(item));
       return <Panel key={person.id} className="standup-person">
-        <div className="standup-person-heading"><Avatar member={person} /><div><h3>{person.name}</h3><span>{person.role === 'admin' ? 'Admin' : 'Developer'}</span></div><ScoreBadge score={score.efficiency} band={score.band} /></div>
+        <div className="standup-person-heading"><Avatar member={person} /><div><h3>{person.name}</h3><span>{ROLE_NAMES[person.role]}</span></div><ScoreBadge score={score.efficiency} band={score.band} /></div>
         <div className="standup-capacity"><span>{hours(score.creditedHours)} of {hours(score.capacityHours)} h done</span><span>{hours(score.pendingHours)} h open</span><ProgressBar value={score.deliveryRaw} label={`${person.name} ticket hours`} /></div>
         <div className="standup-task-list">{tickets.length === 0
           ? <div className="standup-clear"><CircleCheck size={17} /><p>No open tickets. Ready for the next one.</p></div>
