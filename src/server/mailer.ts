@@ -39,6 +39,8 @@ export async function sendMail(message: { to: string; subject: string; html: str
     body: JSON.stringify({ message: { subject: message.subject, body: { contentType: "HTML", content: message.html }, toRecipients: [{ emailAddress: { address: message.to } }] }, saveToSentItems: false }),
   });
   if (!response.ok) {
+    // A permission granted a moment ago is only in a new token, so the next try asks Microsoft for one.
+    if (response.status === 401 || response.status === 403) cachedToken = null;
     const body = await response.json().catch(() => ({})) as { error?: { code?: string; message?: string } };
     const code = body.error?.code ?? String(response.status);
     throw new Error(code === "ErrorAccessDenied" || response.status === 403
