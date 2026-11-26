@@ -10,12 +10,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { displayDateTime } from './lib';
 
-type Status = { sender: string | null; week: Partial<Record<'pending' | 'sent' | 'failed' | 'expired', number>>; recent: { id: string; email: string; subject: string; status: string; lastError: string | null; createdAt: string; sentAt: string | null }[] };
+type Sender = { from: string; via: 'mailbox' | 'app'; connectedAt?: string; lastUsedAt?: string | null; lastError?: string | null };
+type Status = { sender: Sender | null; week: Partial<Record<'pending' | 'sent' | 'failed' | 'expired', number>>; recent: { id: string; email: string; subject: string; status: string; lastError: string | null; createdAt: string; sentAt: string | null }[] };
 const STATUS_WORDS: Record<string, string> = { pending: 'Waiting', sent: 'Sent', failed: 'Failed', expired: 'Too old to send' };
 
 /**
  * For admins: whether the workspace can send email, what went out this week, the latest emails with any error,
- * and a test email to themselves. Emails go through Microsoft from the mailbox in MAIL_FROM.
+ * and a test email to themselves. Emails go through Microsoft from the connected mailbox, or from MAIL_FROM.
  */
 export function EmailSettings({ data }: { data: DashboardData }) {
   const [status, setStatus] = useState<Status | null>(null);
@@ -54,11 +55,15 @@ export function EmailSettings({ data }: { data: DashboardData }) {
         : error ? <p className="field-error" role="alert">{error}</p>
         : !status ? <p className="form-help"><LoaderCircle className="spin" size={14} /> Loading…</p>
         : <>
-          <div className={clsx('email-sender', status.sender ? 'is-ready' : 'is-off')}>
-            {status.sender ? <CheckCircle2 aria-hidden="true" /> : <CircleAlert aria-hidden="true" />}
-            <div>{status.sender
-              ? <><strong>Emails go out from {status.sender}</strong><span>Through your Microsoft 365 organisation.</span></>
-              : <><strong>Email is not set up yet</strong><span>Emails wait for up to three days. Add MAIL_FROM on the server, and grant the Microsoft app the Mail.Send permission.</span></>}</div>
+          <div className={clsx('email-sender', status.sender && !status.sender.lastError ? 'is-ready' : 'is-off')}>
+            {status.sender && !status.sender.lastError ? <CheckCircle2 aria-hidden="true" /> : <CircleAlert aria-hidden="true" />}
+            <div>{!status.sender
+              ? <><strong>Email is not set up yet</strong><span>Emails wait for up to three days. On a computer with the server settings, run <code>npm run mail:connect</code> and sign in as the mailbox that sends.</span></>
+              : status.sender.lastError
+                ? <><strong>Emails cannot go out from {status.sender.from}</strong><span>{status.sender.lastError} Emails wait for up to three days.</span></>
+                : <><strong>Emails go out from {status.sender.from}</strong><span>{status.sender.via === 'mailbox'
+                  ? `Connected by signing in as that mailbox${status.sender.connectedAt ? ` on ${displayDateTime(status.sender.connectedAt)}` : ''}${status.sender.lastUsedAt ? `. Last used ${displayDateTime(status.sender.lastUsedAt)}` : ''}.`
+                  : 'Through the Microsoft app\'s own permission.'}</span></>}</div>
             <Button variant="outline" size="sm" disabled={testing || !status.sender} onClick={() => void test()}>{testing ? <LoaderCircle data-icon="inline-start" className="spin" /> : <Send data-icon="inline-start" />}Send me a test email</Button>
           </div>
           <p className="email-week">This week: <strong>{status.week.sent ?? 0}</strong> sent · <strong>{status.week.pending ?? 0}</strong> waiting · <strong>{status.week.failed ?? 0}</strong> failed</p>

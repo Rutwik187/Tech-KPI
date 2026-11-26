@@ -240,3 +240,10 @@ export const notifications = pgTable("tech_kpi_notification", {
   check("tech_kpi_notification_status", sql`${t.status} IN ('pending', 'sent', 'failed', 'expired')`),
 ]);
 
+/** The one mailbox the workspace sends from, connected by signing in as it. The refresh token is encrypted. See migration 0016. */
+export const mailAccount = pgTable("tech_kpi_mail_account", {
+  id: integer("id").primaryKey().default(1), email: text("email").notNull(), refreshToken: text("refresh_token").notNull(),
+  connectedById: text("connected_by_id").references(() => user.id, { onDelete: "set null" }),
+  connectedAt: stamp("connected_at").defaultNow().notNull(), lastUsedAt: stamp("last_used_at"), lastError: text("last_error"),
+}, (t) => [check("tech_kpi_mail_account_singleton", sql`${t.id} = 1`)]);
+

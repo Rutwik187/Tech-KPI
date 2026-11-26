@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { notifications } from "@/db/schema";
 import { assertSameOrigin, requireCapability, requireSession } from "@/server/authz";
 import { AppError, errorResponse } from "@/server/errors";
-import { deliverPending, mailSender, sendMail } from "@/server/mailer";
+import { deliverPending, mailSetup, sendMail } from "@/server/mailer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,7 +18,7 @@ export async function GET(request: Request) {
       db.select({ id: notifications.id, email: notifications.email, subject: notifications.subject, kind: notifications.kind, status: notifications.status, lastError: notifications.lastError, createdAt: notifications.createdAt, sentAt: notifications.sentAt })
         .from(notifications).orderBy(desc(notifications.createdAt)).limit(25),
     ]);
-    return Response.json({ sender: mailSender(), week: Object.fromEntries(counts.map((row) => [row.status, row.count])), recent }, { headers: { "Cache-Control": "private, no-store" } });
+    return Response.json({ sender: await mailSetup(), week: Object.fromEntries(counts.map((row) => [row.status, row.count])), recent }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) { return errorResponse(error); }
 }
 
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const member = await requireSession(request.headers);
     requireCapability(member, "org.manage");
-    if (!mailSender()) throw new AppError("Email is not set up yet. Add MAIL_FROM on the server, and grant the Microsoft app the Mail.Send permission.", 409);
+    if (!await mailSetup()) throw new AppError("Email is not set up yet. Connect the sending mailbox with npm run mail:connect.", 409);
     try {
       await sendMail({ to: member.email, subject: "Test email from the Urban Gabru tech workspace", html: `<p style="font-family:Segoe UI,Arial,sans-serif;font-size:14px">Hello ${member.name.replace(/[<>&]/g, "")},</p><p style="font-family:Segoe UI,Arial,sans-serif;font-size:14px">Email from the workspace works. People will get emails when requests move forward.</p>` });
     } catch (error) { throw new AppError(error instanceof Error ? error.message : "The test email could not be sent.", 502); }

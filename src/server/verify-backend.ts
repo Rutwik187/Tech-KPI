@@ -615,7 +615,7 @@ async function main() {
     await mutate(requesterCookie, { action: "updateMyPreferences", emailNotifications: true });
     // Only an admin sees the email log and sends a test. Here, sending is not set up, so the test says so.
     await call("/api/notifications", managerCookie, undefined, 403);
-    const emailStatus = await (await call("/api/notifications", adminCookie)).json() as { sender: string | null; recent: unknown[] };
+    const emailStatus = await (await call("/api/notifications", adminCookie)).json() as { sender: { from: string; via: string } | null; recent: unknown[] };
     assert(Array.isArray(emailStatus.recent)); checks++;
     if (!emailStatus.sender) await call("/api/notifications", adminCookie, {}, 409);
     await call("/api/cron/notifications", "", undefined, 401);
