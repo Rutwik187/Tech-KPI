@@ -346,7 +346,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
           {page === 'team' && <Team data={data} week={week} onEdit={m => setModal({ type: 'member', member: m })} onLeave={userId => setModal({ type: 'leave', userId })} mutate={mutate} onOpen={openItem} />}
           {page === 'other-teams' && <OtherTeams data={data} mutate={mutate} busy={busy} onAddMember={departmentId => setModal({ type: 'member', role: 'requester', departmentId })} onEditMember={m => setModal({ type: 'member', member: m })} onTeam={department => setModal({ type: 'department', department })} />}
           {page === 'projects' && <Projects data={data} onEdit={p => setModal({ type: 'project', project: p })} onOpen={setProjectId} onExtend={extendProject} mutate={mutate} />}
-          {page === 'people' && <People data={data} onEdit={m => setModal({ type: 'member', member: m })} />}
+          {page === 'people' && <People data={data} onEdit={m => setModal({ type: 'member', member: m })} mutate={mutate} busy={busy} />}
           {page === 'activity' && <ActivityLog data={data} onOpenItem={openItem} onOpenRequest={openRequest} />}
           {page === 'settings' && <SettingsPage key={JSON.stringify(data.settings)} data={data} mutate={mutate} busy={busy} onHoliday={() => setModal({ type: 'holiday' })} />}
           {page === 'account' && <Account data={data} />}

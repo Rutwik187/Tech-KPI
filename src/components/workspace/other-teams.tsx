@@ -3,7 +3,7 @@
 import { useState, type FormEvent, type KeyboardEvent } from 'react';
 import Link from 'next/link';
 import clsx from 'clsx';
-import { Archive, ArchiveRestore, Briefcase, Inbox, MoreHorizontal, Pencil, Plus, UserPlus, Users, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Briefcase, Inbox, MoreHorizontal, Pencil, Plus, RotateCcw, UserMinus, UserPlus, Users, X } from 'lucide-react';
 import type { DashboardData, Department, Member } from '@/lib/types';
 import { Avatar, EmptyState, FormField, Modal, Panel } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
@@ -12,7 +12,7 @@ import { Card } from '@/components/ui/card';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { activeDepartments, findDepartment, requestStage, routeFor, type MutationFn } from './lib';
+import { activeDepartments, findDepartment, removalNote, requestStage, routeFor, type MutationFn } from './lib';
 import { FormFooter } from './forms';
 import { TeamTag } from './requests';
 import { plural } from './timeline';
@@ -43,12 +43,12 @@ export function OtherTeams({ data, mutate, busy, onAddMember, onEditMember, onTe
     </div>
     {teams.length === 0
       ? <Panel><EmptyState title="No teams yet" description="Create a team, such as Sales, then add the people who raise requests for it." action={<Button onClick={() => onTeam()}><Plus data-icon="inline-start" />New team</Button>} /></Panel>
-      : <div className="other-teams-grid">{teams.map(team => <TeamCard key={team.id} data={data} team={team} people={people.filter(m => m.departmentId === team.id)} open={open(team.id)} busy={busy}
+      : <div className="other-teams-grid">{teams.map(team => <TeamCard key={team.id} data={data} team={team} people={people.filter(m => m.departmentId === team.id)} open={open(team.id)} busy={busy} mutate={mutate}
           onAddMember={() => onAddMember(team.id)} onEditMember={onEditMember} onRename={() => onTeam(team)}
           onArchive={() => void mutate({ action: 'updateDepartment', id: team.id, isArchived: true }, `${team.name} archived. Its requests stay.`)} />)}</div>}
     {withoutTeam.length > 0 && <Panel title="People without a team" count={withoutTeam.length}>
       <p className="panel-intro">They signed in with a company email and have not raised a request yet. Their first request sets their team, or you can set it now.</p>
-      <PeopleList data={data} people={withoutTeam} onEdit={onEditMember} />
+      <PeopleList data={data} people={withoutTeam} onEdit={onEditMember} mutate={mutate} busy={busy} />
     </Panel>}
     {archived.length > 0 && <div className="archived-teams">
       <Button variant="ghost" size="sm" onClick={() => setShowArchived(!showArchived)} aria-expanded={showArchived}><Archive data-icon="inline-start" />{showArchived ? 'Hide' : 'Show'} archived teams ({archived.length})</Button>
@@ -61,20 +61,46 @@ export function OtherTeams({ data, mutate, busy, onAddMember, onEditMember, onTe
   </>;
 }
 
-function PeopleList({ data, people, onEdit }: { data: DashboardData; people: Member[]; onEdit: (member: Member) => void }) {
-  // Only the tech lead's live data says who has linked a Microsoft account. The demo has none.
+type PeopleListProps = { data: DashboardData; people: Member[]; onEdit: (member: Member) => void; mutate: MutationFn; busy: boolean };
+/**
+ * The people in a team, with a way to remove each one. Removed people leave the list but keep their requests,
+ * so they show under "Removed", where an admin can restore them.
+ */
+function PeopleList({ data, people, onEdit, mutate, busy }: PeopleListProps) {
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [showRemoved, setShowRemoved] = useState(false);
+  // Only an admin's live data says who has linked a Microsoft account. The demo has none.
   const invited = (member: Member) => data.mode === 'live' && !member.microsoftObjectId;
-  return <ul className="team-people-list">{people.map(m => <li key={m.id} className={clsx(!m.isActive && 'is-inactive')}>
-    <Avatar member={m} size="small" />
-    <span className="team-person-name"><strong>{m.name}{m.isTeamLead && <small className="lead-tag">Team lead</small>}</strong><span>{m.email}</span></span>
-    {!m.isActive ? <Badge variant="outline" className="access-tag access-inactive"><i />Inactive</Badge>
-      : invited(m) && <Badge variant="outline" className="access-tag access-invited" title="Their Microsoft account links on their first sign-in."><i />Not signed in yet</Badge>}
-    <Button variant="ghost" size="icon-sm" aria-label={`Edit ${m.name}`} title={`Edit ${m.name}`} onClick={() => onEdit(m)}><Pencil /></Button>
-  </li>)}</ul>;
+  const active = people.filter(m => m.isActive);
+  const removed = people.filter(m => !m.isActive);
+  return <>
+    {active.length > 0 && <ul className="team-people-list">{active.map(m => <li key={m.id}>
+      <Avatar member={m} size="small" />
+      <span className="team-person-name"><strong>{m.name}{m.isTeamLead && <small className="lead-tag">Team lead</small>}</strong><span>{m.email}</span></span>
+      {removing === m.id
+        ? <span className="confirm-inline remove-confirm"><span>{removalNote(data, m)}</span><Button size="sm" variant="destructive" disabled={busy} onClick={async () => { if (await mutate({ action: 'removeMember', id: m.id }, `${m.name} removed`)) setRemoving(null); }}>Remove</Button><Button size="sm" variant="ghost" onClick={() => setRemoving(null)}>Keep</Button></span>
+        : <>
+          {invited(m) && <Badge variant="outline" className="access-tag access-invited" title="Their Microsoft account links on their first sign-in."><i />Not signed in yet</Badge>}
+          <span className="team-person-actions">
+            <Button variant="ghost" size="icon-sm" aria-label={`Edit ${m.name}`} title={`Edit ${m.name}`} onClick={() => onEdit(m)}><Pencil /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label={`Remove ${m.name}`} title={`Remove ${m.name}`} onClick={() => setRemoving(m.id)}><UserMinus /></Button>
+          </span>
+        </>}
+    </li>)}</ul>}
+    {removed.length > 0 && <div className="team-removed">
+      <Button variant="link" size="sm" onClick={() => setShowRemoved(!showRemoved)} aria-expanded={showRemoved}>{showRemoved ? 'Hide' : 'Show'} removed ({removed.length})</Button>
+      {showRemoved && <ul className="team-people-list">{removed.map(m => <li key={m.id} className="is-inactive">
+        <Avatar member={m} size="small" />
+        <span className="team-person-name"><strong>{m.name}</strong><span>{m.email}</span></span>
+        <Badge variant="outline" className="access-tag access-inactive"><i />No access</Badge>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void mutate({ action: 'updateMember', id: m.id, patch: { isActive: true } }, `${m.name} can sign in again`)}><RotateCcw data-icon="inline-start" />Restore</Button>
+      </li>)}</ul>}
+    </div>}
+  </>;
 }
 
-type TeamCardProps = { data: DashboardData; team: Department; people: Member[]; open: number; busy: boolean; onAddMember: () => void; onEditMember: (member: Member) => void; onRename: () => void; onArchive: () => void };
-function TeamCard({ data, team, people, open, busy, onAddMember, onEditMember, onRename, onArchive }: TeamCardProps) {
+type TeamCardProps = { data: DashboardData; team: Department; people: Member[]; open: number; busy: boolean; mutate: MutationFn; onAddMember: () => void; onEditMember: (member: Member) => void; onRename: () => void; onArchive: () => void };
+function TeamCard({ data, team, people, open, busy, mutate, onAddMember, onEditMember, onRename, onArchive }: TeamCardProps) {
   return <Card className="other-team-card">
     <header className="other-team-head">
       <h2><TeamTag data={data} id={team.id} /></h2>
@@ -88,9 +114,8 @@ function TeamCard({ data, team, people, open, busy, onAddMember, onEditMember, o
         </DropdownMenuContent>
       </DropdownMenu>
     </header>
-    {people.length
-      ? <PeopleList data={data} people={people} onEdit={onEditMember} />
-      : <p className="other-team-empty">No one yet. Add the people who raise requests for this team.</p>}
+    {!people.some(m => m.isActive) && <p className="other-team-empty">No one yet. Add the people who raise requests for this team.</p>}
+    <PeopleList data={data} people={people} onEdit={onEditMember} mutate={mutate} busy={busy} />
     <footer className="other-team-foot"><Button variant="outline" size="sm" onClick={onAddMember}><UserPlus data-icon="inline-start" />Add member</Button></footer>
   </Card>;
 }

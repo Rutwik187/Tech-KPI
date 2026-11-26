@@ -200,7 +200,10 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
   // An admin reads the whole activity log. A tech lead reads the tech team's: not changes to teams outside tech or their people.
   const requesterIds = orgAdmin || !isAdmin ? [] : (await db.select({ id: user.id }).from(user).where(eq(user.role, "requester"))).map((row) => row.id);
   const activityRows = isAdmin
-    ? await db.select().from(activities).where(orgAdmin ? undefined : and(sql`${activities.action} NOT LIKE 'department.%'`, requesterIds.length ? notInArray(activities.entityId, requesterIds) : undefined)).orderBy(desc(activities.createdAt))
+    ? await db.select().from(activities).where(orgAdmin ? undefined : and(sql`${activities.action} NOT LIKE 'department.%'`,
+      // A removed requester has no account to match any more, so their removal is matched by the role it records.
+      sql`NOT (${activities.action} LIKE 'member.%' AND ${activities.payload}->>'role' = 'requester')`,
+      requesterIds.length ? notInArray(activities.entityId, requesterIds) : undefined)).orderBy(desc(activities.createdAt))
     : await db.select().from(activities).where(or(
       itemIds.length ? inArray(activities.entityId, itemIds) : undefined,
       and(inArray(activities.entityId, [...visibleProjectIds]), eq(activities.action, "project.target_changed")),

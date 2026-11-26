@@ -95,6 +95,8 @@ export const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("createMember"), name: shortText, email: z.email(), microsoftObjectId: uuid.optional(), role: role.optional(), capacity: capacity.optional(), departmentId: uuid.nullable().optional(), isTeamLead: z.boolean().optional() }).strict()
     .refine((member) => member.role !== "requester" || !!member.departmentId, "Choose a team for this person.")
     .refine((member) => !member.isTeamLead || member.role === "requester", "Only someone in a team outside tech can lead it."),
+  // Removes a person: deleted when they never signed in and left no trace, otherwise their access is turned off and their history stays.
+  z.object({ action: z.literal("removeMember"), id: z.string().min(1).max(200) }).strict(),
   z.object({ action: z.literal("updateMember"), id: z.string().min(1), patch: z.object({ name: shortText.optional(), email: z.email().optional(), capacity: capacity.optional(), isActive: z.boolean().optional(), role: role.optional(), microsoftObjectId: uuid.optional(), departmentId: uuid.nullable().optional(), isTeamLead: z.boolean().optional() }).strict() }).strict(),
   z.object({ action: z.literal("createProject"), name: shortText, color: color.optional(), description: description.optional(), memberIds: memberIds.default([]), primaryMemberId: z.string().min(1).max(200).nullable().optional(), phases: phases.default([]), startDate: date.nullable().optional(), targetDate: date.nullable().optional() }).strict()
     .refine(timelineOrder, timelineOrderMessage),

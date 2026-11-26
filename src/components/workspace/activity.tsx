@@ -57,6 +57,7 @@ export function describeActivity(data: DashboardData, event: Activity): Line {
         created: `added ${name}${typeof p.role === 'string' && p.role in ROLE_NAMES ? ` as ${ROLE_NAMES[p.role as keyof typeof ROLE_NAMES].toLowerCase()}` : ''}`,
         updated: `changed ${name}${(p.changes as Record<string, unknown> | undefined)?.role ? `’s role to ${ROLE_NAMES[(p.changes as { role: keyof typeof ROLE_NAMES }).role]?.toLowerCase()}` : (p.changes as Record<string, unknown> | undefined)?.isActive === false ? ' to no access' : ''}`,
         microsoft_linked: 'signed in for the first time', self_registered: 'joined with a company email',
+        removed: p.deleted ? `deleted the unused invite for ${name}` : `removed ${name}; their history stays`,
       };
       return { area: 'people', text: map[verb] ?? `${verb.replaceAll('_', ' ')} ${name}`, target: null };
     }

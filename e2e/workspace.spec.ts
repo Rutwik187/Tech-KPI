@@ -1585,3 +1585,88 @@ test('an admin changes a role on People and reads it in the activity log, and a 
   await expect(page.getByRole('radio', { name: /^To assign/ })).toHaveAttribute('aria-checked', 'true');
   expect(pageErrors).toEqual([]);
 });
+
+test('an admin removes people from a team: an unused invite is deleted, and someone with requests keeps them and can be restored', async ({ page }) => {
+  await openDemo(page, 'other-teams');
+  const sales = page.locator('.other-team-card').filter({ hasText: 'Sales' }).first();
+  await sales.getByRole('button', { name: 'Add member', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel(/^Full name/).fill('Typo Invite');
+  await dialog.getByLabel(/^Work email/).fill('typo.invite@urbangabru.in');
+  await dialog.getByRole('button', { name: 'Add member', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  // Never signed in and nothing raised: removing it deletes the invite.
+  await sales.getByRole('button', { name: 'Remove Typo Invite', exact: true }).click();
+  await expect(sales).toContainText('They never signed in, so the invite is deleted.');
+  await sales.getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(sales).not.toContainText('Typo Invite');
+  expect((await readDemoData(page)).members.some(m => m.email === 'typo.invite@urbangabru.in')).toBe(false);
+  // Priya raised requests: she loses access, her requests stay, and she can be restored.
+  await sales.getByRole('button', { name: 'Remove Priya Kapoor', exact: true }).click();
+  await expect(sales).toContainText('Their requests and history stay.');
+  await sales.getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(sales.getByRole('button', { name: 'Remove Priya Kapoor', exact: true })).toHaveCount(0);
+  await expect(sales).toContainText('No one yet');
+  let data = await readDemoData(page);
+  expect(data.members.find(m => m.id === 'demo-priya')?.isActive).toBe(false);
+  expect(data.techRequests.some(r => r.requesterId === 'demo-priya')).toBe(true);
+  await sales.getByRole('button', { name: 'Show removed (1)', exact: true }).click();
+  await sales.getByRole('button', { name: 'Restore', exact: true }).click();
+  await expect(sales.getByRole('button', { name: 'Remove Priya Kapoor', exact: true })).toBeVisible();
+  data = await readDemoData(page);
+  expect(data.members.find(m => m.id === 'demo-priya')?.isActive).toBe(true);
+});
+
+
+test('an admin adds someone to a team outside tech from People, and a new person starts as a developer', async ({ page }) => {
+  await openDemo(page, 'people');
+  await page.locator('.page-actions').getByRole('button', { name: 'Add person', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: 'Add a person' })).toBeVisible();
+  // The least access is the default, so nobody becomes an admin by accident.
+  await expect(dialog.getByRole('radio', { name: 'Developer', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(dialog.getByRole('combobox', { name: 'Team', exact: true })).toHaveCount(0);
+  await dialog.getByRole('radio', { name: 'Other team', exact: true }).click();
+  await expect(dialog.getByRole('heading', { name: 'Add someone from another team' })).toBeVisible();
+  await chooseOption(page, dialog.getByRole('combobox', { name: 'Team', exact: true }), 'Sales');
+  // Sales already has a team lead, so the new person is not ticked as one.
+  await expect(dialog.getByRole('checkbox', { name: /^Team lead/ })).not.toBeChecked();
+  await dialog.getByLabel(/^Full name/).fill('Isha Nair');
+  await dialog.getByLabel(/^Work email/).fill('isha.nair@urbangabru.in');
+  await dialog.getByRole('button', { name: 'Add member', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect((await readDemoData(page)).members.find(m => m.email === 'isha.nair@urbangabru.in')).toMatchObject({ role: 'requester', departmentId: 'demo-team-1', isTeamLead: false });
+  await expect(page.locator('.people-table tr').filter({ hasText: 'Isha Nair' })).toContainText('Sales');
+});
+
+test('an admin removes and restores people from the People list, and deletes an unused invite', async ({ page }) => {
+  await openDemo(page, 'people');
+  const dialog = page.getByRole('dialog');
+  // Someone with open tickets keeps them until they are reassigned. Nobody removes themselves.
+  await expect(page.getByRole('button', { name: 'Remove Rohan Desai', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Remove Aarav Mehta', exact: true }).click();
+  await expect(dialog).toContainText('Reassign them first.');
+  await expect(dialog.getByRole('button', { name: 'Remove access', exact: true })).toBeDisabled();
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  // A project manager who has worked here loses access, keeps their history, and comes back with Restore.
+  await page.getByRole('button', { name: 'Remove Kavya Menon', exact: true }).click();
+  await expect(dialog).toContainText('can no longer sign in');
+  await dialog.getByRole('button', { name: 'Remove access', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const kavya = page.locator('.people-table tr').filter({ hasText: 'Kavya Menon' });
+  await expect(kavya).toContainText('No access');
+  expect((await readDemoData(page)).members.find(m => m.id === 'demo-kavya')?.isActive).toBe(false);
+  await kavya.getByRole('button', { name: 'Restore Kavya Menon', exact: true }).click();
+  await expect(kavya).toContainText('Active');
+  // A new invite that was never used is deleted.
+  await page.locator('.page-actions').getByRole('button', { name: 'Add person', exact: true }).click();
+  await dialog.getByLabel(/^Full name/).fill('Wrong Email');
+  await dialog.getByLabel(/^Work email/).fill('wrong.email@urbangabru.in');
+  await dialog.getByRole('button', { name: 'Add member', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await page.getByRole('button', { name: 'Remove Wrong Email', exact: true }).click();
+  await expect(dialog).toContainText('never signed in');
+  await dialog.getByRole('button', { name: 'Delete invite', exact: true }).click();
+  await expect(page.locator('.people-table')).not.toContainText('Wrong Email');
+  expect((await readDemoData(page)).members.some(m => m.email === 'wrong.email@urbangabru.in')).toBe(false);
+});

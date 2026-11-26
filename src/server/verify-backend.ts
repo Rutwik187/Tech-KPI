@@ -600,6 +600,25 @@ async function main() {
     await mutate(adminCookie, { action: "updateMember", id: fixture.userId, patch: { role: "tech_lead" } }, 400);
     await mutate(adminCookie, { action: "updateMember", id: techLeadFixture.userId, patch: { role: "developer" } });
     await mutate(adminCookie, { action: "updateMember", id: techLeadFixture.userId, patch: { role: "tech_lead" } });
+    // Removing a person. An unused invite is deleted. Someone with requests keeps them and loses access. Only an admin removes other teams.
+    adminView = await mutate(adminCookie, { action: "createMember", name: `${trace}-typo`, email: `${trace}-typo-invite@example.invalid`, role: "requester", departmentId: requestTeam.id });
+    const typoInvite = adminView.members.find((row) => row.email === `${trace}-typo-invite@example.invalid`)!; memberIds.add(typoInvite.id);
+    // The role change above ended the tech lead's session, so they sign in again.
+    const freshLeadCookie = (await createOfflineSessionForUser(techLeadFixture.userId, baseURL)).cookieHeader;
+    await mutate(freshLeadCookie, { action: "removeMember", id: typoInvite.id }, 403);
+    await mutate(requesterCookie, { action: "removeMember", id: typoInvite.id }, 403);
+    await mutate(adminCookie, { action: "removeMember", id: fixture.userId }, 400);
+    await mutate(adminCookie, { action: "removeMember", id: member.id }, 400);
+    adminView = await mutate(adminCookie, { action: "removeMember", id: typoInvite.id });
+    assert(!adminView.members.some((row) => row.id === typoInvite.id));
+    assert.equal((await db.select().from(schema.user).where(eq(schema.user.id, typoInvite.id))).length, 0); checks += 2;
+    adminView = await mutate(adminCookie, { action: "removeMember", id: teammateFixture.userId });
+    assert.equal(adminView.members.find((row) => row.id === teammateFixture.userId)?.isActive, false);
+    assert(adminView.techRequests.some((request) => request.comments.some((comment) => comment.authorId === teammateFixture.userId))); checks += 2;
+    await call("/api/data", teammateCookie, undefined, 401);
+    adminView = await mutate(adminCookie, { action: "updateMember", id: teammateFixture.userId, patch: { isActive: true } });
+    assert.equal(adminView.members.find((row) => row.id === teammateFixture.userId)?.isActive, true); checks++;
+    await mutate(adminCookie, { action: "removeMember", id: randomUUID() }, 404);
     // Company sign-in: only the tenant's members with an allowed work email domain, and only once per person.
     const { provisionRequester } = await import("./microsoft-accounts");
     const companyDomain = `${trace}.example.invalid`;
@@ -638,7 +657,7 @@ async function main() {
       const cron = await fetch(`${baseURL}/api/cron/weekly-snapshot`, { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } });
       assert.equal(cron.status, 200); checks++;
     }
-    console.log(`PASS: ${checks} backend checks (projects, primary developers, project timelines and extensions, more hours on tickets with approval, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable, sign-in by invited work email, ticket requests and approvals, requests from other teams, project manager review, request comments and files, tech lead and admin roles, teams, and company sign-in). Local session fixtures used; real Microsoft OAuth is not exercised.`);
+    console.log(`PASS: ${checks} backend checks (projects, primary developers, project timelines and extensions, more hours on tickets with approval, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable, sign-in by invited work email, ticket requests and approvals, requests from other teams, project manager review, request comments and files, tech lead and admin roles, removing people, teams, and company sign-in). Local session fixtures used; real Microsoft OAuth is not exercised.`);
   } finally {
     await db.transaction(async (tx) => {
       const testItems = await tx.select({ id: schema.workItems.id }).from(schema.workItems).where(like(schema.workItems.title, `${trace}%`));

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, isNull, ne, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
-import { account, activities, attachments, departments, dueDateRequests, holidays, leaves, leaveRequests, memberProfiles, projectMembers, projectPhases, projects, requestComments, session, settings, techRequests, ticketRequests, user, workItems } from "@/db/schema";
+import { account, activities, attachments, departments, dueDateRequests, holidays, leaves, leaveRequests, memberProfiles, projectMembers, projectPhases, projects, requestComments, session, settings, snapshots, techRequests, ticketRequests, user, workItems } from "@/db/schema";
 import type { Member, TechRequestStatus } from "@/lib/types";
 import { ATTACHMENT_BUCKET, storageClient } from "@/lib/storage";
 import { canSeeRequest } from "./request-access";
@@ -172,6 +172,26 @@ const ACTION_RULES: Record<DataAction["action"], readonly Capability[] | null> =
 function assertAllowed(actor: Member, action: DataAction["action"]) {
   const needed = ACTION_RULES[action];
   if (needed && !mayDo(actor, action)) requireCapability(actor, needed[0]);
+}
+/**
+ * Whether a person left anything behind: a Microsoft sign-in, requests, comments, files, tickets, leave, scores, or any change
+ * they made. Deleting their account would delete or orphan these, so such a person keeps their account with access turned off.
+ */
+async function hasHistory(tx: Tx, id: string): Promise<boolean> {
+  const checks = await Promise.all([
+    tx.select({ id: account.id }).from(account).where(and(eq(account.userId, id), eq(account.providerId, "microsoft"))).limit(1),
+    tx.select({ id: activities.id }).from(activities).where(eq(activities.actorId, id)).limit(1),
+    tx.select({ id: techRequests.id }).from(techRequests).where(eq(techRequests.requesterId, id)).limit(1),
+    tx.select({ id: requestComments.id }).from(requestComments).where(eq(requestComments.authorId, id)).limit(1),
+    tx.select({ id: attachments.id }).from(attachments).where(eq(attachments.uploadedById, id)).limit(1),
+    tx.select({ id: workItems.id }).from(workItems).where(or(eq(workItems.assigneeId, id), eq(workItems.createdById, id))).limit(1),
+    tx.select({ id: ticketRequests.id }).from(ticketRequests).where(eq(ticketRequests.requesterId, id)).limit(1),
+    tx.select({ id: leaveRequests.id }).from(leaveRequests).where(eq(leaveRequests.requesterId, id)).limit(1),
+    tx.select({ id: leaves.id }).from(leaves).where(eq(leaves.userId, id)).limit(1),
+    tx.select({ userId: snapshots.userId }).from(snapshots).where(eq(snapshots.userId, id)).limit(1),
+    tx.select({ userId: projectMembers.userId }).from(projectMembers).where(eq(projectMembers.userId, id)).limit(1),
+  ]);
+  return checks.some((rows) => rows.length > 0);
 }
 /** The actor's role as saved now. A role changed a moment ago applies to people changes already on their way. */
 async function savedActor(tx: Tx, actor: Member): Promise<Member> {
@@ -641,6 +661,30 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         if (action.microsoftObjectId) await linkMicrosoftAccount(tx, id, action.microsoftObjectId);
         await tx.insert(memberProfiles).values({ userId: id, capacity: action.capacity ?? (leadsWork(role) ? defaults.defaultLeadCapacityHours : defaults.defaultDevCapacityHours), departmentId, isTeamLead });
         await audit(tx, actor, id, "member.created", { name: action.name, role, departmentId, isTeamLead, microsoftObjectId: action.microsoftObjectId?.toLowerCase() ?? null });
+        break;
+      }
+      case "removeMember": {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(7201201)`);
+        const [member] = await tx.select().from(user).where(eq(user.id, action.id)).for("update");
+        if (!member) throw new AppError("This person was not found.", 404);
+        assertMayManage(await savedActor(tx, actor), member.role, undefined);
+        if (member.id === actor.id) throw new AppError("You cannot remove yourself. Ask another admin.");
+        if (member.role === "admin") await assertAnotherAdmin(tx, member.id);
+        const role = memberRole(member.role);
+        const [openWork] = await tx.select({ id: workItems.id }).from(workItems).where(and(eq(workItems.assigneeId, member.id), notInArray(workItems.status, ["done", "verified"]))).limit(1);
+        if (openWork) throw new AppError("Reassign this person's open tickets and bugs before removing them.");
+        const deleted = !(await hasHistory(tx, member.id));
+        if (deleted) {
+          // Added by mistake, or never used: nothing refers to them, so the account goes.
+          await tx.delete(user).where(eq(user.id, member.id));
+        } else {
+          // Their requests, comments, and history stay. They can no longer sign in, and an admin can restore them.
+          await tx.update(user).set({ banned: true, updatedAt: new Date() }).where(eq(user.id, member.id));
+          await tx.insert(memberProfiles).values({ userId: member.id, isActive: false })
+            .onConflictDoUpdate({ target: memberProfiles.userId, set: { isActive: false } });
+          await tx.delete(session).where(eq(session.userId, member.id));
+        }
+        await audit(tx, actor, member.id, "member.removed", { name: member.name, email: member.email, role, deleted });
         break;
       }
       case "updateMember": {

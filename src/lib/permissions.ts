@@ -80,7 +80,7 @@ export const ACTION_CAPABILITY = {
   addLeave: ['work.manage'], deleteLeave: ['work.manage'], createProject: ['work.manage'], updateProject: ['work.manage'], createPhase: ['work.manage'], updatePhase: ['work.manage'],
   updateItem: ['work.manage', 'work.own'], extendTicket: ['work.manage', 'work.own'],
   requestTicket: ['work.own'], withdrawTicketRequest: ['work.own'], withdrawDueDateRequest: ['work.own'], requestLeave: ['work.own'], withdrawLeaveRequest: ['work.own'],
-  createMember: ['people.manage'], updateMember: ['people.manage'],
+  createMember: ['people.manage'], updateMember: ['people.manage'], removeMember: ['people.manage'],
   saveSettings: ['settings.manage'], addHoliday: ['settings.manage'], deleteHoliday: ['settings.manage'],
   createDepartment: ['org.manage'], updateDepartment: ['org.manage'],
   createTechRequest: ['requests.raise'], updateTechRequest: ['requests.raise'], withdrawTechRequest: ['requests.raise'],
@@ -115,6 +115,7 @@ export function refusal(who: WithRole, action: ActionName): string | null {
 
 /** "an admin", "a tech lead": a role's name with the right article, for messages. */
 export function aRole(role: Role): string {
+  if (role === 'requester') return 'someone from another team';
   const name = ROLE_NAMES[role].toLowerCase();
   return `${/^[aeiou]/.test(name) ? 'an' : 'a'} ${name}`;
 }

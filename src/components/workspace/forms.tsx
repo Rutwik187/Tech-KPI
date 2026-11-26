@@ -1,9 +1,10 @@
 "use client";
 
+import Link from 'next/link';
 import { useId, useState, type FormEvent, type KeyboardEvent } from 'react';
 import clsx from 'clsx';
 import { toast } from 'sonner';
-import { Activity as ActivityIcon, Bug, CalendarClock, CalendarPlus, Check, ChevronDown, CircleHelp, Clock3, FileText, ListTodo, LoaderCircle, Plus, ShieldCheck, Star, X } from 'lucide-react';
+import { Activity as ActivityIcon, Bug, CalendarClock, CalendarPlus, Check, ChevronDown, CircleHelp, Clock3, FileText, ListTodo, LoaderCircle, Plus, ShieldCheck, Star, UserMinus, X } from 'lucide-react';
 import type { DashboardData, Holiday, Leave, Member, Phase, Project, WorkItem } from '@/lib/types';
 import { leadsWork, manageableRoles, ROLE_HELP, ROLE_NAMES } from '@/lib/permissions';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
@@ -17,7 +18,7 @@ import { FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { activeDepartments, displayDate, displayDateTime, displayDays, ESTIMATE_PRESETS, findDepartment, findProject, hours, isAdhocProject, isDone, leaveDays, MAX_TICKET_HOURS, ownerChoices, ownerHomeProject, projectMembers, projectPhases, selectableProjects, techMembers, today, withOwner, withProject, workingDaysBetween, WORKDAY_HOURS, type MutationFn, type PickedByHand, type PhaseDraft, type QuickAction, type WorkClassification } from './lib';
+import { ESTIMATE_PRESETS, MAX_TICKET_HOURS, WORKDAY_HOURS, activeDepartments, displayDate, displayDateTime, displayDays, findDepartment, findProject, hours, isAdhocProject, isDone, leaveDays, ownerChoices, ownerHomeProject, projectMembers, projectPhases, removalDeletes, removalNote, routeFor, selectableProjects, techMembers, today, withOwner, withProject, workingDaysBetween, type MutationFn, type PickedByHand, type PhaseDraft, type QuickAction, type WorkClassification } from './lib';
 
 export function FormChoice({ name, value, defaultValue, onValueChange, options, disabled, id, 'aria-labelledby': labelledBy, 'aria-describedby': describedBy }: { name?: string; value?: string; defaultValue?: string; onValueChange?: (value: string) => void; options: { value: string; label: string; disabled?: boolean }[]; disabled?: boolean; id?: string; 'aria-labelledby'?: string; 'aria-describedby'?: string }) {
   const [localValue, setLocalValue] = useState(defaultValue ?? options[0]?.value ?? '');
@@ -177,10 +178,12 @@ export function MemberForm({ data, editing, role: initialRole, departmentId: ini
   const requester = role === 'requester';
   const teamName = findDepartment(data, departmentId)?.name;
   // The first person added to a team is usually the one who leads it.
-  const firstInTeam = !!initialTeam && !data.members.some(m => m.role === 'requester' && m.departmentId === initialTeam);
-  // An admin gives any role. A tech lead adds developers and project managers. Someone from another team is added on Other teams.
-  const roleChoices = manageableRoles(data.currentUser).filter(value => value !== 'requester' || role === 'requester' || !!editing);
+  const firstInTeam = !!departmentId && !data.members.some(m => m.role === 'requester' && m.isActive && m.departmentId === departmentId && m.id !== editing?.id);
+  // An admin gives any role, including a place in a team outside tech. A tech lead adds developers and project managers.
+  // The least access comes first, and a new person starts as a developer, so nobody becomes an admin by one stray click.
+  const roleChoices = (['developer', 'project_manager', 'tech_lead', 'admin', 'requester'] as const).filter(value => manageableRoles(data.currentUser).includes(value));
   const roleDecided = (!editing && !!initialRole) || roleChoices.length < 2;
+  const [removing, setRemoving] = useState(false);
   const own = editing?.id === data.currentUser.id;
   // A live member without a linked Microsoft account has not signed in yet. Until then, the email can be corrected.
   const pending = !!editing && data.mode === 'live' && !editing.microsoftObjectId;
@@ -197,21 +200,29 @@ export function MemberForm({ data, editing, role: initialRole, departmentId: ini
       : await mutate({ action: 'createMember', name: String(f.get('name')).trim(), email, role, capacity, ...(requester ? { departmentId, isTeamLead } : {}) }, requester ? `Added to ${teamName ?? 'the team'}. They sign in with Microsoft using this work email, then raise requests.` : 'Team member added. They can sign in with Microsoft using this work email.');
     if (ok) onClose();
   }
-  const title = editing ? requester ? 'Edit member' : 'Edit team member' : requester ? initialTeam && teamName ? `Add someone to ${teamName}` : 'Add someone from another team' : 'Add a team member';
-  return <Modal title={title} subtitle={editing ? requester ? 'Change their team, whether they lead it, or their access.' : 'Change their role, weekly hours, leave, or access.' : requester ? 'Add their work email. They sign in with their Microsoft work account and raise requests for their team.' : 'Add their work email. Only people on the team can sign in.'} onClose={onClose}>
+  const title = editing ? `Edit ${editing.name}` : requester ? initialTeam && teamName ? `Add someone to ${teamName}` : 'Add someone from another team' : roleDecided ? 'Add a team member' : 'Add a person';
+  const subtitle = editing ? requester ? 'Change their team, whether they lead it, their role, or their access.' : 'Change their role, weekly hours, leave, or access.'
+    : requester ? 'Add their work email and their team. They sign in with their Microsoft work account and raise requests for their team.'
+    : 'Add their work email and their role. Only the people you add can sign in.';
+  return <Modal title={title} subtitle={subtitle} onClose={onClose}>
     <form onSubmit={submit}>
       <FieldGroup className="modal-form-body">
         <FormField>Full name<Input name="name" required defaultValue={editing?.name} placeholder="e.g. Aarav Sharma" /></FormField>
         <FormField>Work email<Input name="email" type="email" required disabled={!!editing && !pending} defaultValue={editing?.email} placeholder="firstname.lastname@urbangabru.in" />
           <span className="field-help">{pending ? 'Not signed in yet. You can correct the email until they do.' : editing ? 'Their Microsoft work account is linked.' : 'They sign in with the Microsoft account for this email.'}</span></FormField>
         <FieldGroup className="form-grid">
-          {!roleDecided && <FormField>Role<FormChoice value={role} disabled={own} onValueChange={next => { const value = next as Member['role']; setRole(value); if (!editing) setCapacity(leadsWork(value) ? data.settings.defaultLeadCapacityHours : data.settings.defaultDevCapacityHours); }} options={roleChoices.map(value => ({ value, label: ROLE_NAMES[value] }))} /></FormField>}
+          {!roleDecided && <FormField className="form-grid-wide">Role<FormChoice value={role} disabled={own} onValueChange={next => { const value = next as Member['role']; setRole(value); if (!editing) setCapacity(leadsWork(value) ? data.settings.defaultLeadCapacityHours : data.settings.defaultDevCapacityHours); }} options={roleChoices.map(value => ({ value, label: ROLE_NAMES[value] }))} /></FormField>}
           {role === 'developer' && <FormField>Hours per week<Input type="number" min={.5} max={168} step={.5} required value={capacity} onChange={event => setCapacity(Number(event.target.value))} /><span className="field-help">Leave and holidays lower this for that week.</span></FormField>}
-          {requester && <FormField>Team<FormSelect required value={departmentId} onValueChange={setDepartmentId}><option value="" disabled>Choose their team</option>{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</FormSelect><span className="field-help">{teams.length ? 'They raise requests for this team, and see its requests.' : 'Create a team on Other teams first.'}</span></FormField>}
+          {requester && <FormField>Team<FormSelect required value={departmentId} onValueChange={setDepartmentId}><option value="" disabled>Choose their team</option>{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</FormSelect><span className="field-help">{teams.length ? 'They raise requests for this team, and see its requests.' : <>No team yet. Create one on <Link href={routeFor(data, 'other-teams')} onClick={onClose}>Other teams</Link> first.</>}</span></FormField>}
         </FieldGroup>
-        {requester && <FormField className="checkbox-label member-lead-control"><FormCheckbox name="isTeamLead" defaultChecked={editing ? !!editing.isTeamLead : firstInTeam} />Team lead<span className="field-help">Everyone in a team can raise requests. Team leads are listed first on the team.</span></FormField>}
+        {requester && <FormField className="checkbox-label member-lead-control"><FormCheckbox key={departmentId} name="isTeamLead" defaultChecked={editing && departmentId === editing.departmentId ? !!editing.isTeamLead : firstInTeam} />Team lead<span className="field-help">Everyone in a team can raise requests. Team leads are listed first on the team.</span></FormField>}
         {editing && editing.isActive && role === 'developer' && <div className="member-leave-row"><div><strong>Leave</strong><span>{upcomingLeave.length ? `${upcomingLeave.reduce((sum, l) => sum + (l.type === 'half_day' ? .5 : 1), 0)} upcoming day(s) recorded` : 'No upcoming leave'}</span></div><Button type="button" variant="outline" size="sm" onClick={() => onLeave(editing.id)}><CalendarPlus data-icon="inline-start" />Add leave</Button></div>}
         {editing && <FormField className="checkbox-label member-access-control"><FormCheckbox name="isActive" defaultChecked={editing.isActive} disabled={own} />Active workspace access<span className="field-help">Inactive members keep their history and cannot sign in.</span></FormField>}
+        {editing && !own && editing.isActive && <div className="member-remove-row">
+          {removing
+            ? <span className="confirm-inline remove-confirm"><span>{removalNote(data, editing)}</span><Button type="button" size="sm" variant="destructive" disabled={busy} onClick={async () => { if (await mutate({ action: 'removeMember', id: editing.id }, `${editing.name} removed`)) onClose(); }}>Remove</Button><Button type="button" size="sm" variant="ghost" onClick={() => setRemoving(false)}>Keep</Button></span>
+            : <><div><strong>Remove from the workspace</strong><span>{removalDeletes(data, editing) ? 'They never signed in, so the invite is deleted.' : 'They can no longer sign in. Their requests and history stay, and you can restore them.'}</span></div><Button type="button" variant="outline" size="sm" onClick={() => setRemoving(true)}><UserMinus data-icon="inline-start" />Remove</Button></>}
+        </div>}
         <Alert className="form-tip"><ShieldCheck size={17} /><AlertDescription><p>{roleHelp[role]}</p></AlertDescription></Alert>
       </FieldGroup>
       <FormFooter busy={busy} disabled={requester && !departmentId} onClose={onClose} label={editing ? 'Save member' : 'Add member'} />

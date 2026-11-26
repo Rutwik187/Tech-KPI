@@ -45,6 +45,22 @@ export function roleLabel(data: DashboardData, member: Member) {
   return team ? `${team} team` : 'No team yet';
 }
 export function findProject(data: DashboardData, id: string) { return data.projects.find(p => p.id === id); }
+/**
+ * Whether removing this person deletes their account. Only someone who never signed in and left nothing behind is deleted.
+ * Everyone else keeps their requests and history, and only loses access. The server makes the final check.
+ */
+export function removalDeletes(data: DashboardData, member: Member) {
+  const id = member.id;
+  // The demo has no Microsoft accounts. Its sample people count as signed in; people added during the demo do not.
+  const signedIn = data.mode === 'live' ? !!member.microsoftObjectId : !data.activities.some(a => a.action === 'member.created' && a.entityId === id);
+  return !signedIn && !data.techRequests.some(r => r.requesterId === id || r.comments.some(c => c.authorId === id))
+    && !data.items.some(i => i.assigneeId === id) && !data.activities.some(a => a.actorId === id)
+    && !data.leaves.some(l => l.userId === id) && !data.requests.some(r => r.requesterId === id) && !data.projects.some(p => p.memberIds.includes(id));
+}
+/** The question before removing someone, saying what happens to them. */
+export function removalNote(data: DashboardData, member: Member) {
+  return removalDeletes(data, member) ? `Remove ${firstName(member)}? They never signed in, so the invite is deleted.` : `Remove ${firstName(member)}? They can no longer sign in. Their requests and history stay.`;
+}
 export function isAdhocProject(project?: Project) { return project?.isAdhoc === true || project?.id === ADHOC_PROJECT_ID; }
 /** A project's members, with the primary developer first. */
 export function projectTeam(data: DashboardData, project: Project) {
@@ -304,6 +320,7 @@ export type Mutation =
   | { action: 'updateItem'; id: string; patch: Partial<WorkItem>; reason?: string; reasonCategory?: string }
   | { action: 'createMember'; name: string; email: string; microsoftObjectId?: string; role: Member['role']; capacity: number; departmentId?: string | null; isTeamLead?: boolean }
   | { action: 'updateMember'; id: string; patch: Partial<Member> }
+  | { action: 'removeMember'; id: string }
   | { action: 'createProject'; name: string; color: string; description: string; memberIds: string[]; primaryMemberId: string | null; phases: PhaseDraft[]; startDate: string | null; targetDate: string | null }
   | { action: 'updateProject'; id: string; patch: Partial<Project>; reason?: string; reasonCategory?: string }
   | { action: 'createPhase'; projectId: string; name: string; description: string }
@@ -376,6 +393,10 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
   const refused = refusal(actor, mutation.action);
   if (refused) throw new Error(refused);
   if (mutation.action === 'createMember' && !manageableRoles(actor).includes(mutation.role)) throw new Error('Only an admin can give this role.');
+  if (mutation.action === 'removeMember') {
+    const target = data.members.find(m => m.id === mutation.id);
+    if (target && !manageableRoles(actor).includes(target.role)) throw new Error(`Only an admin can remove ${aRole(target.role)}.`);
+  }
   if (mutation.action === 'updateMember') {
     const target = data.members.find(m => m.id === mutation.id);
     if (target && !manageableRoles(actor).includes(target.role)) throw new Error(`Only an admin can change ${aRole(target.role)}.`);
@@ -540,6 +561,17 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       next.members.push({ id, name: mutation.name, email: mutation.email.toLowerCase(), role: mutation.role, capacity: mutation.capacity, isActive: true, image: null, departmentId: mutation.role === 'requester' ? mutation.departmentId ?? null : null, isTeamLead: mutation.role === 'requester' && !!mutation.isTeamLead, ...(mutation.microsoftObjectId ? { microsoftObjectId: mutation.microsoftObjectId } : {}) });
       log(id, 'member.created', { name: mutation.name, role: mutation.role });
       break;
+    case 'removeMember': {
+      const found = next.members.find(m => m.id === mutation.id);
+      if (!found) break;
+      if (found.id === actor.id) throw new Error('You cannot remove yourself. Ask another admin.');
+      if (next.items.some(i => i.assigneeId === found.id && !isDone(i))) throw new Error('Reassign this person\'s open tickets and bugs before removing them.');
+      const deleted = removalDeletes(data, found);
+      // Leave the added-and-removed pair in the log, as the server does.
+      if (deleted) next.members = next.members.filter(m => m.id !== found.id); else found.isActive = false;
+      log(found.id, 'member.removed', { name: found.name, role: found.role, deleted });
+      break;
+    }
     case 'updateMember': {
       const found = next.members.find(m => m.id === mutation.id);
       if (!found) break;

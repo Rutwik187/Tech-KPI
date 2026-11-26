@@ -61,4 +61,21 @@ describe('roles', () => {
     expect(lead.techRequests.length).toBe(data.techRequests.length);
     expect(lead.activities.every(a => !a.action.startsWith('department.'))).toBe(true);
   });
+
+  it('deletes an unused invite, keeps the history of someone who raised requests, and lets only an admin remove other teams', () => {
+    let data = demo();
+    const admin = data.currentUser;
+    data = mutateDemo(data, { action: 'createMember', name: 'Typo Person', email: 'typo@example.com', role: 'requester', capacity: 33, departmentId: 'demo-team-1' }, admin);
+    const typo = data.members.find(m => m.email === 'typo@example.com')!;
+    const lead = data.members.find(m => m.role === 'tech_lead')!;
+    expect(() => mutateDemo(data, { action: 'removeMember', id: typo.id }, lead)).toThrow('Only an admin can remove someone from another team');
+    data = mutateDemo(data, { action: 'removeMember', id: typo.id }, admin);
+    expect(data.members.some(m => m.id === typo.id)).toBe(false);
+    // Priya raised requests, so she keeps them and only loses access.
+    data = mutateDemo(data, { action: 'removeMember', id: 'demo-priya' }, admin);
+    expect(data.members.find(m => m.id === 'demo-priya')?.isActive).toBe(false);
+    expect(data.techRequests.some(r => r.requesterId === 'demo-priya')).toBe(true);
+    expect(() => mutateDemo(data, { action: 'removeMember', id: admin.id }, admin)).toThrow('yourself');
+    expect(() => mutateDemo(data, { action: 'removeMember', id: 'demo-aarav' }, admin)).toThrow('open tickets');
+  });
 });
