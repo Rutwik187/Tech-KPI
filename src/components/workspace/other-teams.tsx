@@ -33,7 +33,7 @@ export function OtherTeams({ data, mutate, busy, onAddMember, onEditMember, onTe
   const teams = activeDepartments(data);
   const archived = data.departments.filter(d => d.isArchived).sort((a, b) => a.name.localeCompare(b.name));
   const open = (teamId?: string) => data.techRequests.filter(r => (!teamId || r.departmentId === teamId) && !['done', 'declined'].includes(requestStage(data, r))).length;
-  // Someone who signed in with a company email before their first request has no team yet.
+  // Someone who signed in with a company email has no team until an admin sets it. Until then they cannot raise requests.
   const withoutTeam = people.filter(m => !findDepartment(data, m.departmentId));
   return <>
     <div className="team-overview-strip">
@@ -47,7 +47,7 @@ export function OtherTeams({ data, mutate, busy, onAddMember, onEditMember, onTe
           onAddMember={() => onAddMember(team.id)} onEditMember={onEditMember} onRename={() => onTeam(team)}
           onArchive={() => void mutate({ action: 'updateDepartment', id: team.id, isArchived: true }, `${team.name} archived. Its requests stay.`)} />)}</div>}
     {withoutTeam.length > 0 && <Panel title="People without a team" count={withoutTeam.length}>
-      <p className="panel-intro">They signed in with a company email and have not raised a request yet. Their first request sets their team, or you can set it now.</p>
+      <p className="panel-intro">They signed in with a company email. Set their team so they can raise requests for it.</p>
       <PeopleList data={data} people={withoutTeam} onEdit={onEditMember} mutate={mutate} busy={busy} />
     </Panel>}
     {archived.length > 0 && <div className="archived-teams">
@@ -74,18 +74,19 @@ function PeopleList({ data, people, onEdit, mutate, busy }: PeopleListProps) {
   const active = people.filter(m => m.isActive);
   const removed = people.filter(m => !m.isActive);
   return <>
-    {active.length > 0 && <ul className="team-people-list">{active.map(m => <li key={m.id}>
+    {active.length > 0 && <ul className="team-people-list">{active.map(m => <li key={m.id} className={clsx(removing === m.id && 'is-confirming')}>
       <Avatar member={m} size="small" />
       <span className="team-person-name"><strong>{m.name}{m.isTeamLead && <small className="lead-tag">Team lead</small>}</strong><span>{m.email}</span></span>
-      {removing === m.id
-        ? <span className="confirm-inline remove-confirm"><span>{removalNote(data, m)}</span><Button size="sm" variant="destructive" disabled={busy} onClick={async () => { if (await mutate({ action: 'removeMember', id: m.id }, `${m.name} removed`)) setRemoving(null); }}>Remove</Button><Button size="sm" variant="ghost" onClick={() => setRemoving(null)}>Keep</Button></span>
-        : <>
-          {invited(m) && <Badge variant="outline" className="access-tag access-invited" title="Their Microsoft account links on their first sign-in."><i />Not signed in yet</Badge>}
-          <span className="team-person-actions">
-            <Button variant="ghost" size="icon-sm" aria-label={`Edit ${m.name}`} title={`Edit ${m.name}`} onClick={() => onEdit(m)}><Pencil /></Button>
-            <Button variant="ghost" size="icon-sm" aria-label={`Remove ${m.name}`} title={`Remove ${m.name}`} onClick={() => setRemoving(m.id)}><UserMinus /></Button>
-          </span>
-        </>}
+      {invited(m) && removing !== m.id && <Badge variant="outline" className="access-tag access-invited" title="Their Microsoft account links on their first sign-in."><i />Not signed in yet</Badge>}
+      {removing !== m.id && <span className="team-person-actions">
+        <Button variant="ghost" size="icon-sm" aria-label={`Edit ${m.name}`} title={`Edit ${m.name}`} onClick={() => onEdit(m)}><Pencil /></Button>
+        <Button variant="ghost" size="icon-sm" aria-label={`Remove ${m.name}`} title={`Remove ${m.name}`} onClick={() => setRemoving(m.id)}><UserMinus /></Button>
+      </span>}
+      {/* The question takes its own line under the person, so it never squeezes their name. */}
+      {removing === m.id && <div className="team-remove-confirm" role="group" aria-label={`Remove ${m.name}`}>
+        <p>{removalNote(data, m)}</p>
+        <span><Button size="sm" variant="ghost" onClick={() => setRemoving(null)}>Keep</Button><Button size="sm" variant="destructive" disabled={busy} onClick={async () => { if (await mutate({ action: 'removeMember', id: m.id }, `${m.name} removed`)) setRemoving(null); }}>Remove</Button></span>
+      </div>}
     </li>)}</ul>}
     {removed.length > 0 && <div className="team-removed">
       <Button variant="link" size="sm" onClick={() => setShowRemoved(!showRemoved)} aria-expanded={showRemoved}>{showRemoved ? 'Hide' : 'Show'} removed ({removed.length})</Button>
@@ -146,7 +147,7 @@ function SignInPanel({ data, mutate, busy }: { data: DashboardData; mutate: Muta
   const domains = data.settings.requestDomains;
   return <Panel title="Who can sign in" action={<Button variant="link" size="sm" onClick={() => setEditing(true)}>Change</Button>} className="sign-in-panel">
     <p className="panel-intro">{domains.length
-      ? <>The people you add to a team can sign in. So can anyone in your Microsoft organisation with a work email on {domains.map(d => `@${d}`).join(' or ')}. Their first request sets their team.</>
+      ? <>The people you add to a team can sign in. So can anyone in your Microsoft organisation with a work email on {domains.map(d => `@${d}`).join(' or ')}. They raise requests once you set their team.</>
       : <>Only the people you add to a team can sign in. They use their Microsoft work account, with the email you add here.</>}</p>
     {editing && <DomainForm data={data} mutate={mutate} busy={busy} onClose={() => setEditing(false)} />}
   </Panel>;

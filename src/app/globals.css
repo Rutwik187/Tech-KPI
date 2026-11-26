@@ -659,6 +659,40 @@
 .attachment-icon,.attachment-thumb { display:grid; place-items:center; width:36px; height:36px; flex-shrink:0; border-radius:7px; background:var(--muted); color:var(--muted-foreground); overflow:hidden; }
 .attachment-icon svg { width:17px; height:17px; }
 .attachment-thumb img { width:100%; height:100%; object-fit:cover; }
+button.attachment-thumb { padding:0; border:0; cursor:zoom-in; transition:transform .15s, box-shadow .15s; }
+button.attachment-thumb:hover { transform:scale(1.04); box-shadow:0 0 0 2px var(--primary); }
+.attachment-thumb { width:44px; height:44px; }
+button.attachment-name { padding:0; border:0; background:none; text-align:left; cursor:pointer; }
+button.attachment-name:hover { color:var(--primary); text-decoration:underline; text-underline-offset:2px; }
+.upload-progress { display:block; height:4px; margin:5px 0 3px; border-radius:999px; background:var(--muted); overflow:hidden; }
+.upload-progress>i { display:block; height:100%; border-radius:999px; background:var(--primary); transition:width .2s ease-out; }
+/* The file viewer: a large, calm stage for one file at a time. */
+.file-viewer { display:flex; flex-direction:column; gap:0; width:min(1100px, calc(100vw - 32px)); max-width:none !important; height:min(860px, calc(100dvh - 32px)); padding:0; overflow:hidden; }
+.file-viewer-head { display:flex; align-items:center; gap:12px; padding:10px 12px 10px 16px; border-bottom:1px solid var(--border); }
+.file-viewer-title { flex:1; min-width:0; }
+.file-viewer-title [data-slot="dialog-title"] { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; font-weight:600; }
+.file-viewer-title [data-slot="dialog-description"] { font-size:12px; color:var(--muted-foreground); }
+.file-viewer-actions { display:flex; gap:2px; }
+.file-viewer-body { position:relative; display:flex; flex:1; min-height:0; align-items:center; justify-content:center; overflow:auto; background:color-mix(in oklab, var(--foreground) 92%, var(--background)); }
+.file-viewer-body.is-pdf,.file-viewer-body.is-text { align-items:stretch; background:var(--muted); }
+.file-viewer-image { display:flex; align-items:center; justify-content:center; width:100%; height:100%; padding:16px; border:0; background:none; cursor:zoom-in; }
+.file-viewer-image img { max-width:100%; max-height:100%; object-fit:contain; border-radius:4px; box-shadow:0 8px 30px rgb(0 0 0 / .35); }
+.file-viewer-body.is-zoomed { align-items:flex-start; justify-content:flex-start; }
+.file-viewer-body.is-zoomed .file-viewer-image { width:auto; height:auto; cursor:zoom-out; }
+.file-viewer-body.is-zoomed .file-viewer-image img { max-width:none; max-height:none; }
+.file-viewer-body iframe { width:100%; height:100%; border:0; background:#fff; }
+.file-viewer-body video { max-width:100%; max-height:100%; background:#000; }
+.file-viewer-text { width:100%; padding:16px; overflow:auto; }
+.file-viewer-text pre { margin:0; padding:16px; border:1px solid var(--border); border-radius:8px; background:var(--card); font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--foreground); }
+.file-viewer-text table { border-collapse:collapse; min-width:100%; background:var(--card); font-size:12.5px; }
+.file-viewer-text th,.file-viewer-text td { padding:6px 10px; border:1px solid var(--border); text-align:left; white-space:nowrap; }
+.file-viewer-text th { position:sticky; top:0; background:var(--muted); font-weight:600; }
+.file-viewer-note { display:flex; align-items:center; gap:8px; margin:12px auto; font-size:12.5px; color:var(--muted-foreground); }
+.file-viewer-nav { position:absolute; top:50%; transform:translateY(-50%); border-radius:999px; opacity:.85; box-shadow:0 2px 10px rgb(0 0 0 / .25); }
+.file-viewer-nav:hover { opacity:1; }
+.file-viewer-nav.is-prev { left:12px; }
+.file-viewer-nav.is-next { right:12px; }
+@media (max-width:640px) { .file-viewer { width:100vw; height:100dvh; border-radius:0; } .file-viewer-nav { top:auto; bottom:12px; transform:none; } }
 .attachment-text { display:flex; flex-direction:column; flex:1; min-width:0; }
 .attachment-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:550; color:var(--foreground); }
 a.attachment-name:hover { text-decoration:underline; text-underline-offset:2px; }
@@ -935,9 +969,6 @@ a.attachment-name:hover { text-decoration:underline; text-underline-offset:2px; 
 .request-work-date svg { width:13px; height:13px; }
 .request-work-open { margin-left:auto; height:26px; }
 .request-strip { margin-bottom:16px; }
-.request-view-toggle { margin-bottom:14px; }
-.request-view-toggle [data-slot="toggle-group-item"] { gap:7px; padding:0 12px; font-size:12.5px; }
-.request-view-toggle [data-slot="toggle-group-item"][data-state="on"] { background:var(--secondary); color:var(--foreground); font-weight:550; }
 .inbox-list { padding-top:6px; }
 .inbox-footnote { display:flex; align-items:center; gap:6px; margin:10px 2px 0; font-size:12px; color:var(--muted-foreground); }
 .inbox-footnote a { color:var(--primary); font-weight:500; }
@@ -972,6 +1003,10 @@ a.attachment-name:hover { text-decoration:underline; text-underline-offset:2px; 
 .team-people-list li { display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px solid var(--border); }
 .team-people-list li:first-child { border-top:0; }
 .team-people-list li.is-inactive { opacity:.65; }
+.team-people-list li.is-confirming { flex-wrap:wrap; }
+.team-remove-confirm { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 12px; flex-basis:100%; margin-top:2px; padding:9px 10px; border-radius:8px; background:color-mix(in oklab, var(--destructive) 8%, var(--card)); }
+.team-remove-confirm p { flex:1 1 200px; min-width:0; font-size:12.5px; line-height:1.45; color:var(--foreground); }
+.team-remove-confirm>span { display:flex; gap:6px; margin-left:auto; }
 .team-person-name { display:flex; flex:1; flex-direction:column; min-width:0; }
 .team-person-name strong { display:flex; align-items:baseline; gap:7px; font-size:13px; font-weight:550; }
 .team-person-name .lead-tag { color:var(--primary); font-size:11px; font-weight:600; }
@@ -1027,6 +1062,9 @@ a.attachment-name:hover { text-decoration:underline; text-underline-offset:2px; 
 .request-counts button { display:inline-flex; align-items:center; gap:3px; border-radius:6px; padding:1px 4px; font-size:12px; font-variant-numeric:tabular-nums; color:var(--muted-foreground); }
 .request-counts button:hover { background:var(--row-hover); color:var(--foreground); }
 .request-counts svg { width:13px; height:13px; }
+.request-team-fact { display:flex; flex-direction:column; justify-content:flex-start; gap:12px; font-size:13px; }
+.request-team-fact>span { font-size:13px; font-weight:500; color:var(--foreground); }
+.request-team-fact em { font-style:normal; color:var(--muted-foreground); }
 .request-tool { padding:1px 7px; border-radius:999px; background:var(--muted); color:var(--foreground); font-weight:500; }
 .request-forwarded { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--info-foreground); }
 .request-forwarded svg { width:13px; height:13px; }

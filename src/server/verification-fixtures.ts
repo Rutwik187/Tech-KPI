@@ -41,16 +41,20 @@ export async function createOfflineSessionFixture({ baseURL, role, name }: { bas
     const identity = await createOfflineSessionForUser(id, baseURL);
     return {
       ...identity, userId: id, member,
-      dispose: async () => {
-        await db.transaction(async (tx) => {
-          await tx.delete(activities).where(or(eq(activities.actorId, id), eq(activities.entityId, id)));
-          await tx.delete(snapshots).where(eq(snapshots.userId, id));
-          await tx.delete(user).where(and(eq(user.id, id), eq(user.email, member.email)));
-        });
-      },
+      dispose: () => disposeOfflineFixture(id, member.email),
     };
   } catch (error) {
     await db.delete(user).where(eq(user.id, id));
     throw error;
   }
 }
+
+/** Removes a temporary test person and what they left: sessions, scores, and history. Only the exact id and email match. */
+export async function disposeOfflineFixture(id: string, email: string) {
+  await db.transaction(async (tx) => {
+    await tx.delete(activities).where(or(eq(activities.actorId, id), eq(activities.entityId, id)));
+    await tx.delete(snapshots).where(eq(snapshots.userId, id));
+    await tx.delete(user).where(and(eq(user.id, id), eq(user.email, email)));
+  });
+}
+

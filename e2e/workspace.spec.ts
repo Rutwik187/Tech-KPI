@@ -6,6 +6,7 @@ import { dateKey, dueDateAfterHours, getWeekStart, getWorkCalendar, shiftDate } 
 import { daysBetween } from '../src/lib/timeline';
 import { ADHOC_PROJECT } from '../src/lib/project-defaults';
 import type { DashboardData } from '../src/lib/types';
+import { createSession, type SessionFixture } from './session';
 
 // Session fixture cookies must never enter trace artifacts. This suite does not exercise Microsoft OAuth.
 /** The overview greets the signed-in person by the time of day. */
@@ -102,21 +103,13 @@ async function saveLiveForm(page: Page, dialog: Locator, label: string | RegExp)
   await expect(dialog).toBeHidden({ timeout: 10_000 });
 }
 
-type OfflineFixture = {
-  userId: string;
-  member: { id: string; name: string; role: string; isActive: boolean };
-  cookie: { name: string; value: string; url: string; httpOnly: boolean; secure: boolean; sameSite: 'Lax' };
-  dispose(): Promise<void>;
-};
+type OfflineFixture = SessionFixture;
 
 /** Local verification only. It proves session authorization, not Microsoft OAuth login. */
 async function authenticateWithFixture(page: Page): Promise<OfflineFixture> {
   const started = Date.now();
-  const { config } = await import('dotenv');
-  config({ path: resolve('.env.local'), quiet: true });
-  const { createOfflineSessionFixture } = await import('../src/server/verification-fixtures');
   // A unique name keeps a leftover from an interrupted run from matching the same owner option.
-  const fixture = await createOfflineSessionFixture({ baseURL: process.env.TEST_BASE_URL ?? 'http://localhost:3100', role: 'admin', name: `Browser verification administrator ${randomUUID().slice(0, 6)}` });
+  const fixture = await createSession('admin', `Browser verification administrator ${randomUUID().slice(0, 6)}`);
   console.log(`[fixture verification] Offline session created in ${Date.now() - started} ms`);
   try {
     await page.context().addCookies([fixture.cookie]);
@@ -998,8 +991,7 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
     try {
       fixture = await authenticateWithFixture(page);
       actorId = fixture.userId;
-      const { createOfflineSessionFixture } = await import('../src/server/verification-fixtures');
-      owner = await createOfflineSessionFixture({ baseURL: process.env.TEST_BASE_URL ?? 'http://localhost:3100', role: 'developer', name: `Browser verification developer ${randomUUID().slice(0, 6)}` });
+      owner = await createSession('developer', `Browser verification developer ${randomUUID().slice(0, 6)}`);
       page.setDefaultTimeout(15_000);
       page.setDefaultNavigationTimeout(45_000);
       await page.goto('/tickets');
@@ -1027,20 +1019,15 @@ test.describe('local fixture authentication — Microsoft OAuth is not exercised
       const row = page.getByRole('row').filter({ hasText: taskTitle });
       await expect(row).toContainText('2 h');
       await row.getByRole('button', { name: taskTitle, exact: true }).click();
-      // Adding hours never rewrites the estimate. It adds to it, with a reason. With no due date, only the estimate changes.
+      // Adding hours never rewrites the estimate. It adds to it, with a reason. Every ticket has a date, so the date moves too.
+      const firstDue = task.dueDate!;
       await page.getByRole('button', { name: 'Add hours', exact: true }).click();
       dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Give this ticket more time', exact: true }) });
       await dialog.getByRole('button', { name: '+1 h', exact: true }).click();
-      await expect(dialog.locator('.extend-preview')).toContainText('only the estimate changes');
+      await expect(dialog.locator('.extend-preview')).toContainText('Estimate 2 h → 3 h');
       await dialog.getByRole('textbox', { name: 'Reason', exact: true }).fill('Additional scope agreed during browser verification');
       await saveLiveForm(page, dialog, 'Add 1 hour');
       expect((await readItems()).find((item) => item.id === task.id)?.estimateHours).toBe(3);
-      // The first due date is planning. More hours later is an extension and needs a reason.
-      const firstDue = shiftDate(dateKey(new Date(), 'Asia/Kolkata'), 3, 'Asia/Kolkata');
-      await page.getByRole('dialog').getByRole('button', { name: /^Set date/ }).click();
-      dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Set date', exact: true }) });
-      await pickDate(page, dialog.getByRole('button', { name: /^Date/ }), firstDue);
-      await saveLiveForm(page, dialog, /^Set date to /);
       await page.getByRole('dialog').getByRole('button', { name: /^Extend/ }).click();
       dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Give this ticket more time', exact: true }) });
       await dialog.getByRole('button', { name: '+8 h', exact: true }).click();
@@ -1280,7 +1267,9 @@ test('someone from another team raises a request, a project manager forwards it,
   await dialog.getByRole('textbox', { name: 'What do you need?', exact: true }).fill('Invoice download for B2B orders');
   await dialog.getByRole('radio', { name: 'Data or report', exact: true }).click();
   await dialog.getByRole('textbox', { name: 'Details', exact: true }).fill('B2B customers need a GST invoice PDF on the order page. Sample: https://example.com/sample-invoice');
-  await expect(dialog.getByRole('combobox', { name: 'Team', exact: true })).toHaveText('Sales');
+  // A request goes to the requester's own team, so the form shows it instead of asking.
+  await expect(dialog.getByRole('combobox', { name: 'Team', exact: true })).toHaveCount(0);
+  await expect(dialog.locator('.request-team-fact')).toContainText('Sales');
   await dialog.getByRole('radio', { name: 'High', exact: true }).click();
   await dialog.getByRole('button', { name: 'Send request', exact: true }).click();
   await expect(dialog).toBeHidden();
@@ -1437,11 +1426,7 @@ test('the tech lead creates a team and adds its members, who raise requests and 
   await expect(page.getByRole('heading', { name: 'This page is for the tech team' })).toBeVisible();
   await page.locator('[data-slot="sidebar"]').getByRole('link', { name: 'My requests', exact: true }).click();
   await page.getByRole('button', { name: 'Raise a request', exact: true }).first().click();
-  await expect(dialog.getByRole('combobox', { name: 'Team', exact: true })).toHaveText('Customer support');
-  await dialog.getByRole('combobox', { name: 'Team', exact: true }).click();
-  await expect(page.getByRole('option', { name: 'Sales', exact: true })).toBeVisible();
-  await expect(page.getByRole('option', { name: 'Graphics', exact: true })).toHaveCount(0);
-  await page.keyboard.press('Escape');
+  await expect(dialog.locator('.request-team-fact')).toContainText('Customer support');
   await dialog.getByRole('textbox', { name: 'What do you need?', exact: true }).fill('Coupon field rejects valid codes');
   await dialog.getByRole('radio', { name: 'Something is broken', exact: true }).click();
   await dialog.getByRole('textbox', { name: 'Details', exact: true }).fill('Since this morning, WELCOME10 shows as invalid at checkout on mobile.');
@@ -1451,7 +1436,6 @@ test('the tech lead creates a team and adds its members, who raise requests and 
 
   // The team lead sees what their teammate raised, under their team's requests.
   await chooseOption(page, viewAs, 'Sneha Pillai · Customer support team lead');
-  await page.getByRole('radio', { name: /^Customer support team/ }).click();
   await expect(page.locator('.tech-request-card').filter({ hasText: 'Coupon field rejects valid codes' })).toContainText('Farah Ali');
 
   // Something broken starts as a bug, and an urgent one is critical. The tech lead can assign it before a project manager reviews it.

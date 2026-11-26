@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { account, activities, attachments, departments, dueDateRequests, holidays, leaves, leaveRequests, memberProfiles, projectMembers, projectPhases, projects, requestComments, session, settings, snapshots, techRequests, ticketRequests, user, workItems } from "@/db/schema";
 import type { Member, TechRequestStatus } from "@/lib/types";
-import { ATTACHMENT_BUCKET, storageClient } from "@/lib/storage";
+import { attachmentBucket, storageClient } from "@/lib/storage";
 import { canSeeRequest } from "./request-access";
 import { memberRole, requireCapability, storedRole } from "./authz";
 import { ACTION_CAPABILITY, can, isOrgAdmin, isTechTeam, leadsWork, manageableRoles, mayDo, ownsNoWork, aRole, type Capability } from "@/lib/permissions";
@@ -426,7 +426,14 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         break;
       }
       case "createTechRequest": {
-        await activeDepartment(tx, action.departmentId);
+        // People raise requests for the team an admin put them in. Someone without a team waits until an admin sets it,
+        // so nobody can choose a team and then read its requests.
+        const [profile] = await tx.select({ departmentId: memberProfiles.departmentId }).from(memberProfiles).where(eq(memberProfiles.userId, actor.id));
+        const departmentId = profile?.departmentId;
+        if (!departmentId) throw new AppError("An admin needs to add you to your team before you can raise a request.", 403);
+        if (action.departmentId && action.departmentId !== departmentId) throw new AppError("You raise requests for your own team only.");
+        const [team] = await tx.select().from(departments).where(eq(departments.id, departmentId));
+        if (!team || team.isArchived) throw new AppError("Your team no longer takes requests. Ask an admin to move you to another team.");
         await assertNeededBy(tx, action.neededBy);
         if (action.id) {
           // The id the page chose must be new everywhere. Request and ticket history share one audit table, keyed by id.
@@ -435,11 +442,9 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
           if (taken || ticket) throw new AppError("This request was already sent.", 409);
         }
         const [request] = await tx.insert(techRequests).values({
-          ...(action.id ? { id: action.id } : {}), requesterId: actor.id, departmentId: action.departmentId, title: action.title, description: action.description,
+          ...(action.id ? { id: action.id } : {}), requesterId: actor.id, departmentId, title: action.title, description: action.description,
           category: action.category, tool: action.tool ?? "", priority: action.priority, neededBy: action.neededBy,
         }).returning();
-        // The first request sets the requester's team, so their next form starts there.
-        await tx.update(memberProfiles).set({ departmentId: action.departmentId }).where(and(eq(memberProfiles.userId, actor.id), isNull(memberProfiles.departmentId)));
         await audit(tx, actor, request.id, "tech_request.created", { departmentId: request.departmentId, category: request.category, priority: request.priority, neededBy: request.neededBy });
         break;
       }
@@ -449,6 +454,8 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         const own = action.action === "updateTechRequest";
         const request = await openTechRequest(tx, action.id, own ? ["new"] : openStages(actor), own ? actor.id : undefined);
         const patch = action.patch;
+        // A requester's request stays with their team. A project manager or the tech lead may move it to the right team.
+        if (own && patch.departmentId && patch.departmentId !== request.departmentId) throw new AppError("You raise requests for your own team only.");
         if (patch.departmentId && patch.departmentId !== request.departmentId) await activeDepartment(tx, patch.departmentId);
         if (patch.neededBy !== undefined && patch.neededBy !== request.neededBy) await assertNeededBy(tx, patch.neededBy);
         const changes = requestChanges(request, patch);
@@ -883,7 +890,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
   if (removedObjects.length) {
     try {
       const s3 = storageClient();
-      await Promise.all(removedObjects.map((key) => s3.send(new DeleteObjectCommand({ Bucket: ATTACHMENT_BUCKET, Key: key })).catch(() => undefined)));
+      await Promise.all(removedObjects.map((key) => s3.send(new DeleteObjectCommand({ Bucket: attachmentBucket(), Key: key })).catch(() => undefined)));
     } catch { /* Storage is not configured here. The rows are already gone, so nothing links to these files. */ }
   }
 }

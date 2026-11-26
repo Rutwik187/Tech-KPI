@@ -178,19 +178,20 @@ function HowRequestsWork({ onRaise }: { onRaise: () => void }) {
 
 type MyRequestsProps = { data: DashboardData; onRaise: () => void; onOpen: OpenRequest; onEdit: (request: TechRequest) => void; mutate: MutationFn; busy: boolean };
 
-/** A requester's home: their requests, and their team's, with where each one is. */
+/**
+ * A requester's home: their team's requests, their own among them, with where each one is. Everyone raises requests for their
+ * own team only, so one list serves the whole team. A teammate's request names who raised it; your own does not.
+ */
 export function MyRequests({ data, onRaise, onOpen, onEdit, mutate, busy }: MyRequestsProps) {
   const me = data.currentUser;
   const team = findDepartment(data, me.departmentId);
-  const [view, setView] = useState<'mine' | 'team'>('mine');
   const [withdrawing, setWithdrawing] = useState<string | null>(null);
-  const mine = data.techRequests.filter(r => r.requesterId === me.id);
-  const teamRequests = team ? data.techRequests.filter(r => r.departmentId === team.id) : [];
-  const shown = view === 'team' && team ? teamRequests : mine;
+  // The server sends a requester their own and their team's requests, and nothing else.
+  const shown = data.techRequests;
   const stageOf = (request: TechRequest) => requestStage(data, request);
   const open = shown.filter(r => OPEN_STAGES.includes(stageOf(r))).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const closed = shown.filter(r => !OPEN_STAGES.includes(stageOf(r))).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  const count = (stages: RequestStage[]) => mine.filter(r => stages.includes(stageOf(r))).length;
+  const count = (stages: RequestStage[]) => shown.filter(r => stages.includes(stageOf(r))).length;
 
   const card = (request: TechRequest) => {
     const own = request.requesterId === me.id;
@@ -206,21 +207,17 @@ export function MyRequests({ data, onRaise, onOpen, onEdit, mutate, busy }: MyRe
   };
 
   return <>
-    {mine.length === 0 && <HowRequestsWork onRaise={onRaise} />}
-    {mine.length > 0 && <div className="team-overview-strip request-strip">
+    {shown.length === 0 && <HowRequestsWork onRaise={onRaise} />}
+    {shown.length > 0 && <div className="team-overview-strip request-strip">
       <div><span className="mini-metric-icon"><Hourglass /></span><strong>{count(['with_pm', 'with_lead'])}</strong><span>being reviewed</span></div>
       <div><span className="mini-metric-icon"><Clock3 /></span><strong>{count(['assigned', 'in_progress', 'checking'])}</strong><span>with a developer</span></div>
       <div><span className="mini-metric-icon"><CheckCheck /></span><strong>{count(['done'])}</strong><span>done</span></div>
     </div>}
-    {(mine.length > 0 || teamRequests.length > 0) && <>
-      {team && <ToggleGroup type="single" variant="outline" size="sm" value={view} onValueChange={value => { if (value) setView(value as 'mine' | 'team'); }} className="request-view-toggle" aria-label="Whose requests to show">
-        <ToggleGroupItem value="mine">My requests<span className="tab-count">{mine.length}</span></ToggleGroupItem>
-        <ToggleGroupItem value="team">{team.name} team<span className="tab-count">{teamRequests.length}</span></ToggleGroupItem>
-      </ToggleGroup>}
-      <Panel title="Open" count={open.length}>
+    {shown.length > 0 && <>
+      <Panel title={team ? `Open in ${team.name}` : 'Open'} count={open.length}>
         {open.length
           ? <div className="request-list">{open.map(card)}</div>
-          : <EmptyState compact title="Nothing open" description={view === 'team' ? 'Your team has no open requests.' : 'Every request you raised is done or closed.'} action={<Button variant="outline" onClick={onRaise}><Plus data-icon="inline-start" />Raise a request</Button>} />}
+          : <EmptyState compact title="Nothing open" description={team ? `${team.name} has no open requests.` : 'Every request you raised is done or closed.'} action={<Button variant="outline" onClick={onRaise}><Plus data-icon="inline-start" />Raise a request</Button>} />}
       </Panel>
       {closed.length > 0 && <Panel title="Done and declined" count={closed.length}>
         <div className="request-list">{closed.map(card)}</div>
@@ -591,17 +588,20 @@ function DeclineTechRequestForm({ data, request, mutate, busy, onClose }: { data
   </Modal>;
 }
 
-type RequestFormProps = { data: DashboardData; editing?: TechRequest; staff?: boolean; mutate: MutationFn; onClose: () => void; busy: boolean; onFilesChanged?: () => void };
+type RequestFormProps = { data: DashboardData; editing?: TechRequest; staff?: boolean; mutate: MutationFn; onClose: () => void; busy: boolean; onFilesChanged?: () => void; onOpenRaised?: (id: string) => void };
 
 /**
  * A requester raises a request, or changes it while a project manager has it. A project manager or the tech lead corrects it
  * (`staff`) until it is assigned. Only changed values are sent. Files chosen here upload once the request exists.
  */
-export function TechRequestForm({ data, editing, staff = false, mutate, onClose, busy, onFilesChanged }: RequestFormProps) {
+export function TechRequestForm({ data, editing, staff = false, mutate, onClose, busy, onFilesChanged, onOpenRaised }: RequestFormProps) {
   const teams = activeDepartments(data);
-  const ownTeam = teams.find(t => t.id === data.currentUser.departmentId)?.id;
+  // Someone from another team raises requests for their own team only. The tech side may move a request to the right team.
+  const ownTeam = teams.find(t => t.id === data.currentUser.departmentId);
+  const pickTeam = staff;
+  const noTeam = !pickTeam && !editing && !ownTeam;
   const [category, setCategory] = useState<RequestCategory>(editing?.category ?? 'tool');
-  const [departmentId, setDepartmentId] = useState(editing?.departmentId ?? ownTeam ?? '');
+  const [departmentId, setDepartmentId] = useState(editing?.departmentId ?? ownTeam?.id ?? '');
   const [neededBy, setNeededBy] = useState(editing?.neededBy ?? '');
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -625,6 +625,13 @@ export function TechRequestForm({ data, editing, staff = false, mutate, onClose,
         setUploading(false);
         if (attached) toast.success(attached === 1 ? 'File attached to your request' : `${attached} files attached to your request`);
         onFilesChanged?.();
+        // The request is sent either way. Open it, so the files that did not attach can be added again from Files.
+        if (attached < files.length) {
+          toast.error(`Your request was sent, but ${plural(files.length - attached, 'file')} did not attach. Add ${files.length - attached === 1 ? 'it' : 'them'} again under Files.`, { duration: 10_000 });
+          onClose();
+          onOpenRaised?.(id);
+          return;
+        }
       }
       onClose();
       return;
@@ -640,6 +647,7 @@ export function TechRequestForm({ data, editing, staff = false, mutate, onClose,
   return <Modal title={editing ? 'Edit request' : 'Raise a request'} subtitle={subtitle} onClose={onClose}>
     <form onSubmit={submit} className="item-form">
       <FieldGroup className="modal-form-body">
+        {noTeam && <Alert variant="destructive"><Briefcase /><AlertTitle>You are not in a team yet</AlertTitle><AlertDescription>An admin adds you to your team, such as Sales. Then you can raise requests for it here.</AlertDescription></Alert>}
         <FormField className="title-label">What do you need?<Input className="task-title-input" name="title" required minLength={3} maxLength={200} defaultValue={editing?.title} placeholder="e.g. A shared inbox for customer WhatsApp messages" autoComplete="off" /></FormField>
         <FormField>What kind of request is it?
           <ToggleGroup type="single" variant="outline" value={category} onValueChange={value => { if (value) setCategory(value as RequestCategory); }} className="category-choice" aria-label="Kind of request">
@@ -649,8 +657,9 @@ export function TechRequestForm({ data, editing, staff = false, mutate, onClose,
         <FormField>Which tool or system is it about? <span className="optional">optional</span><Input name="tool" maxLength={120} defaultValue={editing?.tool} placeholder="e.g. Shopify, the CRM, the website, Google Sheets" autoComplete="off" /></FormField>
         <FormField>Details<Textarea name="description" required minLength={10} maxLength={20000} rows={5} defaultValue={editing?.description} placeholder={category === 'problem' ? 'What went wrong, where, and since when? Attach a screenshot or a short screen recording.' : category === 'tool' ? 'What should the tool do, who will use it, and how do you work today? Name any tool you already like.' : 'What should happen, and why does your team need it? Add links to examples, sheets, or designs.'} /></FormField>
         <FieldGroup className="form-grid">
-          <FormField>Team<FormSelect required value={departmentId} onValueChange={setDepartmentId}><option value="" disabled>{staff ? 'Choose the team' : 'Choose your team'}</option>{teamChoices.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</FormSelect>
-            {!ownTeam && !editing && <span className="field-help">We remember it for next time.</span>}</FormField>
+          {pickTeam
+            ? <FormField>Team<FormSelect required value={departmentId} onValueChange={setDepartmentId}><option value="" disabled>Choose the team</option>{teamChoices.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</FormSelect></FormField>
+            : <div className="request-team-fact"><span>For</span>{departmentId ? <TeamTag data={data} id={departmentId} /> : <em>No team yet</em>}</div>}
           <FormField>Needed by <span className="optional">optional</span><FormDate value={neededBy} min={day} onValueChange={setNeededBy} placeholder="No date" /></FormField>
         </FieldGroup>
         <FormField>How urgent is it?<FormChoice name="priority" defaultValue={editing?.priority ?? 'medium'} options={PRIORITY_OPTIONS} /><span className="field-help">Choose Urgent only when work is stopped today.</span></FormField>
@@ -658,7 +667,7 @@ export function TechRequestForm({ data, editing, staff = false, mutate, onClose,
           {live ? <FilePicker files={files} onChange={setFiles} disabled={busy || uploading} /> : <span className="field-help">Attach files in your live workspace.</span>}</FormField>}
         {editing && <p className="form-help">To add or remove files, open the request and use Files.</p>}
       </FieldGroup>
-      <FormFooter busy={busy || uploading} disabled={!departmentId} onClose={onClose} label={uploading ? 'Uploading files…' : editing ? 'Save changes' : files.length ? `Send request with ${plural(files.length, 'file')}` : 'Send request'} />
+      <FormFooter busy={busy || uploading} disabled={!departmentId || noTeam} onClose={onClose} label={uploading ? 'Uploading files…' : editing ? 'Save changes' : files.length ? `Send request with ${plural(files.length, 'file')}` : 'Send request'} />
     </form>
   </Modal>;
 }

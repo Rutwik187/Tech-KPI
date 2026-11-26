@@ -143,7 +143,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
   const blocked = !canOpen(page, data.currentUser.role);
   // The open request also lives in the address. Anyone who can see it opens the same details, from any page.
   const requestKey = searchParams.get(REQUEST_PARAM);
-  const selectedRequest = requestKey ? data.techRequests.find(r => r.key === requestKey) : undefined;
+  const selectedRequest = requestKey ? data.techRequests.find(r => r.key === requestKey || r.id === requestKey) : undefined;
   // The list keeps its filters while a ticket opens and closes, so the open ticket is not part of its identity.
   const listQuery = useMemo(() => { const params = new URLSearchParams(searchParams.toString()); params.delete(OPEN_PARAM); return params.toString(); }, [searchParams]);
 
@@ -247,6 +247,12 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
   const addHours = (item: WorkItem) => setModal({ type: 'extend', target: { kind: 'ticket', item, hours: true } });
   const extendProject = (project: Project) => setModal({ type: 'extend', target: { kind: 'project', project } });
   const editRequest = useCallback((request: TechRequest) => setModal({ type: 'techRequest', request }), []);
+  // A request whose files did not all attach opens by its id, as soon as the workspace has it. Its key is not known yet.
+  const openRaised = useCallback((id: string) => {
+    const params = new URLSearchParams(window.location.search);
+    params.set(REQUEST_PARAM, id); params.delete(OPEN_PARAM);
+    window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`);
+  }, []);
   // Someone from another team is a person with the requester role, so their form is the member form.
   const openModal = (type: PaletteModal) => setModal(type === 'otherTeamMember' ? { type: 'member', role: 'requester' } : { type } as ModalState);
   const searchKey = useSearchShortcut();
@@ -358,7 +364,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
       </div>
     </SidebarInset>
     {!requestsOnly && <CommandPalette data={data} open={paletteOpen} onOpenChange={setPaletteOpen} onOpenItem={openItem} onOpenProject={setProjectId} onOpenRequest={openRequest} onCreate={kind => addItem(kind)} onModal={openModal} />}
-    {modal?.type === 'techRequest' && <TechRequestForm data={data} editing={modal.request && data.techRequests.find(r => r.id === modal.request!.id)} mutate={mutate} onClose={() => setModal(null)} busy={busy} onFilesChanged={() => void refresh()} />}
+    {modal?.type === 'techRequest' && <TechRequestForm data={data} editing={modal.request && data.techRequests.find(r => r.id === modal.request!.id)} mutate={mutate} onClose={() => setModal(null)} busy={busy} onFilesChanged={() => void refresh()} onOpenRaised={openRaised} />}
     {modal?.type === 'requestAction' && (() => { const request = data.techRequests.find(r => r.id === modal.request.id); return request ? <RequestActionForm data={data} kind={modal.kind} request={request} mutate={mutate} busy={busy} onClose={() => setModal(null)} /> : null; })()}
     {selectedRequest && !modal && !selected && <RequestDrawer data={data} request={selectedRequest} mutate={mutate} busy={busy} onClose={() => openRequest(null)} onAct={actOnRequest} onEdit={editRequest} onOpenItem={isRequester ? undefined : openItem} onFilesChanged={() => void refresh()} />}
     {modal?.type === 'item' && <ItemForm data={data} kind={modal.kind} assigneeId={modal.assigneeId} mutate={mutate} onClose={() => setModal(null)} busy={busy} />}
@@ -404,10 +410,10 @@ function WorkspaceSidebar({ data, page }: { data: DashboardData; page: string })
   // A lead sees everything waiting for a decision. A developer sees their own asks still waiting.
   const pendingAsks = data.requests.filter(r => r.status === 'pending').length + data.dueDateRequests.filter(r => r.status === 'pending').length + (data.leaveRequests ?? []).filter(r => r.status === 'pending').length;
   const waiting = lead ? pendingAsks + data.items.filter(i => i.type === 'task' ? i.status === 'in_review' : i.status === 'fixed').length : pendingAsks;
-  // Requests that wait for this person: forwarded ones for a lead, new ones for a project manager, and a requester's own under review.
+  // Requests that wait for this person: forwarded ones for a lead, new ones for a project manager, and their team's under review for a requester.
   const requestCount = lead ? data.techRequests.filter(r => r.status === 'forwarded').length
     : me.role === 'project_manager' ? data.techRequests.filter(r => r.status === 'new').length
-    : data.techRequests.filter(r => r.requesterId === me.id && (r.status === 'new' || r.status === 'forwarded')).length;
+    : data.techRequests.filter(r => r.status === 'new' || r.status === 'forwarded').length;
   const leaveWaiting = (data.leaveRequests ?? []).filter(r => r.status === 'pending' && (lead || r.requesterId === me.id)).length;
   const counts: Partial<Record<Section, number>> = {
     tickets: open.filter(i => i.type === 'task').length, bugs: open.filter(i => i.type === 'bug').length, approvals: waiting, leave: leaveWaiting, requests: requestCount,

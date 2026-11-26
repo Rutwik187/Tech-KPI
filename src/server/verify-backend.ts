@@ -29,6 +29,9 @@ async function main() {
     if (requests % 10 === 0) console.log(`Verified ${requests} HTTP requests (${checks} checks).`);
     return response;
   }
+  async function mutateJson(cookie: string, path: string, body: unknown, expected: number) {
+    return call(path, cookie, body, expected);
+  }
   async function mutate(cookie: string, body: unknown, expected = 200): Promise<DashboardData> {
     return (await call("/api/data", cookie, body, expected)).json();
   }
@@ -348,6 +351,10 @@ async function main() {
     const teamAsk = { title: `${trace}-request`, description: "A bulk order form for corporate gifting, please.", category: "feature", priority: "high", neededBy: "2099-12-01", departmentId: requestTeam.id };
     await mutate(adminCookie, { action: "createTechRequest", ...teamAsk }, 403);
     await mutate(developerCookie, { action: "createTechRequest", ...teamAsk }, 403);
+    // Without a team, nobody raises requests: an admin sets the team first. Then requests always go to that team.
+    await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk }, 403);
+    await mutate(adminCookie, { action: "updateMember", id: requesterFixture.userId, patch: { departmentId: requestTeam.id } });
+    await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, departmentId: otherTeam.id }, 400);
     await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, departmentId: oldTeam.id }, 400);
     await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, neededBy: "2000-01-03" }, 400);
     await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, description: "Too short" }, 400);
@@ -548,6 +555,20 @@ async function main() {
     await upload(requesterCookie, { requestId: flow.id, file: new File(["MZ"], "setup.exe", { type: "application/octet-stream" }) }, 400);
     await upload(requesterCookie, { requestId: flow.id }, 400);
     await upload(managerCookie, { itemId: task.id, file: new File(["x"], "note.txt", { type: "text/plain" }) }, 404);
+    // Direct uploads: the app checks who may attach what, then hands out a short-lived link. No file is written here.
+    const direct = (cookie: string, body: Record<string, unknown>, expected: number) => mutateJson(cookie, "/api/attachments", body, expected);
+    await direct(outsiderCookie, { step: "start", requestId: flow.id, name: "note.png", size: 10, type: "image/png" }, 404);
+    await direct(requesterCookie, { step: "start", requestId: flow.id, name: "page.html", size: 10, type: "text/html" }, 400);
+    await direct(requesterCookie, { step: "start", requestId: flow.id, name: "huge.mp4", size: 11 * 1024 * 1024, type: "video/mp4" }, 413);
+    await direct(requesterCookie, { step: "start", requestId: flow.id, name: "empty.png", size: 0, type: "image/png" }, 400);
+    await direct(managerCookie, { step: "start", itemId: task.id, name: "note.png", size: 10, type: "image/png" }, 404);
+    const started = await (await direct(requesterCookie, { step: "start", requestId: flow.id, name: "screen.png", size: 2048, type: "image/png" }, 200)).json() as { attachmentId: string; uploadUrl: string; contentType: string };
+    const link = new URL(started.uploadUrl);
+    assert.equal(started.contentType, "image/png"); assert(link.pathname.endsWith(`/tech-requests/${flow.id}/${started.attachmentId}`));
+    assert(![...link.searchParams.keys()].some((key) => /checksum/i.test(key)), "Upload links must not carry a checksum."); checks += 3;
+    // Finishing an upload that never arrived lists nothing.
+    await direct(requesterCookie, { step: "finish", requestId: flow.id, attachmentId: started.attachmentId, name: "screen.png" }, 409);
+    await direct(outsiderCookie, { step: "finish", requestId: flow.id, attachmentId: started.attachmentId, name: "screen.png" }, 404);
     // Project managers own no work and join no projects.
     await mutate(adminCookie, { action: "updateMember", id: member.id, patch: { role: "project_manager" } }, 400);
     await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { memberIds: [fixture.userId, member.id, managerFixture.userId] } }, 400);

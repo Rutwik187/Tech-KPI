@@ -124,7 +124,8 @@ export const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("withdrawDueDateRequest"), id: uuid }).strict(),
   // Another team asks for tech work. Only requesters raise, change, and withdraw these.
   // The page may choose the new request's id, so it can attach files to it right after.
-  z.object({ action: z.literal("createTechRequest"), id: uuid.optional(), ...techRequestFields }).strict(),
+  // A request always goes to the requester's own team. Older pages still send the team, and it must be theirs.
+  z.object({ action: z.literal("createTechRequest"), id: uuid.optional(), ...techRequestFields, departmentId: uuid.optional() }).strict(),
   z.object({ action: z.literal("updateTechRequest"), id: uuid, patch: z.object(techRequestFields).partial().strict() }).strict(),
   z.object({ action: z.literal("withdrawTechRequest"), id: uuid }).strict(),
   // A project manager or the tech lead corrects a request before it is assigned, forwards it, or returns it.

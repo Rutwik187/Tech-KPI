@@ -27,3 +27,21 @@ describe('attachment rules', () => {
     expect(fileSize(2_516_582)).toBe('2.4 MB');
   });
 });
+
+describe('file previews', () => {
+  it('previews images, PDFs, videos, and text, and downloads everything else', async () => {
+    const { previewKind } = await import('../attachments');
+    expect(previewKind('screen.png', 'image/png')).toBe('image');
+    expect(previewKind('brief.pdf', 'application/pdf')).toBe('pdf');
+    expect(previewKind('demo.mp4', 'video/mp4')).toBe('video');
+    expect(previewKind('server.log', 'text/plain')).toBe('text');
+    expect(previewKind('orders.csv', 'text/csv')).toBe('text');
+    expect(previewKind('photo.heic', 'image/heic')).toBeNull();
+    expect(previewKind('plan.docx', '')).toBeNull();
+  });
+
+  it('reads CSV cells with commas, quotes, and line breaks inside quotes', async () => {
+    const { parseCsv } = await import('@/components/workspace/attachments');
+    expect(parseCsv('name,note\r\n"Rao, A","said ""hi""\nthen left"\nB,plain')).toEqual([['name', 'note'], ['Rao, A', 'said "hi"\nthen left'], ['B', 'plain']]);
+  });
+});

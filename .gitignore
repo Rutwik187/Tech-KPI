@@ -10,3 +10,6 @@ test-results/
 .admin-bootstrap.txt
 .neon
 .neon
+.vercel
+.env*
+!.env.example

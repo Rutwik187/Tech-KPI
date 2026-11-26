@@ -54,14 +54,17 @@ describe('requests from other teams', () => {
     expect(view.techRequests.every(r => r.itemId && own.has(r.itemId))).toBe(true);
   });
 
-  it('remembers a requester’s team from their first request, and only the tech lead assigns it', () => {
+  it('files a request under the requester’s own team, refuses anyone without a team, and only the tech lead assigns it', () => {
     let data = demo();
-    data.members = data.members.map(m => m.id === 'demo-priya' ? { ...m, departmentId: null } : m);
     const priya = data.members.find(m => m.id === 'demo-priya')!;
+    // Without a team, nobody can raise a request, so nobody can pick a team and read its requests.
+    const noTeam = { ...data, members: data.members.map(m => m.id === 'demo-priya' ? { ...m, departmentId: null } : m) };
+    expect(() => mutateDemo(noTeam, { action: 'createTechRequest', ...ask, departmentId: 'demo-team-2' }, { ...priya, departmentId: null })).toThrow('add you to your team');
+    expect(() => mutateDemo(data, { action: 'createTechRequest', ...ask, departmentId: 'demo-team-2' }, priya)).toThrow('your own team only');
     data = mutateDemo(data, { action: 'createTechRequest', ...ask, departmentId: 'demo-team-1' }, priya);
     const raised = data.techRequests.find(r => r.title === ask.title)!;
     expect(raised).toMatchObject({ status: 'new', requesterId: 'demo-priya', requesterName: 'Priya Kapoor', key: 'REQ-009', tool: '' });
-    expect(data.members.find(m => m.id === 'demo-priya')?.departmentId).toBe('demo-team-1');
+    expect(raised.departmentId).toBe('demo-team-1');
 
     const admin = data.currentUser;
     data = mutateDemo(data, { action: 'assignTechRequest', id: raised.id, type: 'task', assigneeId: 'demo-aarav', title: ask.title, projectId: 'demo-commerce', phaseId: null, priority: 'high', estimateHours: 6, dueDate: '2026-11-09' }, admin);
@@ -83,8 +86,8 @@ describe('requests from other teams', () => {
     const bug = data.items.find(i => i.id === data.techRequests.find(r => r.id === broken.id)!.itemId)!;
     expect(bug).toMatchObject({ type: 'bug', status: 'open', severity: 'critical', estimateHours: 0, dueDate: null });
 
-    data = mutateDemo(data, { action: 'updateDepartment', id: 'demo-team-6', isArchived: true }, data.currentUser);
-    expect(() => mutateDemo(data, { action: 'createTechRequest', ...ask, departmentId: 'demo-team-6' }, rahul)).toThrow('Choose a team from the list.');
+    data = mutateDemo(data, { action: 'updateDepartment', id: 'demo-team-2', isArchived: true }, data.currentUser);
+    expect(() => mutateDemo(data, { action: 'createTechRequest', ...ask, departmentId: 'demo-team-2' }, rahul)).toThrow('no longer takes requests');
     expect(() => mutateDemo(data, { action: 'createDepartment', name: ' sales ' }, data.currentUser)).toThrow('A team with this name already exists.');
   });
 

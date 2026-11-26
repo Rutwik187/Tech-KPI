@@ -6,6 +6,8 @@
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 export type AttachmentKind = 'image' | 'pdf' | 'video' | 'document' | 'sheet' | 'slides' | 'text';
+/** How a file shows in the app's viewer. Files without a preview download instead. */
+export type PreviewKind = 'image' | 'pdf' | 'video' | 'text';
 type FileRule = { mimeType: string; kind: AttachmentKind; viewable: boolean; alsoSentAs?: string[] };
 
 const RULES: Record<string, FileRule> = {
@@ -23,13 +25,13 @@ const RULES: Record<string, FileRule> = {
   docx: { mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', kind: 'document', viewable: false },
   xls: { mimeType: 'application/vnd.ms-excel', kind: 'sheet', viewable: false },
   xlsx: { mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', kind: 'sheet', viewable: false },
-  csv: { mimeType: 'text/csv', kind: 'sheet', viewable: false, alsoSentAs: ['application/vnd.ms-excel', 'text/plain'] },
+  csv: { mimeType: 'text/csv', kind: 'sheet', viewable: true, alsoSentAs: ['application/vnd.ms-excel', 'text/plain'] },
   ppt: { mimeType: 'application/vnd.ms-powerpoint', kind: 'slides', viewable: false },
   pptx: { mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', kind: 'slides', viewable: false },
-  txt: { mimeType: 'text/plain', kind: 'text', viewable: false },
-  log: { mimeType: 'text/plain', kind: 'text', viewable: false },
-  md: { mimeType: 'text/markdown', kind: 'text', viewable: false, alsoSentAs: ['text/plain', 'text/x-markdown'] },
-  json: { mimeType: 'application/json', kind: 'text', viewable: false, alsoSentAs: ['text/plain'] },
+  txt: { mimeType: 'text/plain', kind: 'text', viewable: true },
+  log: { mimeType: 'text/plain', kind: 'text', viewable: true },
+  md: { mimeType: 'text/markdown', kind: 'text', viewable: true, alsoSentAs: ['text/plain', 'text/x-markdown'] },
+  json: { mimeType: 'application/json', kind: 'text', viewable: true, alsoSentAs: ['text/plain'] },
 };
 /** Types a browser sends when it does not know a file. The extension decides then. */
 const UNKNOWN_TYPES = new Set(['', 'application/octet-stream']);
@@ -65,3 +67,12 @@ export function attachmentProblem(file: Pick<File, 'name' | 'size' | 'type'>): s
   if (!attachmentType(file.name, file.type)) return `${file.name} cannot be attached. Use ${ATTACHMENT_ACCEPT.label}.`;
   return null;
 }
+
+/** How the viewer shows this file, or null when it only downloads. Text is always shown as plain text, never run as a page. */
+export function previewKind(name: string, mimeType: string): PreviewKind | null {
+  const rule = attachmentType(name, mimeType);
+  if (!rule?.viewable) return null;
+  if (rule.kind === 'image' || rule.kind === 'pdf' || rule.kind === 'video') return rule.kind;
+  return rule.kind === 'text' || rule.mimeType === 'text/csv' ? 'text' : null;
+}
+

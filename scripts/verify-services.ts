@@ -10,7 +10,7 @@ const base = process.env.TEST_BASE_URL ?? 'http://localhost:3100';
 async function main() {
   const {db,pool} = await import('../src/db');
   const {workItems,attachments,activities} = await import('../src/db/schema');
-  const {storageClient,ATTACHMENT_BUCKET} = await import('../src/lib/storage');
+  const {storageClient,attachmentBucket} = await import('../src/lib/storage');
   let itemId: string|undefined;
   let disposeFixture: (() => Promise<void>)|undefined;
   try {
@@ -47,7 +47,7 @@ async function main() {
     if (itemId) {
       const files=await db.select().from(attachments).where(eq(attachments.itemId,itemId));
       const s3=storageClient();
-      for(const file of files)await s3.send(new DeleteObjectCommand({Bucket:ATTACHMENT_BUCKET,Key:file.objectKey}));
+      for(const file of files)await s3.send(new DeleteObjectCommand({Bucket: attachmentBucket(),Key:file.objectKey}));
       await db.delete(attachments).where(eq(attachments.itemId,itemId));
       await db.delete(activities).where(eq(activities.entityId,itemId));
       await db.delete(workItems).where(eq(workItems.id,itemId));

@@ -665,20 +665,22 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       break;
     case 'createTechRequest': {
       if (actor.role !== 'requester') throw new Error('Requests come from other teams. Add a ticket instead.');
-      const fields: TechRequestInput = { title: mutation.title, description: mutation.description, category: mutation.category, tool: mutation.tool ?? '', priority: mutation.priority, neededBy: mutation.neededBy, departmentId: mutation.departmentId };
-      if (!next.departments.some(d => d.id === fields.departmentId && !d.isArchived)) throw new Error('Choose a team from the list.');
+      // As on the server: a request goes to the requester's own team, and someone without a team waits for an admin to set it.
+      const ownTeam = next.members.find(m => m.id === actor.id)?.departmentId ?? actor.departmentId;
+      if (!ownTeam) throw new Error('An admin needs to add you to your team before you can raise a request.');
+      if (mutation.departmentId && mutation.departmentId !== ownTeam) throw new Error('You raise requests for your own team only.');
+      if (!next.departments.some(d => d.id === ownTeam && !d.isArchived)) throw new Error('Your team no longer takes requests. Ask an admin to move you to another team.');
+      const fields: TechRequestInput = { title: mutation.title, description: mutation.description, category: mutation.category, tool: mutation.tool ?? '', priority: mutation.priority, neededBy: mutation.neededBy, departmentId: ownTeam };
       const sequence = Math.max(0, ...next.techRequests.map(r => Number(r.key.split('-').pop()) || 0)) + 1;
       const requestId = mutation.id ?? id;
       next.techRequests.unshift({ id: requestId, key: requestKey(sequence), requesterId: actor.id, requesterName: actor.name, ...fields, status: 'new', forwardedById: null, forwardedAt: null, reviewedById: null, reviewedAt: null, reviewNote: null, itemId: null, work: null, createdAt: now, updatedAt: now, comments: [], history: [], attachmentCount: 0 });
       step(next.techRequests[0], 'tech_request.created');
-      // The first request sets the requester's team, as on the server.
-      const requester = next.members.find(m => m.id === actor.id);
-      if (requester && !requester.departmentId) requester.departmentId = fields.departmentId;
       break;
     }
     case 'updateTechRequest':
     case 'editTechRequest': {
       const own = mutation.action === 'updateTechRequest';
+      if (own && mutation.patch.departmentId && mutation.patch.departmentId !== next.techRequests.find(r => r.id === mutation.id)?.departmentId) throw new Error('You raise requests for your own team only.');
       const request = next.techRequests.find(r => r.id === mutation.id && (!own || r.requesterId === actor.id));
       if (!request) throw new Error('This request was not found.');
       if (own ? request.status !== 'new' : !requestPermissions({ ...next, currentUser: actor }, request).edit) throw new Error(stageMessage(request));
