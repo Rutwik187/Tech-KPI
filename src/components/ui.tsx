@@ -38,7 +38,7 @@ export function Avatar({ member, size = "normal" }: { member?: Member; size?: "s
 export const statusText: Record<WorkItem["status"], string> = { todo: "To do", in_progress: "In progress", in_review: "In review", blocked: "Blocked", done: "Done", open: "Open", fixed: "Fixed", verified: "Verified" };
 
 /**
- * One shape per state, so a list can be read at a glance. Waiting for the admin (in review, fixed) looks the same for tickets and bugs.
+ * One shape per state, so a list can be read at a glance. Waiting for the tech lead (in review, fixed) looks the same for tickets and bugs.
  * With `label`, a hidden text label goes with the icon for screen readers and text search.
  */
 export function StatusIcon({ status, label = false, className }: { status: WorkItem["status"]; label?: boolean; className?: string }) {
@@ -114,10 +114,11 @@ export function Modal({ title, subtitle, children, onClose, drawer = false, head
   const previousFocus = useRef<HTMLElement | null>(null);
   function focusFirstField(event: Event) {
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // A details panel is for reading first. Focus the panel itself, so no button looks selected, Tab starts at the top,
+    // and a comment box further down does not open the keyboard on a phone.
+    if (drawer) { event.preventDefault(); content.current?.focus({ preventScroll: true }); return; }
     const field = content.current?.querySelector<HTMLElement>('input:not([type="hidden"]):not([type="file"]):not(.sr-only):not([disabled]):not([aria-hidden="true"]), textarea:not([disabled]), [role="combobox"]:not([disabled]), [role="checkbox"]:not([disabled])');
     if (field) { event.preventDefault(); field.focus({ preventScroll: true }); }
-    // A details panel has no field to fill. Focus the panel itself, so no button looks selected, and Tab starts at the top.
-    else if (drawer) { event.preventDefault(); content.current?.focus({ preventScroll: true }); }
   }
   function restoreFocus(event: Event) {
     event.preventDefault();

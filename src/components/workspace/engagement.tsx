@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { Flame, Gauge, Trophy, Zap } from 'lucide-react';
 import type { DashboardData, Member } from '@/lib/types';
+import { leadsWork } from '@/lib/permissions';
 import { calculateMemberKpi, dateKey, getBugKpi, getWeekRange, getWeekStart, shiftDate, type MemberKpi } from '@/lib/kpi';
 import { Avatar } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
@@ -16,13 +17,14 @@ export function greeting(name: string, now = new Date(), timezone = 'Asia/Kolkat
 
 /** One line under the greeting: what needs the person first, or a short all-clear. */
 export function dayBrief(data: DashboardData, own?: MemberKpi): string {
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   const attention = attentionItems(data);
   if (admin) {
     const reviews = attention.filter(({ item }) => item.status === 'in_review' || item.status === 'fixed').length;
     const blocked = attention.filter(({ item }) => item.status === 'blocked').length;
-    const newRequests = data.techRequests.filter(r => r.status === 'new').length;
-    const parts = [reviews && `${plural(reviews, 'item')} ${reviews === 1 ? 'waits' : 'wait'} for your review`, newRequests && `${plural(newRequests, 'new request')} from other teams ${newRequests === 1 ? 'needs' : 'need'} an owner`, blocked && `${plural(blocked, 'ticket')} ${blocked === 1 ? 'is' : 'are'} blocked`].filter(Boolean);
+    // Forwarded requests wait for the tech lead or an admin to choose a developer.
+    const newRequests = data.techRequests.filter(r => r.status === 'forwarded').length;
+    const parts = [reviews && `${plural(reviews, 'item')} ${reviews === 1 ? 'waits' : 'wait'} for your review`, newRequests && `${plural(newRequests, 'forwarded request')} ${newRequests === 1 ? 'needs' : 'need'} a developer`, blocked && `${plural(blocked, 'ticket')} ${blocked === 1 ? 'is' : 'are'} blocked`].filter(Boolean);
     return parts.length ? `${parts.join('. ')}.` : 'All clear. Nothing waits for you right now.';
   }
   if (!own || !own.weekCapacityHours) return 'Your score, your open tickets, and what needs your attention.';
@@ -58,13 +60,13 @@ type Highlight = { icon: ReactNode; label: string; value: string; member?: Membe
 export function Highlights({ data, week, scores }: { data: DashboardData; week: string; scores: MemberKpi[] }) {
   const range = getWeekRange(week, data.settings.timezone);
   const inWeek = (iso: string | null) => !!iso && new Date(iso) >= range.start && new Date(iso) <= range.end;
-  const developers = scores.filter(s => s.member.role === 'developer' || data.currentUser.role !== 'admin');
+  const developers = scores.filter(s => s.member.role === 'developer' || !leadsWork(data.currentUser));
   const top = [...developers].sort((a, b) => b.creditedHours - a.creditedHours)[0];
   const fixes = data.items.filter(item => item.type === 'bug' && inWeek(item.fixedAt)).map(item => ({ item, kpi: getBugKpi(item, data) })).sort((a, b) => a.kpi.resolutionWorkingHours - b.kpi.resolutionWorkingHours);
   const approved = data.items.filter(item => item.type === 'task' && item.status === 'done' && inWeek(item.completedAt));
   const dated = approved.filter(item => item.dueDate);
   const onTime = dated.filter(item => dateKey(item.completedAt!, data.settings.timezone) <= item.dueDate!);
-  const own = data.currentUser.role !== 'admin';
+  const own = !leadsWork(data.currentUser);
   const items: Highlight[] = [
     top && top.creditedHours > 0
       ? { icon: <Trophy />, label: own ? 'Hours approved' : 'Most ticket hours', value: `${hours(top.creditedHours)} h`, member: own ? undefined : top.member, detail: own ? plural(approved.length, 'ticket') + ' approved' : `${firstName(top.member)} leads this week` }

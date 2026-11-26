@@ -4,6 +4,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { ArrowRight, CalendarDays, Check, CheckCheck, MessageSquareText, Users, X } from 'lucide-react';
 import type { DashboardData, LeaveRequest } from '@/lib/types';
+import { leadsWork } from '@/lib/permissions';
 import { Avatar, EmptyState, FormField, Modal, Panel } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -21,11 +22,11 @@ export function leaveLength(request: Pick<LeaveRequest, 'type' | 'dates'>) {
 }
 
 /**
- * Leave requests. Admins see everyone's and approve or decline them. A developer sees their own and can withdraw one that waits.
+ * Leave requests. The tech lead sees everyone's and approves or declines them. A developer sees their own and can withdraw one that waits.
  * With `pendingOnly`, it shows only requests that wait, and nothing when none wait.
  */
 export function LeaveRequests({ data, mutate, busy, pendingOnly = false }: { data: DashboardData; mutate: MutationFn; busy: boolean; pendingOnly?: boolean }) {
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   const [filter, setFilter] = useState<Filter>('all');
   const [declining, setDeclining] = useState<LeaveRequest | null>(null);
   const [withdrawing, setWithdrawing] = useState<string | null>(null);
@@ -47,7 +48,7 @@ export function LeaveRequests({ data, mutate, busy, pendingOnly = false }: { dat
     <Panel title={title} action={pendingOnly ? calendarLink : undefined}>
       <p className="panel-intro">{admin
         ? 'Approve leave to record the days and lower that person’s hours at work. Decline with a reason if the days do not work.'
-        : 'Every leave request you sent, and what your admin decided. Your hours at work change only after approval.'}</p>
+        : 'Every leave request you sent, and what your tech lead decided. Your hours at work change only after approval.'}</p>
       {!pendingOnly && all.length > 0 && <div className="leave-filter">
         <FormChoice value={filter} onValueChange={value => setFilter(value as Filter)} options={[
           { value: 'all', label: `All (${all.length})` },
@@ -62,7 +63,7 @@ export function LeaveRequests({ data, mutate, busy, pendingOnly = false }: { dat
         </> : withdrawing === request.id
           ? <span className="confirm-inline"><span>Withdraw this request?</span><Button size="sm" variant="destructive" disabled={busy} onClick={async () => { if (await mutate({ action: 'withdrawLeaveRequest', id: request.id }, 'Leave request withdrawn')) setWithdrawing(null); }}>Withdraw</Button><Button size="sm" variant="ghost" onClick={() => setWithdrawing(null)}>Keep</Button></span>
           : <Button variant="ghost" size="sm" disabled={busy} onClick={() => setWithdrawing(request.id)}>Withdraw</Button>} />)}</div>
-        : <EmptyState title={all.length ? 'No requests here' : 'No leave requests'} description={all.length ? 'Choose another filter to see more requests.' : admin ? 'Leave requests from teammates will appear here for approval.' : 'When you request leave, it appears here with your admin’s decision.'} />}
+        : <EmptyState title={all.length ? 'No requests here' : 'No leave requests'} description={all.length ? 'Choose another filter to see more requests.' : admin ? 'Leave requests from teammates will appear here for approval.' : 'When you request leave, it appears here with your tech lead’s decision.'} />}
     </Panel>
     {declining && <Modal title="Decline leave request" subtitle={`${findMember(data, declining.requesterId)?.name ?? 'Your teammate'} asked for ${displayDays(data, declining.dates)}. Tell them why these days cannot be approved.`} onClose={() => setDeclining(null)}>
       <form onSubmit={decline}>
@@ -76,7 +77,7 @@ export function LeaveRequests({ data, mutate, busy, pendingOnly = false }: { dat
 function LeaveRequestCard({ data, request, admin, actions }: { data: DashboardData; request: LeaveRequest; admin: boolean; actions?: ReactNode }) {
   const person = findMember(data, request.requesterId);
   const reviewer = request.reviewedById ? findMember(data, request.reviewedById) : undefined;
-  // While it waits, show the admin who else is away on those days.
+  // While it waits, show the tech lead who else is away on those days.
   const alsoAway = admin && request.status === 'pending'
     ? [...new Set(data.leaves.filter(l => l.userId !== request.requesterId && request.dates.includes(l.date)).map(l => l.userId))].map(id => findMember(data, id)).filter(m => !!m)
     : [];

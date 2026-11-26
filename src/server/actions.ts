@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, ne, notInArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { account, activities, departments, dueDateRequests, holidays, leaves, leaveRequests, memberProfiles, projectMembers, projectPhases, projects, session, settings, techRequests, ticketRequests, user, workItems } from "@/db/schema";
-import type { Member } from "@/lib/types";
-import { memberRole, requireAdmin, storedRole } from "./authz";
+import { DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { account, activities, attachments, departments, dueDateRequests, holidays, leaves, leaveRequests, memberProfiles, projectMembers, projectPhases, projects, requestComments, session, settings, techRequests, ticketRequests, user, workItems } from "@/db/schema";
+import type { Member, TechRequestStatus } from "@/lib/types";
+import { ATTACHMENT_BUCKET, storageClient } from "@/lib/storage";
+import { canSeeRequest } from "./request-access";
+import { memberRole, requireCapability, storedRole } from "./authz";
+import { ACTION_CAPABILITY, can, isOrgAdmin, isTechTeam, leadsWork, manageableRoles, mayDo, ownsNoWork, aRole, type Capability } from "@/lib/permissions";
 import { AppError } from "./errors";
 import type { DataAction } from "./validation";
 import { DEFAULT_SETTINGS } from "./default-settings";
@@ -62,7 +66,7 @@ async function assertAssignee(tx: Tx, id: string) {
   const [member] = await tx.select({ id: user.id, role: user.role, banned: user.banned, isActive: memberProfiles.isActive }).from(user)
     .leftJoin(memberProfiles, eq(memberProfiles.userId, user.id)).where(eq(user.id, id));
   if (!member || member.banned || member.isActive === false) throw new AppError("Choose an active team member.");
-  // Admins manage the work and are not scored, and requesters only ask for work, so tickets and bugs belong to developers.
+  // The tech lead manages the work and is not scored. Project managers and requesters only handle requests. Tickets and bugs belong to developers.
   if (memberRole(member.role) !== "developer") throw new AppError("Tickets and bugs belong to developers. Choose a developer.");
 }
 async function assertProject(tx: Tx, id: string) {
@@ -100,7 +104,8 @@ async function assertProjectMembers(tx: Tx, ids: string[]) {
   const members = await tx.select({ id: user.id, role: user.role, banned: user.banned, isActive: memberProfiles.isActive }).from(user)
     .leftJoin(memberProfiles, eq(memberProfiles.userId, user.id)).where(inArray(user.id, ids));
   if (members.length !== ids.length || members.some((member) => member.banned || member.isActive === false)) throw new AppError("Choose active team members for this project.");
-  if (members.some((member) => memberRole(member.role) === "requester")) throw new AppError("People from other teams raise requests and do not join projects. Choose developers or admins.");
+  if (members.some((member) => memberRole(member.role) === "requester")) throw new AppError("People from other teams raise requests and do not join projects. Choose people from the tech team.");
+  if (members.some((member) => !isTechTeam(memberRole(member.role)))) throw new AppError("Project managers handle requests and do not join projects. Choose people from the tech team.");
 }
 function assertPrimaryMember(ids: string[], primaryId: string | null) {
   if (primaryId && !ids.includes(primaryId)) throw new AppError("The primary developer must be a member of this project.");
@@ -122,10 +127,10 @@ async function replaceProjectMembers(tx: Tx, projectId: string, ids: string[], p
 }
 function statusChange(item: ItemRow, next: string, actor: Member, reason?: string): Partial<typeof workItems.$inferInsert> {
   if (next === item.status) return {};
-  const admin = actor.role === "admin";
+  const admin = leadsWork(actor);
   const now = new Date();
   if (item.type === "task") {
-    // Open work completes in one step: to review for a developer, straight to done for an admin.
+    // Open work completes in one step: to review for a developer, straight to done for the tech lead.
     const complete = admin ? ["in_review", "done"] : ["in_review"];
     const allowed: Record<string, string[]> = {
       todo: ["in_progress", "blocked", ...complete], in_progress: ["blocked", ...complete],
@@ -158,13 +163,39 @@ function statusChange(item: ItemRow, next: string, actor: Member, reason?: strin
   };
 }
 
-/** Fields a ticket's owner may change. Estimates, owners, and projects stay with the admin because they change the score. */
+/** Fields a ticket's owner may change. Estimates, owners, and projects stay with the tech lead because they change the score. */
 const OWNER_FIELDS = new Set(["status", "blocker", "dueDate", "title", "description", "priority"]);
 
-/** What a developer may do. Everything else is an admin's. New work from a developer goes through a request. */
-const DEVELOPER_ACTIONS = new Set<DataAction["action"]>(["requestLeave", "withdrawLeaveRequest", "updateItem", "requestTicket", "withdrawTicketRequest", "extendTicket", "withdrawDueDateRequest"]);
-/** All a requester may do: raise a request, and change or withdraw it until the tech team reviews it. */
-const REQUESTER_ACTIONS = new Set<DataAction["action"]>(["createTechRequest", "updateTechRequest", "withdrawTechRequest"]);
+// Every change the server accepts has an entry in the shared table, so the demo and the server follow the same rules.
+const ACTION_RULES: Record<DataAction["action"], readonly Capability[] | null> = ACTION_CAPABILITY;
+/** Refuses a change this person's role cannot make, before anything is read. */
+function assertAllowed(actor: Member, action: DataAction["action"]) {
+  const needed = ACTION_RULES[action];
+  if (needed && !mayDo(actor, action)) requireCapability(actor, needed[0]);
+}
+/** The actor's role as saved now. A role changed a moment ago applies to people changes already on their way. */
+async function savedActor(tx: Tx, actor: Member): Promise<Member> {
+  const [row] = await tx.select({ role: user.role, banned: user.banned }).from(user).where(eq(user.id, actor.id)).for("share");
+  if (!row || row.banned) throw new AppError("This account is inactive. Ask an admin to turn it back on.", 403);
+  const role = memberRole(row.role);
+  if (!can(role, "people.manage")) throw new AppError("Only an admin or the tech lead can change people.", 403);
+  return { ...actor, role };
+}
+/**
+ * A person this actor may change, and the role they may give. An admin changes anyone. A tech lead changes developers and
+ * project managers, and may make someone only a developer or a project manager. Nobody turns off or demotes themselves,
+ * and the last active admin always stays, so the organisation is never locked out.
+ */
+function assertMayManage(actor: Member, current: string | null, next: string | undefined) {
+  const allowed = manageableRoles(actor);
+  if (current !== null && !allowed.includes(memberRole(current))) throw new AppError(`Only an admin can change ${aRole(memberRole(current))}.`, 403);
+  if (next && !allowed.includes(next as Member["role"])) throw new AppError(`Only an admin can make someone ${aRole(next as Member["role"])}.`, 403);
+}
+async function assertAnotherAdmin(tx: Tx, leavingId: string) {
+  const [other] = await tx.select({ id: user.id }).from(user).leftJoin(memberProfiles, eq(memberProfiles.userId, user.id))
+    .where(and(eq(user.role, "admin"), ne(user.id, leavingId), sql`${user.banned} IS NOT TRUE`, sql`${memberProfiles.isActive} IS NOT FALSE`)).limit(1);
+  if (!other) throw new AppError("Make someone else an admin first. The organisation always needs one active admin.");
+}
 const OPEN_TICKET = ["todo", "in_progress", "blocked"];
 
 type ItemInput = Extract<DataAction, { action: "createItem" }> | (Omit<Extract<DataAction, { action: "createItem" }>, "action">);
@@ -235,12 +266,29 @@ async function assertDepartmentNameFree(tx: Tx, name: string, exceptId?: string)
 async function assertNeededBy(tx: Tx, neededBy: string | null | undefined) {
   if (neededBy && neededBy < dateKey(new Date(), (await workCalendar(tx)).timezone)) throw new AppError("Pick today or a later date for when you need it.");
 }
-/** A request still waiting for the tech team. Only then can its requester change or withdraw it, or an admin decide on it. */
-async function newTechRequest(tx: Tx, id: string, requesterId?: string) {
+/**
+ * The stages in which each person may act on a request. A project manager acts while it is new. The tech lead acts while it
+ * is new or forwarded, so a request never waits on a project manager who is away or not yet added.
+ */
+function openStages(actor: Member): TechRequestStatus[] {
+  return can(actor, "requests.assign") ? ["new", "forwarded"] : ["new"];
+}
+const STAGE_MESSAGES: Record<TechRequestStatus, string> = {
+  new: "This request is still with a project manager.",
+  forwarded: "A project manager already forwarded this request to the tech lead. Add a comment instead.",
+  assigned: "This request is already assigned to a developer. Add a comment instead.",
+  declined: "This request was declined. Add a comment instead.",
+};
+/** A request locked for a change, in one of the given stages. With `requesterId`, only that person's own request. */
+async function openTechRequest(tx: Tx, id: string, stages: TechRequestStatus[], requesterId?: string) {
   const [request] = await tx.select().from(techRequests).where(eq(techRequests.id, id)).for("update");
   if (!request || (requesterId && request.requesterId !== requesterId)) throw new AppError("This request was not found.", 404);
-  if (request.status !== "new") throw new AppError("The tech team already reviewed this request.", 409);
+  if (!stages.includes(request.status)) throw new AppError(STAGE_MESSAGES[request.status], 409);
   return request;
+}
+/** The fields of a request that differ from the patch. Unchanged values are left out, so the history shows real changes only. */
+function requestChanges(request: typeof techRequests.$inferSelect, patch: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(patch).filter(([key, value]) => value !== undefined && request[key as keyof typeof request] !== value));
 }
 async function pendingRequest(tx: Tx, id: string) {
   const [request] = await tx.select().from(ticketRequests).where(eq(ticketRequests.id, id)).for("update");
@@ -250,10 +298,9 @@ async function pendingRequest(tx: Tx, id: string) {
 }
 
 export async function executeAction(actor: Member, action: DataAction): Promise<void> {
-  if (actor.role === "requester") {
-    if (!REQUESTER_ACTIONS.has(action.action)) throw new AppError("This change is for the tech team. You can raise requests and follow them.", 403);
-  } else if (REQUESTER_ACTIONS.has(action.action)) throw new AppError("Requests come from other teams. Add a ticket instead.", 403);
-  else if (!DEVELOPER_ACTIONS.has(action.action)) requireAdmin(actor);
+  assertAllowed(actor, action.action);
+  // Files of a withdrawn request leave storage after its rows are gone.
+  const removedObjects: string[] = [];
   await db.transaction(async (tx) => {
     switch (action.action) {
       case "createItem": {
@@ -278,7 +325,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         break;
       }
       case "requestTicket": {
-        if (actor.role === "admin") throw new AppError("Admins add tickets directly. Requests are for developers.");
+        if (leadsWork(actor)) throw new AppError("You add tickets directly. Requests are for developers.");
         const projectId = action.projectId ?? ADHOC_PROJECT_ID;
         const phaseId = action.phaseId ?? null;
         await assertAssignee(tx, actor.id);
@@ -295,7 +342,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
       case "approveTicketRequest": {
         const request = await pendingRequest(tx, action.id);
         const patch = action.patch ?? {};
-        // The admin may adjust the request before approving. The ticket belongs to the developer who asked.
+        // The tech lead may adjust the request before approving. The ticket belongs to the developer who asked.
         const item = await insertItem(tx, actor, {
           type: "task", title: patch.title ?? request.title, description: request.description,
           projectId: patch.projectId ?? request.projectId, phaseId: patch.phaseId !== undefined ? patch.phaseId : patch.projectId && patch.projectId !== request.projectId ? null : request.phaseId,
@@ -314,12 +361,12 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         break;
       }
       case "extendTicket": {
-        const admin = actor.role === "admin";
+        const admin = leadsWork(actor);
         const [item] = await tx.select().from(workItems).where(eq(workItems.id, action.itemId)).for("update");
         if (!item || (!admin && item.assigneeId !== actor.id)) throw new AppError("This item was not found.", 404);
         assertExtendable(item, action.hours);
         if (admin) { await applyExtension(tx, actor, item, action.hours, action.reasonCategory, action.reason); break; }
-        // A developer's extension waits for an admin. Nothing on the ticket changes until then.
+        // A developer's extension waits for the tech lead. Nothing on the ticket changes until then.
         const [waiting] = await tx.select({ id: dueDateRequests.id }).from(dueDateRequests).where(and(eq(dueDateRequests.itemId, item.id), eq(dueDateRequests.status, "pending")));
         if (waiting) throw new AppError("An extension for this ticket already waits for approval.", 409);
         const [request] = await tx.insert(dueDateRequests).values({ itemId: item.id, requesterId: actor.id, fromDate: item.dueDate, fromEstimate: item.estimateHours, hours: action.hours, reasonCategory: action.reasonCategory, reason: action.reason }).returning();
@@ -361,34 +408,64 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
       case "createTechRequest": {
         await activeDepartment(tx, action.departmentId);
         await assertNeededBy(tx, action.neededBy);
+        if (action.id) {
+          // The id the page chose must be new everywhere. Request and ticket history share one audit table, keyed by id.
+          const [taken] = await tx.select({ id: techRequests.id }).from(techRequests).where(eq(techRequests.id, action.id));
+          const [ticket] = taken ? [] : await tx.select({ id: workItems.id }).from(workItems).where(eq(workItems.id, action.id));
+          if (taken || ticket) throw new AppError("This request was already sent.", 409);
+        }
         const [request] = await tx.insert(techRequests).values({
-          requesterId: actor.id, departmentId: action.departmentId, title: action.title, description: action.description,
-          category: action.category, priority: action.priority, neededBy: action.neededBy,
+          ...(action.id ? { id: action.id } : {}), requesterId: actor.id, departmentId: action.departmentId, title: action.title, description: action.description,
+          category: action.category, tool: action.tool ?? "", priority: action.priority, neededBy: action.neededBy,
         }).returning();
         // The first request sets the requester's team, so their next form starts there.
         await tx.update(memberProfiles).set({ departmentId: action.departmentId }).where(and(eq(memberProfiles.userId, actor.id), isNull(memberProfiles.departmentId)));
         await audit(tx, actor, request.id, "tech_request.created", { departmentId: request.departmentId, category: request.category, priority: request.priority, neededBy: request.neededBy });
         break;
       }
-      case "updateTechRequest": {
-        const request = await newTechRequest(tx, action.id, actor.id);
+      case "updateTechRequest":
+      case "editTechRequest": {
+        // A requester changes their own request while a project manager has it. The tech side corrects it until it is assigned.
+        const own = action.action === "updateTechRequest";
+        const request = await openTechRequest(tx, action.id, own ? ["new"] : openStages(actor), own ? actor.id : undefined);
         const patch = action.patch;
         if (patch.departmentId && patch.departmentId !== request.departmentId) await activeDepartment(tx, patch.departmentId);
         if (patch.neededBy !== undefined && patch.neededBy !== request.neededBy) await assertNeededBy(tx, patch.neededBy);
-        const changes = Object.fromEntries(Object.entries(patch).filter(([key, value]) => request[key as keyof typeof request] !== value));
+        const changes = requestChanges(request, patch);
         if (!Object.keys(changes).length) break;
         await tx.update(techRequests).set({ ...changes, updatedAt: new Date() }).where(eq(techRequests.id, request.id));
-        await audit(tx, actor, request.id, "tech_request.updated", { changes: Object.keys(changes) });
+        await audit(tx, actor, request.id, "tech_request.updated", { changes: Object.keys(changes), ...(own ? {} : { by: actor.role }) });
         break;
       }
       case "withdrawTechRequest": {
-        const request = await newTechRequest(tx, action.id, actor.id);
+        const request = await openTechRequest(tx, action.id, ["new"], actor.id);
+        const files = await tx.select({ objectKey: attachments.objectKey }).from(attachments).where(eq(attachments.requestId, request.id));
+        removedObjects.push(...files.map((file) => file.objectKey));
         await tx.delete(techRequests).where(eq(techRequests.id, request.id));
         await audit(tx, actor, request.id, "tech_request.withdrawn", { title: request.title });
         break;
       }
+      case "forwardTechRequest": {
+        const request = await openTechRequest(tx, action.id, ["new"]);
+        const now = new Date();
+        const priority = action.priority && action.priority !== request.priority ? { priority: action.priority } : {};
+        await tx.update(techRequests).set({ status: "forwarded", forwardedById: actor.id, forwardedAt: now, updatedAt: now, ...priority }).where(eq(techRequests.id, request.id));
+        // A note for the tech lead stays on the tech side.
+        const note = action.note?.trim();
+        if (note) await tx.insert(requestComments).values({ requestId: request.id, authorId: actor.id, body: note, internal: true });
+        await audit(tx, actor, request.id, "tech_request.forwarded", { ...(priority.priority ? { priorityFrom: request.priority, priorityTo: priority.priority } : {}) }, note);
+        break;
+      }
+      case "returnTechRequest": {
+        const request = await openTechRequest(tx, action.id, ["forwarded"]);
+        const now = new Date();
+        await tx.update(techRequests).set({ status: "new", forwardedById: null, forwardedAt: null, updatedAt: now }).where(eq(techRequests.id, request.id));
+        await tx.insert(requestComments).values({ requestId: request.id, authorId: actor.id, body: action.reason, internal: true });
+        await audit(tx, actor, request.id, "tech_request.returned", { forwardedById: request.forwardedById }, action.reason);
+        break;
+      }
       case "assignTechRequest": {
-        const request = await newTechRequest(tx, action.id);
+        const request = await openTechRequest(tx, action.id, ["new", "forwarded"]);
         const ticket = action.type === "task";
         // The request's details become the work's description. The link back shows who asked and for which team.
         const item = await insertItem(tx, actor, {
@@ -398,14 +475,33 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         }, { techRequestId: request.id });
         const now = new Date();
         await tx.update(techRequests).set({ status: "assigned", itemId: item.id, reviewedById: actor.id, reviewedAt: now, reviewNote: action.note?.trim() || null, updatedAt: now }).where(eq(techRequests.id, request.id));
-        await audit(tx, actor, request.id, "tech_request.assigned", { itemId: item.id, type: item.type, assigneeId: item.assigneeId }, action.note);
+        await audit(tx, actor, request.id, "tech_request.assigned", { itemId: item.id, type: item.type, assigneeId: item.assigneeId, skippedReview: request.status === "new" }, action.note);
         break;
       }
       case "declineTechRequest": {
-        const request = await newTechRequest(tx, action.id);
+        const request = await openTechRequest(tx, action.id, openStages(actor));
         const now = new Date();
         await tx.update(techRequests).set({ status: "declined", reviewedById: actor.id, reviewedAt: now, reviewNote: action.reason, updatedAt: now }).where(eq(techRequests.id, request.id));
-        await audit(tx, actor, request.id, "tech_request.declined", {}, action.reason);
+        await audit(tx, actor, request.id, "tech_request.declined", { by: actor.role }, action.reason);
+        break;
+      }
+      case "addRequestComment": {
+        const [request] = await tx.select().from(techRequests).where(eq(techRequests.id, action.requestId)).for("share");
+        if (!request || !(await canSeeRequest(tx, actor, request))) throw new AppError("This request was not found.", 404);
+        if (action.internal && actor.role === "requester") throw new AppError("Your comments are for everyone on the request.", 403);
+        const [comment] = await tx.insert(requestComments).values({ requestId: request.id, authorId: actor.id, body: action.body, internal: !!action.internal }).returning();
+        await tx.update(techRequests).set({ updatedAt: new Date() }).where(eq(techRequests.id, request.id));
+        await audit(tx, actor, request.id, "tech_request.commented", { commentId: comment.id, internal: comment.internal });
+        break;
+      }
+      case "deleteRequestComment": {
+        const [comment] = await tx.select().from(requestComments).where(eq(requestComments.id, action.id)).for("update");
+        const [request] = comment ? await tx.select().from(techRequests).where(eq(techRequests.id, comment.requestId)) : [];
+        if (!comment || !request || !(await canSeeRequest(tx, actor, request)) || (comment.internal && actor.role === "requester")) throw new AppError("This comment was not found.", 404);
+        // People remove their own words. The tech lead can also remove anything posted by mistake.
+        if (comment.authorId !== actor.id && !leadsWork(actor)) throw new AppError("You can remove only your own comments.", 403);
+        await tx.delete(requestComments).where(eq(requestComments.id, comment.id));
+        await audit(tx, actor, request.id, "tech_request.comment_removed", { commentId: comment.id, authorId: comment.authorId });
         break;
       }
       case "createDepartment": {
@@ -428,9 +524,10 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
       }
       case "updateItem": {
         const [item] = await tx.select().from(workItems).where(eq(workItems.id, action.id)).for("update");
-        if (!item || actor.role !== "admin" && item.assigneeId !== actor.id) throw new AppError("This item was not found.", 404);
+        const lead = leadsWork(actor);
+        if (!item || !lead && item.assigneeId !== actor.id) throw new AppError("This item was not found.", 404);
         const patch = { ...action.patch };
-        if (actor.role !== "admin" && Object.keys(patch).some((key) => !OWNER_FIELDS.has(key))) requireAdmin(actor);
+        if (!lead && Object.keys(patch).some((key) => !OWNER_FIELDS.has(key))) requireCapability(actor, "work.manage");
         if (item.type === "task" && patch.taskId) throw new AppError("Only a bug can link to a task.");
         const projectId = patch.projectId ?? item.projectId;
         const assigneeId = patch.assigneeId ?? item.assigneeId;
@@ -467,15 +564,15 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         if (patch.dueDate !== undefined && patch.dueDate !== item.dueDate) {
           if (item.type === "bug") throw new AppError("Bugs use their fix-by time instead of a date.");
           if (item.status === "done") throw new AppError("Reopen this ticket before changing its date.");
-          // Setting the first due date is planning. Moving an existing one is an extension: an admin's needs a reason,
-          // and a developer asks for it, so the date moves only after an admin approves.
-          if (item.dueDate && actor.role !== "admin") throw new AppError("Use Extend to ask for more hours. Your admin approves it.", 403);
+          // Setting the first due date is planning. Moving an existing one is an extension: the tech lead's needs a reason,
+          // and a developer asks for it, so the date moves only after the tech lead approves.
+          if (item.dueDate && !lead) throw new AppError("Use Extend to ask for more hours. Your tech lead approves it.", 403);
           if (item.dueDate) requireReason(action.reason);
         }
         if (item.status === "done" && patch.status !== "in_progress" && Object.keys(patch).some((key) => ["estimateHours", "assigneeId", "projectId", "phaseId"].includes(key))) throw new AppError("Reopen this task before changing its estimate, owner, project, or phase.");
         const transition = patch.status ? statusChange(item, patch.status, actor, action.reason) : {};
         if (item.type === "task" && transition.completedAt) {
-          // Approved work counts on the ticket's date, not on the day the admin approves it.
+          // Approved work counts on the ticket's date, not on the day the tech lead approves it.
           const calendar = await workCalendar(tx);
           const at = creditedAt(patch.dueDate !== undefined ? patch.dueDate : item.dueDate, calendar.workdayEnd, calendar.timezone, transition.completedAt as Date);
           transition.completedAt = at;
@@ -533,6 +630,8 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         const [saved] = await tx.select().from(settings).where(eq(settings.id, 1));
         const defaults = saved?.value ?? DEFAULT_SETTINGS;
         const id = randomUUID(); const role = action.role ?? "developer"; const email = action.email.toLowerCase();
+        assertMayManage(await savedActor(tx, actor), null, role);
+        if (role !== "requester" && action.departmentId) throw new AppError("Only someone in a team outside tech has a team.");
         await assertEmailFree(tx, email);
         // A requester belongs to a team, such as Sales, and may lead it. Nobody else has a team.
         const departmentId = role === "requester" ? (await activeDepartment(tx, action.departmentId!)).id : null;
@@ -540,7 +639,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         await tx.insert(user).values({ id, name: action.name, email, emailVerified: false, role: storedRole(role) });
         // Without an Object ID, the member links their Microsoft account on first sign-in with this work email.
         if (action.microsoftObjectId) await linkMicrosoftAccount(tx, id, action.microsoftObjectId);
-        await tx.insert(memberProfiles).values({ userId: id, capacity: action.capacity ?? (role === "admin" ? defaults.defaultLeadCapacityHours : defaults.defaultDevCapacityHours), departmentId, isTeamLead });
+        await tx.insert(memberProfiles).values({ userId: id, capacity: action.capacity ?? (leadsWork(role) ? defaults.defaultLeadCapacityHours : defaults.defaultDevCapacityHours), departmentId, isTeamLead });
         await audit(tx, actor, id, "member.created", { name: action.name, role, departmentId, isTeamLead, microsoftObjectId: action.microsoftObjectId?.toLowerCase() ?? null });
         break;
       }
@@ -548,17 +647,21 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         await tx.execute(sql`SELECT pg_advisory_xact_lock(7201201)`);
         const [member] = await tx.select().from(user).where(eq(user.id, action.id));
         if (!member) throw new AppError("This team member was not found.", 404);
-        if (action.id === actor.id && (action.patch.isActive === false || (action.patch.role && action.patch.role !== "admin"))) throw new AppError("You cannot disable or remove your own admin access.");
         const patch = action.patch;
+        assertMayManage(await savedActor(tx, actor), member.role, patch.role);
+        if (action.id === actor.id && (patch.isActive === false || (patch.role && patch.role !== actor.role))) throw new AppError(`You cannot turn off your own access or change your own role. Ask ${isOrgAdmin(actor) ? "another admin" : "an admin"}.`);
+        // The last active admin stays an admin, so someone can always manage the organisation.
+        if (member.role === "admin" && (patch.isActive === false || (patch.role && patch.role !== "admin"))) await assertAnotherAdmin(tx, member.id);
         const databaseRole = patch.role ? storedRole(patch.role) : undefined;
         const [existingProfile] = await tx.select().from(memberProfiles).where(eq(memberProfiles.userId, action.id));
         const nextRole = patch.role ?? memberRole(member.role);
-        if (patch.role === "requester" && memberRole(member.role) !== "requester") {
-          // A requester owns no work and joins no project. Move these to someone else first.
+        if (patch.role && ownsNoWork(patch.role) && !ownsNoWork(memberRole(member.role))) {
+          // Requesters and project managers own no work and join no project. Move these to someone else first.
+          const where = patch.role === "requester" ? "to a team outside tech" : "to project manager";
           const [openWork] = await tx.select({ id: workItems.id }).from(workItems).where(and(eq(workItems.assigneeId, action.id), notInArray(workItems.status, ["done", "verified"]))).limit(1);
-          if (openWork) throw new AppError("Reassign this person's open tickets and bugs before moving them to a team outside tech.");
+          if (openWork) throw new AppError(`Reassign this person's open tickets and bugs before moving them ${where}.`);
           const [membership] = await tx.select({ projectId: projectMembers.projectId }).from(projectMembers).where(eq(projectMembers.userId, action.id)).limit(1);
-          if (membership) throw new AppError("Remove this person from their projects before moving them to a team outside tech.");
+          if (membership) throw new AppError(`Remove this person from their projects before moving them ${where}.`);
         }
         if (patch.departmentId) await activeDepartment(tx, patch.departmentId);
         if (nextRole === "requester" && !(patch.departmentId !== undefined ? patch.departmentId : existingProfile?.departmentId)) throw new AppError("Choose a team for this person.");
@@ -574,7 +677,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         }
         await tx.update(user).set({ ...(patch.name ? { name: patch.name } : {}), ...(email ? { email } : {}), ...(databaseRole ? { role: databaseRole } : {}), ...(patch.isActive !== undefined ? { banned: !patch.isActive } : {}), updatedAt: new Date() }).where(eq(user.id, action.id));
         if (!existingProfile || patch.capacity !== undefined || patch.isActive !== undefined || patch.departmentId !== undefined || patch.isTeamLead !== undefined || leavesTeam) {
-          const capacity = patch.capacity ?? existingProfile?.capacity ?? (member.role === "admin" ? 10 : 33);
+          const capacity = patch.capacity ?? existingProfile?.capacity ?? (leadsWork(memberRole(member.role)) ? 10 : 33);
           const isActive = patch.isActive ?? existingProfile?.isActive ?? true;
           const departmentId = nextRole !== "requester" ? null : patch.departmentId !== undefined ? patch.departmentId : existingProfile?.departmentId ?? null;
           const isTeamLead = nextRole === "requester" && (patch.isTeamLead ?? existingProfile?.isTeamLead ?? false);
@@ -656,6 +759,13 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         await audit(tx, actor, project.id, "phase.updated", { phaseId: phase.id, from: phase.name, to: action.name ?? phase.name, ...(action.description !== undefined ? { description: action.description } : {}) }); break;
       }
       case "saveSettings": {
+        // Who can sign in is an organisation choice. A tech lead changes the team's working hours and scores, not the sign-in list.
+        if (!isOrgAdmin(actor)) {
+          // Locked, so an admin's change to the sign-in list at the same moment cannot be written back over.
+          const [saved] = await tx.select().from(settings).where(eq(settings.id, 1)).for("update");
+          const before = [...(saved?.value.requestDomains ?? [])].sort().join(",");
+          if ([...action.settings.requestDomains].sort().join(",") !== before) requireCapability(actor, "org.manage");
+        }
         await tx.insert(settings).values({ id: 1, value: action.settings }).onConflictDoUpdate({ target: settings.id, set: { value: action.settings, updatedAt: new Date() } });
         await audit(tx, actor, "settings", "settings.updated", { settings: action.settings }); break;
       }
@@ -726,4 +836,10 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
       }
     }
   });
+  if (removedObjects.length) {
+    try {
+      const s3 = storageClient();
+      await Promise.all(removedObjects.map((key) => s3.send(new DeleteObjectCommand({ Bucket: ATTACHMENT_BUCKET, Key: key })).catch(() => undefined)));
+    } catch { /* Storage is not configured here. The rows are already gone, so nothing links to these files. */ }
+  }
 }

@@ -1,4 +1,4 @@
-import type { Activity, DashboardData, Department, DueDateRequest, Member, Phase, Project, TechRequest, TicketRequest, WorkItem } from './types';
+import type { Activity, DashboardData, Department, DueDateRequest, Member, Phase, Project, RequestComment, RequestEvent, TechRequest, TicketRequest, WorkItem } from './types';
 import { dateKey, defaultSettings, getWeekStart, localDate, shiftDate } from './kpi';
 import { ADHOC_PROJECT } from './project-defaults';
 
@@ -155,7 +155,7 @@ export function createDemoData(now = new Date()): DashboardData {
     payload: { name: project.name, startDate: project.startDate, targetDate: project.originalTargetDate }, createdAt: localDate(project.startDate!, '10:00', timezone).toISOString(),
   });
 
-  // Two requests wait for the admin. One was declined with a reason, so a developer sees what to change.
+  // Two requests wait for the tech lead. One was declined with a reason, so a developer sees what to change.
   const requests: TicketRequest[] = [
     { id: 'demo-request-1', requesterId: developers[0].id, title: 'Add UPI autopay to checkout', description: 'Offer UPI autopay for subscription orders, with a fallback to card.', note: 'Three support tickets this week asked for it.',
       projectId: projects[0].id, phaseId: null, estimateHours: 10, dueDate: day(9), priority: 'high', status: 'pending', reviewedById: null, reviewedAt: null, reviewNote: null, itemId: null, createdAt: past(dateAt(0, '10:20')) },
@@ -165,7 +165,7 @@ export function createDemoData(now = new Date()): DashboardData {
       projectId: projects[3].id, phaseId: null, estimateHours: 30, dueDate: null, priority: 'low', status: 'declined', reviewedById: lead.id, reviewedAt: past(dateAt(-2, '12:00')), reviewNote: 'Too large for one ticket. Split it into the export and the chart work, then request each.', itemId: null, createdAt: past(dateAt(-3, '11:00')) },
   ];
 
-  // One developer asks for 3 more hours. The estimate and due date change only when the admin approves.
+  // One developer asks for 3 more hours. The estimate and due date change only when the tech lead approves.
   const lowStock = items.find(item => item.title === 'Add a low-stock alert to the warehouse view' && item.dueDate)!;
   const dueDateRequests: DueDateRequest[] = [
     { id: 'demo-extension-1', itemId: lowStock.id, requesterId: lowStock.assigneeId, fromDate: lowStock.dueDate!, fromEstimate: lowStock.estimateHours, hours: 3, approvedHours: null, reasonCategory: 'scope_change',
@@ -174,7 +174,11 @@ export function createDemoData(now = new Date()): DashboardData {
   activities.push({ id: 'demo-extension-1-asked', entityId: lowStock.id, actorId: lowStock.assigneeId, action: 'task.due_change_requested', reason: dueDateRequests[0].reason,
     payload: { requestId: 'demo-extension-1', from: dueDateRequests[0].fromDate, hours: 3, reasonCategory: 'scope_change' }, createdAt: dueDateRequests[0].createdAt });
 
-  // Other teams raise requests. Some wait for the admin, some became tickets at different stages, and one was declined.
+  // Other teams raise requests. A project manager reviews new ones and forwards them to the tech lead, who assigns them.
+  // Some wait for the project manager, some for the tech lead, some became tickets at different stages, and one was declined.
+  const manager: Member = { id: 'demo-kavya', name: 'Kavya Menon', email: 'kavya@example.com', role: 'project_manager', image: null, capacity: 33, isActive: true };
+  // Rohan is the admin and can do everything. Siddharth is the tech lead: he runs the tech team, but not the organisation.
+  const techLead: Member = { id: 'demo-siddharth', name: 'Siddharth Rao', email: 'siddharth@example.com', role: 'tech_lead', image: null, capacity: 10, isActive: true };
   const departments: Department[] = ['Sales', 'E-commerce', 'Influencer marketing', 'Digital marketing', 'Creative', 'Graphics']
     .map((name, position) => ({ id: `demo-team-${position + 1}`, name, position, isArchived: false }));
   const team = (name: string) => departments.find(department => department.name === name)!.id;
@@ -184,35 +188,57 @@ export function createDemoData(now = new Date()): DashboardData {
     ['neha', 'Neha Joshi', 'Digital marketing', true], ['meera', 'Meera Iyer', 'Creative', true],
   ] as const).map(([id, name, department, isTeamLead]) => ({ id: `demo-${id}`, name, email: `${id}@example.com`, role: 'requester', image: null, capacity: 33, isActive: true, departmentId: team(department), isTeamLead }));
   const requester = (id: string) => requesters.find(person => person.id === `demo-${id}`)!;
+  const hoursAfter = (iso: string, hours: number) => past(new Date(Date.parse(iso) + hours * 3_600_000).toISOString());
   let requestNumber = 0;
   const techRequests: TechRequest[] = [];
-  const addRequest = (id: string, title: string, description: string, category: TechRequest['category'], priority: TechRequest['priority'], raised: string, neededBy: string | null, outcome?: { itemTitle?: string; declined?: string; note?: string }) => {
+  type Outcome = { forwarded?: boolean; itemTitle?: string; declined?: string; note?: string; tool?: string; comments?: [Member, string, boolean?][] };
+  const addRequest = (id: string, title: string, description: string, category: TechRequest['category'], priority: TechRequest['priority'], raised: string, neededBy: string | null, outcome: Outcome = {}) => {
     const person = requester(id);
-    const item = outcome?.itemTitle ? items.find(row => row.title === outcome.itemTitle) : undefined;
-    const reviewedAt = item || outcome?.declined ? past(new Date(Date.parse(raised) + 3 * 3_600_000).toISOString()) : null;
+    const item = outcome.itemTitle ? items.find(row => row.title === outcome.itemTitle) : undefined;
+    const createdAt = past(raised);
+    // Declined requests were closed by the project manager. Everything assigned passed the project manager first.
+    const forwardedAt = item || outcome.forwarded ? hoursAfter(raised, 1) : null;
+    const reviewedAt = item || outcome.declined ? hoursAfter(raised, 3) : null;
+    const requestId = `demo-tech-request-${++requestNumber}`;
+    const history: RequestEvent[] = [{ id: `${requestId}-raised`, action: 'tech_request.created', actorId: person.id, actorName: person.name, note: null, payload: {}, createdAt }];
+    if (forwardedAt) history.push({ id: `${requestId}-forwarded`, action: 'tech_request.forwarded', actorId: manager.id, actorName: manager.name, note: null, payload: {}, createdAt: forwardedAt });
+    if (item && reviewedAt) history.push({ id: `${requestId}-assigned`, action: 'tech_request.assigned', actorId: lead.id, actorName: lead.name, note: outcome.note ?? null, payload: { itemId: item.id, type: item.type, assigneeId: item.assigneeId }, createdAt: reviewedAt });
+    if (outcome.declined && reviewedAt) history.push({ id: `${requestId}-declined`, action: 'tech_request.declined', actorId: manager.id, actorName: manager.name, note: outcome.declined, payload: { by: 'project_manager' }, createdAt: reviewedAt });
+    const comments: RequestComment[] = (outcome.comments ?? []).map(([author, body, internal], index) => ({
+      id: `${requestId}-comment-${index + 1}`, requestId, authorId: author.id, authorName: author.name, authorRole: author.role, body, internal: !!internal, createdAt: hoursAfter(raised, 0.5 + index),
+    }));
     techRequests.push({
-      id: `demo-tech-request-${++requestNumber}`, key: `REQ-${String(requestNumber).padStart(3, '0')}`, requesterId: person.id, requesterName: person.name, departmentId: person.departmentId!,
-      title, description, category, priority, neededBy, status: item ? 'assigned' : outcome?.declined ? 'declined' : 'new',
-      reviewedById: reviewedAt ? lead.id : null, reviewedAt, reviewNote: outcome?.declined ?? outcome?.note ?? null, itemId: item?.id ?? null,
+      id: requestId, key: `REQ-${String(requestNumber).padStart(3, '0')}`, requesterId: person.id, requesterName: person.name, departmentId: person.departmentId!,
+      title, description, category, tool: outcome.tool ?? '', priority, neededBy,
+      status: item ? 'assigned' : outcome.declined ? 'declined' : forwardedAt ? 'forwarded' : 'new',
+      forwardedById: forwardedAt ? manager.id : null, forwardedAt,
+      reviewedById: reviewedAt ? item ? lead.id : manager.id : null, reviewedAt, reviewNote: outcome.declined ?? outcome.note ?? null, itemId: item?.id ?? null,
       work: item ? { key: item.key, type: item.type, status: item.status, assigneeId: item.assigneeId, assigneeName: developers.find(d => d.id === item.assigneeId)?.name ?? 'A developer', dueDate: item.dueDate, doneAt: item.completedAt ?? item.fixedAt } : null,
-      createdAt: past(raised), updatedAt: past(reviewedAt ?? raised),
+      createdAt, updatedAt: comments.at(-1)?.createdAt ?? reviewedAt ?? forwardedAt ?? createdAt, comments, history, attachmentCount: 0,
     });
   };
   addRequest('rahul', 'Show customers how much they save in the cart', 'Customers ask how much a coupon saved them. Show the total saving under the cart total, on mobile and desktop.', 'feature', 'medium', dateAt(2, '11:00', -1), null,
-    { itemTitle: 'Show discount savings in the cart', note: 'Arjun takes this one.' });
-  addRequest('meera', 'Let us upload homepage banners ourselves', 'Every banner change needs a developer today. We want to upload and schedule homepage banners without waiting.', 'feature', 'medium', dateAt(3, '15:20', -1), null,
-    { declined: 'The CMS already has banner uploads with scheduling. Rohan will show your team how on Friday.' });
+    { itemTitle: 'Show discount savings in the cart', note: 'Arjun takes this one.', tool: 'Website cart' });
+  addRequest('meera', 'Let us upload homepage banners ourselves', 'Every banner change needs a developer today. We want to upload and schedule homepage banners without waiting.', 'tool', 'medium', dateAt(3, '15:20', -1), null,
+    { declined: 'The CMS already has banner uploads with scheduling. Rohan will show your team how on Friday.', tool: 'CMS' });
   addRequest('tanvi', 'Templates for creator campaign briefs', 'We write every brief from scratch. Three templates would help: product launch, festive sale, and always-on.', 'feature', 'high', dateAt(4, '10:30', -1), day(3),
     { itemTitle: 'Add campaign brief templates' });
   addRequest('zoya', 'Cart feels slow when changing quantity', 'Changing the quantity in the cart takes two to three seconds on mobile. Customers tap twice and get the wrong quantity.', 'problem', 'high', dateAt(4, '12:10', -1), null,
-    { itemTitle: 'Make cart quantity updates feel instant' });
+    { itemTitle: 'Make cart quantity updates feel instant', tool: 'Website cart' });
   addRequest('tanvi', 'Campaign performance report per creator', 'Views, clicks, and orders for each creator in a campaign, so we can decide whom to work with again.', 'data', 'medium', dateAt(0, '09:30'), day(9),
     { itemTitle: 'Add a campaign performance report' });
-  addRequest('neha', 'Add the Meta pixel to the new landing page', 'The Diwali landing page goes live on Monday. Ads need the Meta pixel and the purchase event on it before then.', 'change', 'urgent', dateAt(1, '10:45'), day(4));
-  addRequest('priya', 'Bulk order form for corporate gifting', 'Companies ask for 50 to 500 gift boxes. We need a form on the website that collects company, quantity, budget, and delivery date, and emails the sales team.', 'feature', 'high', dateAt(2, '11:15'), day(11));
+  addRequest('neha', 'Add the Meta pixel to the new landing page', 'The Diwali landing page goes live on Monday. Ads need the Meta pixel and the purchase event on it before then.', 'change', 'urgent', dateAt(1, '10:45'), day(4),
+    { forwarded: true, tool: 'Website', comments: [
+      [manager, 'Checked with Neha: only the purchase event is needed, not add-to-cart.', true],
+      [requester('neha'), 'The pixel ID is in the shared marketing sheet, row 4.'],
+    ] });
+  addRequest('priya', 'Bulk order form for corporate gifting', 'Companies ask for 50 to 500 gift boxes. We need a form on the website that collects company, quantity, budget, and delivery date, and emails the sales team.', 'feature', 'high', dateAt(2, '11:15'), day(11),
+    { comments: [[manager, 'Priya, do you want the form to also check stock before it accepts an order?']] });
+  addRequest('rahul', 'A shared inbox tool for customer WhatsApp messages', 'Three of us answer customer WhatsApp messages from one phone. We need a tool where all of us can reply, see who answered, and tag orders.', 'tool', 'medium', dateAt(2, '16:40'), null,
+    { tool: 'WhatsApp Business' });
 
   return {
-    currentUser: lead, members: [lead, ...developers, ...requesters], departments, techRequests, projects, phases, items, requests, dueDateRequests, activities,
+    currentUser: lead, members: [lead, techLead, manager, ...developers, ...requesters], departments, techRequests, projects, phases, items, requests, dueDateRequests, activities,
     leaveRequests: [],
     leaves: [
       { id: 'demo-leave-1', userId: developers[2].id, date: shiftDate(week, 1, timezone), type: 'half_day', note: 'Personal appointment' },

@@ -3,6 +3,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { AlertTriangle, ArrowUpRight, Bug, CalendarClock, CalendarDays, Check, CheckCheck, Clock3, Inbox, ListTodo, MessageSquareText, Pencil, Plus, X } from 'lucide-react';
 import type { DashboardData, DueDateRequest, TicketRequest, WorkItem } from '@/lib/types';
+import { leadsWork } from '@/lib/permissions';
 import { dateKey } from '@/lib/kpi';
 import { Avatar, EmptyState, FormDate, FormField, FormSelect, Modal, Panel, PriorityBadge } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
@@ -20,9 +21,9 @@ import { ItemActions, PhaseTag, ProjectTag } from './parts';
 type ApprovalsProps = { data: DashboardData; onOpen: (id: string) => void; onAction: OnAction; onRequest: () => void; mutate: MutationFn; busy: boolean };
 const requestStatus: Record<TicketRequest['status'], string> = { pending: 'Waiting for approval', approved: 'Approved', declined: 'Declined' };
 
-/** Everything waiting for a decision. Admins approve; developers follow what they asked for. */
+/** Everything waiting for a decision. The tech lead approves; developers follow what they asked for. */
 export function Approvals(props: ApprovalsProps) {
-  return props.data.currentUser.role === 'admin' ? <AdminApprovals {...props} /> : <DeveloperApprovals {...props} />;
+  return leadsWork(props.data.currentUser) ? <AdminApprovals {...props} /> : <DeveloperApprovals {...props} />;
 }
 
 /** Finished work: completed tickets wait for approval, fixed bugs wait for verification. */
@@ -122,7 +123,7 @@ function DeveloperApprovals({ data, onOpen, onAction, onRequest, mutate, busy }:
                 : <Button variant="ghost" size="sm" onClick={() => setWithdrawing(request.id)}>Withdraw</Button>
               : ticketActions({ data, request, admin: false, onOpen, onAction, busy })
           } />)}</div>
-        : <EmptyState title="No requests yet" description="Ask for a ticket when you take on new work. Your admin checks the estimate first." action={<Button onClick={onRequest}><Plus data-icon="inline-start" />Request ticket</Button>} />}
+        : <EmptyState title="No requests yet" description="Ask for a ticket when you take on new work. Your tech lead checks the estimate first." action={<Button onClick={onRequest}><Plus data-icon="inline-start" />Request ticket</Button>} />}
     </Panel>
 
     {extensions.length > 0 && <Panel title="Your asks for more hours">
@@ -131,8 +132,8 @@ function DeveloperApprovals({ data, onOpen, onAction, onRequest, mutate, busy }:
         : undefined} />)}</div>
     </Panel>}
 
-    <Panel title="Waiting for your admin">
-      <p className="panel-intro">Tickets you completed and bugs you fixed. Hours count once your admin approves.</p>
+    <Panel title="Waiting for your tech lead">
+      <p className="panel-intro">Tickets you completed and bugs you fixed. Hours count once your tech lead approves.</p>
       {finished.length
         ? <div className="finished-list">{finished.map(item => <FinishedRow key={item.id} data={data} item={item} onOpen={onOpen} action={<span className="cell-muted">{item.type === 'task' ? 'Waiting for review' : 'Waiting for verification'}</span>} />)}</div>
         : <EmptyState title="Nothing waiting" description="Complete a ticket and it waits here for approval." />}
@@ -167,7 +168,7 @@ function RequestCard({ data, request, actions, mine = false, compact = false }: 
     </div>
     {!compact && request.description && <p className="request-description">{request.description}</p>}
     {!compact && request.note && <p className="request-note"><MessageSquareText size={14} /><span>{request.note}</span></p>}
-    {request.reviewNote && <p className="request-review"><CheckCheck size={14} /><span><strong>{request.status === 'declined' ? 'Why it was declined' : 'Admin note'}:</strong> {request.reviewNote}</span></p>}
+    {request.reviewNote && <p className="request-review"><CheckCheck size={14} /><span><strong>{request.status === 'declined' ? 'Why it was declined' : 'Note from the tech lead'}:</strong> {request.reviewNote}</span></p>}
     {actions && <footer className="request-card-actions">{actions}</footer>}
   </article>;
 }
@@ -203,12 +204,12 @@ function ExtensionCard({ data, request, onOpen, actions, mine = false }: { data:
     <p className="request-note"><MessageSquareText size={14} /><span>{request.reason}</span></p>
     {pastTarget && <p className="request-warning"><AlertTriangle size={14} /><span>The new date is after the {project!.name} target date ({displayDate(project!.targetDate)}).</span></p>}
     {request.status === 'pending' && item && !unchanged && <p className="request-warning"><AlertTriangle size={14} /><span>The ticket’s date or estimate changed after this was asked. Decline it, and {person ? firstName(person) : 'the developer'} can ask again.</span></p>}
-    {request.reviewNote && <p className="request-review"><CheckCheck size={14} /><span><strong>{request.status === 'declined' ? 'Why it was declined' : 'Admin note'}:</strong> {request.reviewNote}</span></p>}
+    {request.reviewNote && <p className="request-review"><CheckCheck size={14} /><span><strong>{request.status === 'declined' ? 'Why it was declined' : 'Note from the tech lead'}:</strong> {request.reviewNote}</span></p>}
     {actions && <footer className="request-card-actions">{actions}</footer>}
   </article>;
 }
 
-/** Approving adds the hours to the estimate and moves the due date by them. The admin may approve a different number of hours. */
+/** Approving adds the hours to the estimate and moves the due date by them. The tech lead may approve a different number of hours. */
 function ApproveExtensionForm({ data, request, mutate, busy, onClose }: { data: DashboardData; request: DueDateRequest; mutate: MutationFn; busy: boolean; onClose: () => void }) {
   const person = findMember(data, request.requesterId);
   const item = data.items.find(i => i.id === request.itemId);
@@ -273,7 +274,7 @@ function FinishedRow({ data, item, onOpen, action }: { data: DashboardData; item
   </div>;
 }
 
-/** The admin may adjust the request before it becomes a ticket. Only changed values are sent. */
+/** The tech lead may adjust the request before it becomes a ticket. Only changed values are sent. */
 function ApproveRequestForm({ data, request, mutate, busy, onClose }: { data: DashboardData; request: TicketRequest; mutate: MutationFn; busy: boolean; onClose: () => void }) {
   const person = findMember(data, request.requesterId);
   const projects = data.projects.filter(p => p.id === request.projectId || (!p.isArchived && (isAdhocProject(p) || p.memberIds.includes(request.requesterId))))

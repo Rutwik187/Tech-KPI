@@ -2,8 +2,9 @@
 
 import { useState } from 'react';
 import clsx from 'clsx';
-import { ArrowUpRight, CalendarDays, CalendarPlus, Clock3, Coffee, Pencil, Search, ShieldCheck, UserRound, Users, X } from 'lucide-react';
+import { ArrowUpRight, CalendarDays, CalendarPlus, ClipboardList, Clock3, Coffee, Pencil, Search, Shield, ShieldCheck, UserRound, Users, X } from 'lucide-react';
 import type { DashboardData, Member } from '@/lib/types';
+import { leadsWork, manageableRoles } from '@/lib/permissions';
 import { calculateMemberKpi, getMemberTrend, getWeekStart, shiftDate } from '@/lib/kpi';
 import { Avatar, EmptyState, FormCheckbox, FormField, Modal, Panel, StatusBadge } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
@@ -11,7 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { displayDate, displayRange, findMember, groupLeaves, hours, isDone, percent, techMembers, today, type LeaveGroup, type MutationFn } from './lib';
+import { displayDate, displayRange, findMember, groupLeaves, hours, isDone, percent, roleNames, staffMembers, today, type LeaveGroup, type MutationFn } from './lib';
 import { ScoreBadge } from './parts';
 import { TeamEfficiencyChart, TrendChart } from './charts';
 
@@ -25,11 +26,15 @@ export function Team({ data, week, onEdit, onLeave, mutate, onOpen }: TeamProps)
   const weekEnd = shiftDate(week, 6, data.settings.timezone);
   const current = week === getWeekStart(new Date(), data.settings.timezone);
   // People from other teams only raise requests. They are on Other teams, without hours or scores.
-  const shown = techMembers(data).filter(m => `${m.name} ${m.email}`.toLowerCase().includes(search.trim().toLowerCase()))
-    .sort((a, b) => Number(b.isActive) - Number(a.isActive) || Number(b.role === 'admin') - Number(a.role === 'admin') || a.name.localeCompare(b.name));
+  // The tech lead comes first, then project managers, then developers.
+  const order = (m: Member) => ['admin', 'tech_lead', 'project_manager', 'developer'].indexOf(m.role);
+  // A tech lead changes developers and project managers. Only an admin changes admins and tech leads.
+  const editable = (m: Member) => manageableRoles(data.currentUser).includes(m.role);
+  const shown = staffMembers(data).filter(m => `${m.name} ${m.email}`.toLowerCase().includes(search.trim().toLowerCase()))
+    .sort((a, b) => Number(b.isActive) - Number(a.isActive) || order(a) - order(b) || a.name.localeCompare(b.name));
   const developers = data.members.filter(m => m.isActive && m.role === 'developer');
-  // Only admins receive Microsoft IDs, and the demo has none, so only a live admin can tell who has not signed in.
-  const invited = (m: Member) => data.mode === 'live' && data.currentUser.role === 'admin' && !m.microsoftObjectId;
+  // Only the tech lead receives Microsoft IDs, and the demo has none, so only a live tech lead can tell who has not signed in.
+  const invited = (m: Member) => data.mode === 'live' && manageableRoles(data.currentUser).includes(m.role) && !m.microsoftObjectId;
   const awayThisWeek = new Set(data.leaves.filter(l => l.date >= week && l.date <= weekEnd).map(l => l.userId));
   const groups = groupLeaves(data, data.leaves);
   const upcoming = groups.filter(g => g.end >= day).sort((a, b) => a.start.localeCompare(b.start));
@@ -59,9 +64,9 @@ export function Team({ data, week, onEdit, onLeave, mutate, onOpen }: TeamProps)
           const leaveDays = data.leaves.filter(l => l.userId === m.id && l.date >= week && l.date <= weekEnd).reduce((sum, l) => sum + (l.type === 'half_day' ? .5 : 1), 0);
           return <TableRow key={m.id} className={m.isActive ? '' : 'inactive-row'}>
             <TableCell><Button variant="ghost" className="person-cell person-button" onClick={() => setSelectedId(m.id)}><Avatar member={m} /><span className="person-text"><strong>{m.name}</strong><span>{m.email}</span></span></Button></TableCell>
-            <TableCell><div className="role-cell"><Badge variant="outline" className={clsx('role-tag', m.role === 'admin' && 'role-admin')}>{m.role === 'admin' ? <ShieldCheck size={12} /> : <UserRound size={12} />}{m.role === 'admin' ? 'Admin' : 'Developer'}</Badge>{!m.isActive && <Badge variant="outline" className="access-tag access-inactive"><i />Inactive</Badge>}{m.isActive && invited(m) && <Badge variant="outline" className="access-tag access-invited" title="Added by email. Their Microsoft account links on first sign-in."><i />Not signed in yet</Badge>}</div></TableCell>
-            {m.role === 'admin'
-              ? <TableCell colSpan={3}><span className="cell-muted">Manages the team · not scored</span></TableCell>
+            <TableCell><div className="role-cell"><RoleBadge role={m.role} />{!m.isActive && <Badge variant="outline" className="access-tag access-inactive"><i />Inactive</Badge>}{m.isActive && invited(m) && <Badge variant="outline" className="access-tag access-invited" title="Added by email. Their Microsoft account links on first sign-in."><i />Not signed in yet</Badge>}</div></TableCell>
+            {m.role !== 'developer'
+              ? <TableCell colSpan={3}><span className="cell-muted">{leadsWork(m) ? `${m.role === 'admin' ? 'Runs the organisation' : 'Manages the team'} · not scored` : 'Reviews requests from other teams · not scored'}</span></TableCell>
               : <>
                 <TableCell><strong className="number-cell">{hours(score.weekCapacityHours)} of {m.capacity} h</strong><span className="cell-subtext">{leaveDays ? `${leaveDays} day${leaveDays === 1 ? '' : 's'} leave this week` : 'No leave this week'}</span></TableCell>
                 <TableCell><span className="number-cell">{score.openTasks} tickets · {score.openBugs} bugs</span></TableCell>
@@ -69,7 +74,7 @@ export function Team({ data, week, onEdit, onLeave, mutate, onOpen }: TeamProps)
               </>}
             <TableCell><div className="row-actions">
               {m.isActive && m.role === 'developer' && <Button variant="ghost" size="icon" aria-label={`Add leave for ${m.name}`} title="Add leave" onClick={() => onLeave(m.id)}><CalendarPlus size={15} /></Button>}
-              <Button variant="ghost" size="icon" aria-label={`Edit ${m.name}`} title="Edit member" onClick={() => onEdit(m)}><Pencil size={15} /></Button>
+              {editable(m) && <Button variant="ghost" size="icon" aria-label={`Edit ${m.name}`} title="Edit member" onClick={() => onEdit(m)}><Pencil size={15} /></Button>}
             </div></TableCell>
           </TableRow>;
         })}</TableBody>
@@ -93,7 +98,7 @@ export function Team({ data, week, onEdit, onLeave, mutate, onOpen }: TeamProps)
   </>;
 }
 
-/** Leave as ranges of days. Only admins can remove leave, so `canRemove` hides the remove button for others. */
+/** Leave as ranges of days. Only the tech lead can remove leave, so `canRemove` hides the remove button for others. */
 export function LeaveList({ data, groups, mutate, showName = true, canRemove = true }: { data: DashboardData; groups: LeaveGroup[]; mutate: MutationFn; showName?: boolean; canRemove?: boolean }) {
   const [confirming, setConfirming] = useState<string | null>(null);
   return <div className="availability-list">{groups.map(group => {
@@ -120,11 +125,11 @@ function MemberDrawer({ data, member, week, current, onClose, onEdit, onLeave, o
   const recent = leave.filter(g => g.end < day).sort((a, b) => b.start.localeCompare(a.start)).slice(0, 5);
   const openWork = data.items.filter(item => item.assigneeId === member.id && !isDone(item));
   const scored = member.role === 'developer';
-  return <Modal title={member.name} subtitle={`${member.role === 'admin' ? 'Admin' : 'Developer'} · ${member.email}`} onClose={onClose} drawer>
+  return <Modal title={member.name} subtitle={`${roleNames[member.role]} · ${member.email}`} onClose={onClose} drawer>
     <div className="member-detail-body">
       <div className="member-detail-top">
         <Avatar member={member} size="large" />
-        <div><h3>{member.name}</h3><p>{scored ? `${member.capacity} h per week` : 'Admin · manages the team, not scored'}</p></div>
+        <div><h3>{member.name}</h3><p>{scored ? `${member.capacity} h per week` : `${roleNames[member.role]} · ${leadsWork(member) ? 'manages the team' : 'reviews requests'}, not scored`}</p></div>
         <Button variant="outline" onClick={onEdit}>Edit<Pencil data-icon="inline-end" size={13} /></Button>
       </div>
       {scored && <div className="detail-score-grid">
@@ -158,3 +163,8 @@ function MemberDrawer({ data, member, week, current, onClose, onEdit, onLeave, o
   </Modal>;
 }
 
+/** A role as a small badge with its own icon. */
+export function RoleBadge({ role }: { role: Member['role'] }) {
+  const icon = role === 'admin' ? <ShieldCheck size={12} /> : role === 'tech_lead' ? <Shield size={12} /> : role === 'project_manager' ? <ClipboardList size={12} /> : <UserRound size={12} />;
+  return <Badge variant="outline" className={clsx('role-tag', `role-${role.replace('_', '-')}`)}>{icon}{roleNames[role]}</Badge>;
+}

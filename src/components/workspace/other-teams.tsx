@@ -20,9 +20,9 @@ import { plural } from './timeline';
 type OtherTeamsProps = { data: DashboardData; mutate: MutationFn; busy: boolean; onAddMember: (departmentId?: string) => void; onEditMember: (member: Member) => void; onTeam: (department?: Department) => void };
 
 /**
- * Teams outside tech, such as Sales, and the people in them. An admin creates both, and marks who leads each team.
+ * Teams outside tech, such as Sales, and the people in them. The tech lead creates both, and marks who leads each team.
  * Everyone in a team signs in with their Microsoft work account and raises requests for it. Nobody else gets in,
- * unless an admin lets a work email domain in.
+ * unless the tech lead lets a work email domain in.
  */
 export function OtherTeams({ data, mutate, busy, onAddMember, onEditMember, onTeam }: OtherTeamsProps) {
   const [showArchived, setShowArchived] = useState(false);
@@ -62,7 +62,7 @@ export function OtherTeams({ data, mutate, busy, onAddMember, onEditMember, onTe
 }
 
 function PeopleList({ data, people, onEdit }: { data: DashboardData; people: Member[]; onEdit: (member: Member) => void }) {
-  // Only an admin's live data says who has linked a Microsoft account. The demo has none.
+  // Only the tech lead's live data says who has linked a Microsoft account. The demo has none.
   const invited = (member: Member) => data.mode === 'live' && !member.microsoftObjectId;
   return <ul className="team-people-list">{people.map(m => <li key={m.id} className={clsx(!m.isActive && 'is-inactive')}>
     <Avatar member={m} size="small" />
@@ -115,7 +115,7 @@ export function DepartmentForm({ editing, mutate, busy, onClose }: { editing?: D
   </Modal>;
 }
 
-/** Who may sign in to raise requests. Closed by default: only the people an admin adds to a team. */
+/** Who may sign in to raise requests. Closed by default: only the people the tech lead adds to a team. */
 function SignInPanel({ data, mutate, busy }: { data: DashboardData; mutate: MutationFn; busy: boolean }) {
   const [editing, setEditing] = useState(false);
   const domains = data.settings.requestDomains;

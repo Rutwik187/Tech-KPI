@@ -148,9 +148,9 @@ async function main() {
     assert.equal(developerData.members.length, 1); assert(developerData.items.every((item) => item.assigneeId === member.id)); checks += 2;
     await mutate(developerCookie, { action: "createItem", type: "bug", title: "Forbidden", projectId: project.id, assigneeId: member.id }, 403);
     await mutate(developerCookie, { action: "createItem", type: "task", title: "Forbidden", projectId: project.id, assigneeId: fixture.userId, estimateHours: 1 }, 403);
-    // A developer's new work is a request. It becomes a ticket only when an admin approves it.
+    // A developer's new work is a request. It becomes a ticket only when the tech lead approves it.
     await mutate(developerCookie, { action: "createItem", type: "task", title: `${trace}-direct`, projectId: project.id, assigneeId: member.id, estimateHours: 3 }, 403);
-    await mutate(adminCookie, { action: "requestTicket", title: `${trace}-admin-request`, estimateHours: 2 }, 400);
+    await mutate(adminCookie, { action: "requestTicket", title: `${trace}-admin-request`, estimateHours: 2 }, 403);
     await mutate(developerCookie, { action: "requestTicket", title: `${trace}-no-estimate`, estimateHours: 0 }, 400);
     let requestData = await mutate(developerCookie, { action: "requestTicket", title: `${trace}-own`, description: "Needed for the release", note: "A customer asked for it", projectId: project.id, phaseId: buildPhase.id, estimateHours: 5, priority: "high" });
     const request = requestData.requests.find((row) => row.title === `${trace}-own`)!; ids.add(request.id);
@@ -172,7 +172,7 @@ async function main() {
     data = await mutate(adminCookie, { action: "declineTicketRequest", id: declined.id, reason: "Split it into smaller tickets" });
     assert.equal(data.requests.find((row) => row.id === declined.id)?.status, "declined"); checks++;
     await mutate(adminCookie, { action: "approveTicketRequest", id: declined.id }, 409);
-    // The admin lowers the estimate while approving. The ticket belongs to the developer who asked.
+    // The tech lead lowers the estimate while approving. The ticket belongs to the developer who asked.
     data = await mutate(adminCookie, { action: "approveTicketRequest", id: request.id, patch: { estimateHours: 3 }, note: "Three hours is enough" });
     const approved = data.requests.find((row) => row.id === request.id)!;
     const ownTicket = data.items.find((item) => item.id === approved.itemId)!; ids.add(ownTicket.id);
@@ -182,7 +182,7 @@ async function main() {
     await mutate(adminCookie, { action: "approveTicketRequest", id: request.id }, 409);
     const developerView: DashboardData = await (await call("/api/data", developerCookie)).json();
     assert.equal(developerView.requests.find((row) => row.id === request.id)?.itemId, ownTicket.id); checks++;
-    // Complete is one step: a developer's ticket goes to review, an admin completes straight to done.
+    // Complete is one step: a developer's ticket goes to review, the tech lead completes straight to done.
     data = await mutate(developerCookie, { action: "updateItem", id: ownTicket.id, patch: { status: "in_review" } });
     const completedOwn = data.items.find((item) => item.id === ownTicket.id)!;
     assert.equal(completedOwn.status, "in_review"); assert(completedOwn.startedAt); checks += 2;
@@ -202,7 +202,7 @@ async function main() {
     await mutate(developerCookie, { action: "updateItem", id: task.id, patch: { dueDate: "2099-11-05" }, reason: "Waiting for the payment sandbox", reasonCategory: "blocked_dependency" }, 403);
     assert.equal((await db.select().from(schema.workItems).where(eq(schema.workItems.id, task.id)))[0].dueDate, "2099-11-02"); checks++;
 
-    // More hours on a ticket: a developer asks, an admin approves, declines, or extends directly.
+    // More hours on a ticket: a developer asks, the tech lead approves, declines, or extends directly.
     data = await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-more-hours`, projectId: project.id, phaseId: buildPhase.id, assigneeId: member.id, estimateHours: 2, dueDate: "2099-11-02" });
     const longer = data.items.find((item) => item.title === `${trace}-more-hours`)!; ids.add(longer.id);
     const ask = { action: "extendTicket", itemId: longer.id, hours: 3, reasonCategory: "blocked_dependency", reason: "Waiting for the payment sandbox" };
@@ -223,7 +223,7 @@ async function main() {
     assert.equal(data.dueDateRequests.find((row) => row.id === waiting.id)?.status, "declined");
     assert.equal(data.items.find((item) => item.id === longer.id)?.estimateHours, 2); checks += 2;
     await mutate(adminCookie, { action: "approveDueDateRequest", id: waiting.id }, 409);
-    // The admin approves 2 of the 3 hours. The estimate grows by 2 and the due date moves by 2 working hours.
+    // The tech lead approves 2 of the 3 hours. The estimate grows by 2 and the due date moves by 2 working hours.
     data = await mutate(developerCookie, ask);
     waiting = data.dueDateRequests.find((row) => row.itemId === longer.id && row.status === "pending")!;
     data = await mutate(adminCookie, { action: "approveDueDateRequest", id: waiting.id, hours: 2, note: "Two hours is enough" });
@@ -241,7 +241,7 @@ async function main() {
     await mutate(adminCookie, { action: "updateItem", id: longer.id, patch: { estimateHours: 5 }, reason: "Scope agreed in standup", reasonCategory: "scope_change" });
     await mutate(adminCookie, { action: "approveDueDateRequest", id: waiting.id }, 409);
     await mutate(adminCookie, { action: "declineDueDateRequest", id: waiting.id, reason: "The estimate already changed" });
-    // An admin adds hours directly, with a reason and no request.
+    // The tech lead adds hours directly, with a reason and no request.
     await mutate(adminCookie, { action: "extendTicket", itemId: longer.id, hours: 1, reasonCategory: "scope_change", reason: "" }, 400);
     data = await mutate(adminCookie, { action: "extendTicket", itemId: longer.id, hours: 1, reasonCategory: "scope_change", reason: "Agreed in standup" });
     assert.equal(data.items.find((item) => item.id === longer.id)?.estimateHours, 6);
@@ -325,7 +325,7 @@ async function main() {
     const withdrawRequest = data.leaveRequests.find(r => r.status === "pending")!; ids.add(withdrawRequest.id);
     data = await mutate(developerCookie, { action: "withdrawLeaveRequest", id: withdrawRequest.id });
     assert(!data.leaveRequests.some(r => r.id === withdrawRequest.id)); checks++;
-    // Requests from other teams. A requester sees only requests; an admin turns one into a ticket or a bug for a developer.
+    // Requests from other teams. A requester sees only requests; the tech lead turns one into a ticket or a bug for a developer.
     const requesterFixture = await createOfflineSessionFixture({ baseURL, role: "requester", name: `${trace}-requester` }); extraFixtures.push(requesterFixture);
     const teammateFixture = await createOfflineSessionFixture({ baseURL, role: "requester", name: `${trace}-teammate` }); extraFixtures.push(teammateFixture);
     const outsiderFixture = await createOfflineSessionFixture({ baseURL, role: "requester", name: `${trace}-outsider` }); extraFixtures.push(outsiderFixture);
@@ -403,7 +403,7 @@ async function main() {
     adminView = await mutate(adminCookie, { action: "createMember", name: `${trace}-added`, email: `${trace}-added@example.invalid`, role: "requester", departmentId: requestTeam.id });
     const addedRequester = adminView.members.find((row) => row.email === `${trace}-added@example.invalid`)!; memberIds.add(addedRequester.id);
     assert.equal(addedRequester.role, "requester"); assert.equal(addedRequester.departmentId, requestTeam.id); checks += 2;
-    // A team has several members who raise requests. The admin marks who leads it, which changes nothing they can do.
+    // A team has several members who raise requests. The tech lead marks who leads it, which changes nothing they can do.
     adminView = await mutate(adminCookie, { action: "createMember", name: `${trace}-lead`, email: `${trace}-lead@example.invalid`, role: "requester", departmentId: requestTeam.id, isTeamLead: true });
     const addedLead = adminView.members.find((row) => row.email === `${trace}-lead@example.invalid`)!; memberIds.add(addedLead.id);
     assert.equal(addedLead.isTeamLead, true); assert.equal(addedRequester.isTeamLead, false); assert.equal(requesterStart.currentUser.isTeamLead, false); checks += 3;
@@ -443,6 +443,163 @@ async function main() {
     await assert.rejects(db.update(schema.techRequests).set({ status: "declined", reviewNote: " ", reviewedAt: new Date() }).where(eq(schema.techRequests.id, ruled.id)));
     await assert.rejects(db.update(schema.techRequests).set({ status: "assigned" }).where(eq(schema.techRequests.id, ruled.id)));
     await assert.rejects(db.update(schema.techRequests).set({ category: "wish" as never }).where(eq(schema.techRequests.id, ruled.id))); checks += 3;
+    // A project manager reviews new requests, asks questions, and forwards them. The tech lead assigns forwarded ones.
+    const managerFixture = await createOfflineSessionFixture({ baseURL, role: "project_manager", name: `${trace}-manager` }); extraFixtures.push(managerFixture);
+    const managerCookie = managerFixture.cookieHeader;
+    let managerView: DashboardData = await (await call("/api/data", managerCookie)).json();
+    assert.equal(managerView.currentUser.role, "project_manager"); assert.equal(managerView.items.length, 0); assert.equal(managerView.members.length, 1);
+    assert.equal(managerView.projects.length, 0); assert.equal(managerView.activities.length, 0); assert(managerView.techRequests.some((request) => request.id === toDecline.id)); checks += 6;
+    await call("/requests", managerCookie);
+    const chosenId = randomUUID();
+    requesterView = await mutate(requesterCookie, { action: "createTechRequest", id: chosenId, ...teamAsk, title: `${trace}-flow`, category: "tool", tool: "Shopify" });
+    const flow = requesterView.techRequests.find((request) => request.title === `${trace}-flow`)!; ids.add(flow.id);
+    assert.equal(flow.id, chosenId); assert.equal(flow.tool, "Shopify"); assert.equal(flow.category, "tool"); assert.equal(flow.status, "new"); checks += 4;
+    await mutate(requesterCookie, { action: "createTechRequest", id: chosenId, ...teamAsk, title: `${trace}-same-id` }, 409);
+    await mutate(managerCookie, { action: "createTechRequest", ...teamAsk }, 403);
+    await mutate(managerCookie, { action: "assignTechRequest", id: flow.id, type: "task", assigneeId: member.id, title: "Forbidden", estimateHours: 1 }, 403);
+    await mutate(managerCookie, { action: "returnTechRequest", id: flow.id, reason: "Not theirs to return" }, 403);
+    await mutate(managerCookie, { action: "createItem", type: "task", title: `${trace}-manager-ticket`, assigneeId: member.id, estimateHours: 1 }, 403);
+    await mutate(managerCookie, { action: "createDepartment", name: `${trace}-manager-team` }, 403);
+    await mutate(managerCookie, { action: "saveSettings", settings: data.settings }, 403);
+    await mutate(developerCookie, { action: "forwardTechRequest", id: flow.id }, 403);
+    await mutate(developerCookie, { action: "editTechRequest", id: flow.id, patch: { priority: "low" } }, 403);
+    await call(`/api/attachments?itemId=${task.id}`, managerCookie, undefined, 404);
+    await call("/api/workload", managerCookie, undefined, 403);
+    // Comments. A requester's are for everyone. The tech side can keep a note to itself. Other teams see nothing.
+    await mutate(requesterCookie, { action: "addRequestComment", requestId: flow.id, body: "Secret", internal: true }, 403);
+    await mutate(outsiderCookie, { action: "addRequestComment", requestId: flow.id, body: "Not my team" }, 404);
+    await mutate(developerCookie, { action: "addRequestComment", requestId: flow.id, body: "Not my work yet" }, 404);
+    await mutate(managerCookie, { action: "addRequestComment", requestId: flow.id, body: "   " }, 400);
+    await mutate(managerCookie, { action: "addRequestComment", requestId: flow.id, body: "Which product pages need it?" });
+    await mutate(teammateCookie, { action: "addRequestComment", requestId: flow.id, body: "All shirt pages." });
+    managerView = await mutate(managerCookie, { action: "addRequestComment", requestId: flow.id, body: "Tech-side note: reuse the size chart component.", internal: true });
+    assert.equal(managerView.techRequests.find((request) => request.id === flow.id)?.comments.length, 3); checks++;
+    requesterView = await (await call("/api/data", requesterCookie)).json();
+    const seen = requesterView.techRequests.find((request) => request.id === flow.id)!;
+    assert.deepEqual(seen.comments.map((comment) => comment.body), ["Which product pages need it?", "All shirt pages."]);
+    assert.deepEqual(seen.comments.map((comment) => comment.authorRole), ["project_manager", "requester"]); checks += 2;
+    const managerComment = seen.comments[0];
+    await mutate(requesterCookie, { action: "deleteRequestComment", id: managerComment.id }, 403);
+    const internalNote = managerView.techRequests.find((request) => request.id === flow.id)!.comments.find((comment) => comment.internal)!;
+    await mutate(requesterCookie, { action: "deleteRequestComment", id: internalNote.id }, 404);
+    // Edit and forward. After that, the requester and the project manager can no longer change it.
+    await mutate(managerCookie, { action: "editTechRequest", id: flow.id, patch: { neededBy: "2000-01-03" } }, 400);
+    managerView = await mutate(managerCookie, { action: "editTechRequest", id: flow.id, patch: { title: `${trace}-flow-edited`, tool: "Shopify theme" } });
+    assert.equal(managerView.techRequests.find((request) => request.id === flow.id)?.title, `${trace}-flow-edited`); checks++;
+    managerView = await mutate(managerCookie, { action: "forwardTechRequest", id: flow.id, priority: "urgent", note: "Finance agreed. Start with shirts." });
+    const forwarded = managerView.techRequests.find((request) => request.id === flow.id)!;
+    assert.equal(forwarded.status, "forwarded"); assert.equal(forwarded.priority, "urgent"); assert.equal(forwarded.forwardedById, managerFixture.userId); assert(forwarded.forwardedAt);
+    assert(forwarded.comments.some((comment) => comment.internal && comment.body === "Finance agreed. Start with shirts.")); checks += 5;
+    await mutate(requesterCookie, { action: "updateTechRequest", id: flow.id, patch: { priority: "low" } }, 409);
+    await mutate(requesterCookie, { action: "withdrawTechRequest", id: flow.id }, 409);
+    await mutate(managerCookie, { action: "editTechRequest", id: flow.id, patch: { priority: "low" } }, 409);
+    await mutate(managerCookie, { action: "declineTechRequest", id: flow.id, reason: "Too late for me" }, 409);
+    await mutate(managerCookie, { action: "forwardTechRequest", id: flow.id }, 409);
+    requesterView = await (await call("/api/data", requesterCookie)).json();
+    const requesterHistory = requesterView.techRequests.find((request) => request.id === flow.id)!.history;
+    assert.deepEqual(requesterHistory.map((event) => event.action), ["tech_request.created", "tech_request.updated", "tech_request.forwarded"]);
+    assert(requesterHistory.every((event) => event.note === null));
+    assert(!requesterView.techRequests.find((request) => request.id === flow.id)!.comments.some((comment) => comment.body.startsWith("Finance"))); checks += 3;
+    // The tech lead sends it back with a reason, which stays on the tech side. The project manager forwards it again.
+    await mutate(adminCookie, { action: "returnTechRequest", id: flow.id, reason: "" }, 400);
+    adminView = await mutate(adminCookie, { action: "returnTechRequest", id: flow.id, reason: "Which sizes does the chart cover?" });
+    const returned = adminView.techRequests.find((request) => request.id === flow.id)!;
+    assert.equal(returned.status, "new"); assert.equal(returned.forwardedAt, null); assert(returned.history.some((event) => event.action === "tech_request.returned")); checks += 3;
+    await mutate(adminCookie, { action: "returnTechRequest", id: flow.id, reason: "Twice" }, 409);
+    requesterView = await (await call("/api/data", requesterCookie)).json();
+    assert(!requesterView.techRequests.find((request) => request.id === flow.id)!.history.some((event) => event.action === "tech_request.returned")); checks++;
+    await mutate(managerCookie, { action: "forwardTechRequest", id: flow.id });
+    adminView = await mutate(adminCookie, { action: "assignTechRequest", id: flow.id, type: "task", assigneeId: member.id, title: `${trace}-flow-ticket`, projectId: project.id, estimateHours: 3, dueDate: "2099-11-21", note: "Starting next week" });
+    const flowItemId = adminView.techRequests.find((request) => request.id === flow.id)!.itemId!;
+    assert(flowItemId); ids.add(flowItemId); checks++;
+    await mutate(adminCookie, { action: "editTechRequest", id: flow.id, patch: { priority: "low" } }, 409);
+    // A new request cannot borrow a ticket's id, so request and ticket history never mix.
+    await mutate(requesterCookie, { action: "createTechRequest", id: flowItemId, ...teamAsk, title: `${trace}-borrowed-id` }, 409);
+    // The developer reads the request, including tech-side notes, and can comment on it now.
+    const developerFlow: DashboardData = await mutate(developerCookie, { action: "addRequestComment", requestId: flow.id, body: "Starting with the shirt template." });
+    const developerRequest = developerFlow.techRequests.find((request) => request.id === flow.id)!;
+    assert(developerRequest.comments.some((comment) => comment.internal)); assert.equal(developerRequest.comments.at(-1)?.authorRole, "developer"); checks += 2;
+    // The project manager follows the work without seeing the ticket.
+    managerView = await (await call("/api/data", managerCookie)).json();
+    const followedByManager = managerView.techRequests.find((request) => request.id === flow.id)!;
+    assert.equal(followedByManager.work?.assigneeName, trace); assert.equal(managerView.items.length, 0); checks += 2;
+    adminView = await mutate(managerCookie, { action: "deleteRequestComment", id: managerComment.id });
+    assert(!adminView.techRequests.find((request) => request.id === flow.id)!.comments.some((comment) => comment.id === managerComment.id)); checks++;
+    // A project manager may decline a new request, with a reason the requester reads.
+    requesterView = await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, title: `${trace}-manager-declines` });
+    const managerDeclines = requesterView.techRequests.find((request) => request.title === `${trace}-manager-declines`)!; ids.add(managerDeclines.id);
+    managerView = await mutate(managerCookie, { action: "declineTechRequest", id: managerDeclines.id, reason: "Sales already has this in the CRM." });
+    assert.equal(managerView.techRequests.find((request) => request.id === managerDeclines.id)?.status, "declined"); checks++;
+    // Files on requests follow the same rules as comments. These checks stop before storage, so no file is written.
+    await call(`/api/attachments?requestId=${flow.id}`, outsiderCookie, undefined, 404);
+    await call(`/api/attachments?requestId=${flow.id}&itemId=${task.id}`, adminCookie, undefined, 400);
+    for (const cookie of [requesterCookie, teammateCookie, managerCookie, adminCookie]) {
+      const listed = await (await call(`/api/attachments?requestId=${flow.id}`, cookie)).json();
+      assert.deepEqual(listed.attachments, []); checks++;
+    }
+    async function upload(cookie: string, fields: Record<string, string | Blob>, expected: number) {
+      const form = new FormData();
+      for (const [key, value] of Object.entries(fields)) form.append(key, value);
+      const response = await fetch(`${baseURL}/api/attachments`, { method: "POST", headers: { cookie, origin: baseURL }, body: form, signal: AbortSignal.timeout(45_000) });
+      assert.equal(response.status, expected, `Unexpected upload status: ${response.status}`); checks++;
+    }
+    await upload(outsiderCookie, { requestId: flow.id, file: new File(["x"], "note.txt", { type: "text/plain" }) }, 404);
+    await upload(requesterCookie, { requestId: flow.id, file: new File(["<script>"], "page.html", { type: "text/html" }) }, 400);
+    await upload(requesterCookie, { requestId: flow.id, file: new File(["MZ"], "setup.exe", { type: "application/octet-stream" }) }, 400);
+    await upload(requesterCookie, { requestId: flow.id }, 400);
+    await upload(managerCookie, { itemId: task.id, file: new File(["x"], "note.txt", { type: "text/plain" }) }, 404);
+    // Project managers own no work and join no projects.
+    await mutate(adminCookie, { action: "updateMember", id: member.id, patch: { role: "project_manager" } }, 400);
+    await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { memberIds: [fixture.userId, member.id, managerFixture.userId] } }, 400);
+    await mutate(adminCookie, { action: "createItem", type: "task", title: `${trace}-manager-owned`, assigneeId: managerFixture.userId, estimateHours: 1 }, 400);
+    await mutate(adminCookie, { action: "createMember", name: `${trace}-pm-team`, email: `${trace}-pm-team@example.invalid`, role: "project_manager", departmentId: requestTeam.id }, 400);
+    adminView = await mutate(adminCookie, { action: "createMember", name: `${trace}-pm`, email: `${trace}-pm@example.invalid`, role: "project_manager" });
+    const addedManager = adminView.members.find((row) => row.email === `${trace}-pm@example.invalid`)!; memberIds.add(addedManager.id);
+    assert.equal(addedManager.role, "project_manager"); assert.equal(addedManager.departmentId, null); checks += 2;
+    // The database keeps the new rules too.
+    await assert.rejects(db.update(schema.techRequests).set({ status: "forwarded" }).where(eq(schema.techRequests.id, ruled.id)));
+    await assert.rejects(db.insert(schema.requestComments).values({ requestId: ruled.id, authorId: requesterFixture.userId, body: "  " }));
+    await assert.rejects(db.insert(schema.attachments).values({ uploadedById: requesterFixture.userId, name: "orphan.txt", mimeType: "text/plain", size: 1, objectKey: `${trace}/orphan` })); checks += 3;
+    // The tech lead runs the tech team. Only an admin manages the organisation: teams outside tech, sign-in, and admin or tech lead accounts.
+    const techLeadFixture = await createOfflineSessionFixture({ baseURL, role: "tech_lead", name: `${trace}-tech-lead` }); extraFixtures.push(techLeadFixture);
+    const techLeadCookie = techLeadFixture.cookieHeader;
+    const techLeadView: DashboardData = await (await call("/api/data", techLeadCookie)).json();
+    assert.equal(techLeadView.currentUser.role, "tech_lead");
+    assert(techLeadView.items.some((item) => item.id === task.id)); assert(techLeadView.techRequests.some((request) => request.id === flow.id));
+    assert(!techLeadView.members.some((row) => row.role === "requester"));
+    assert(!techLeadView.activities.some((event) => event.action.startsWith("department.")));
+    // Microsoft IDs go only to people who may change that person: a tech lead gets developers', not an admin's.
+    assert.equal(techLeadView.members.find((row) => row.id === fixture.userId)?.microsoftObjectId, undefined);
+    assert(techLeadView.members.find((row) => row.id === member.id)?.microsoftObjectId); checks += 2;
+    const adminFull: DashboardData = await (await call("/api/data", adminCookie)).json();
+    assert(adminFull.members.some((row) => row.role === "requester")); assert(adminFull.activities.some((event) => event.action.startsWith("department."))); checks += 7;
+    adminView = await mutate(techLeadCookie, { action: "createItem", type: "task", title: `${trace}-by-tech-lead`, assigneeId: member.id, estimateHours: 1 });
+    assert(adminView.items.some((item) => item.title === `${trace}-by-tech-lead`)); checks++;
+    await mutate(techLeadCookie, { action: "createDepartment", name: `${trace}-lead-team` }, 403);
+    await mutate(techLeadCookie, { action: "updateDepartment", id: requestTeam.id, name: `${trace}-renamed` }, 403);
+    await mutate(techLeadCookie, { action: "createMember", name: `${trace}-lead-admin`, email: `${trace}-lead-admin@example.invalid`, role: "admin" }, 403);
+    await mutate(techLeadCookie, { action: "createMember", name: `${trace}-lead-lead`, email: `${trace}-lead-lead@example.invalid`, role: "tech_lead" }, 403);
+    await mutate(techLeadCookie, { action: "createMember", name: `${trace}-lead-req`, email: `${trace}-lead-req@example.invalid`, role: "requester", departmentId: requestTeam.id }, 403);
+    await mutate(techLeadCookie, { action: "updateMember", id: fixture.userId, patch: { isActive: false } }, 403);
+    await mutate(techLeadCookie, { action: "updateMember", id: requesterFixture.userId, patch: { name: "Renamed" } }, 403);
+    await mutate(techLeadCookie, { action: "updateMember", id: techLeadFixture.userId, patch: { role: "developer" } }, 403);
+    adminView = await mutate(techLeadCookie, { action: "createMember", name: `${trace}-lead-dev`, email: `${trace}-lead-dev@example.invalid`, role: "developer", capacity: 33 });
+    const leadsDeveloper = adminView.members.find((row) => row.email === `${trace}-lead-dev@example.invalid`)!; memberIds.add(leadsDeveloper.id);
+    await mutate(techLeadCookie, { action: "updateMember", id: leadsDeveloper.id, patch: { role: "admin" } }, 403);
+    adminView = await mutate(techLeadCookie, { action: "updateMember", id: leadsDeveloper.id, patch: { role: "project_manager" } });
+    assert.equal(adminView.members.find((row) => row.id === leadsDeveloper.id)?.role, "project_manager"); checks++;
+    const currentSettings = adminFull.settings;
+    await mutate(techLeadCookie, { action: "saveSettings", settings: { ...currentSettings, requestDomains: [...currentSettings.requestDomains, `${trace}.example.invalid`] } }, 403);
+    await mutate(techLeadCookie, { action: "saveSettings", settings: currentSettings });
+    await call("/api/services", techLeadCookie, undefined, 403);
+    await call("/api/services", managerCookie, undefined, 403);
+    // An admin gives and takes the tech lead role, and cannot change their own role.
+    adminView = await mutate(adminCookie, { action: "createMember", name: `${trace}-second-lead`, email: `${trace}-second-lead@example.invalid`, role: "tech_lead" });
+    const secondLead = adminView.members.find((row) => row.email === `${trace}-second-lead@example.invalid`)!; memberIds.add(secondLead.id);
+    assert.equal(secondLead.role, "tech_lead"); assert.equal(secondLead.capacity, adminFull.settings.defaultLeadCapacityHours); checks += 2;
+    await mutate(adminCookie, { action: "updateMember", id: fixture.userId, patch: { role: "tech_lead" } }, 400);
+    await mutate(adminCookie, { action: "updateMember", id: techLeadFixture.userId, patch: { role: "developer" } });
+    await mutate(adminCookie, { action: "updateMember", id: techLeadFixture.userId, patch: { role: "tech_lead" } });
     // Company sign-in: only the tenant's members with an allowed work email domain, and only once per person.
     const { provisionRequester } = await import("./microsoft-accounts");
     const companyDomain = `${trace}.example.invalid`;
@@ -481,7 +638,7 @@ async function main() {
       const cron = await fetch(`${baseURL}/api/cron/weekly-snapshot`, { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } });
       assert.equal(cron.status, 200); checks++;
     }
-    console.log(`PASS: ${checks} backend checks (projects, primary developers, project timelines and extensions, more hours on tickets with approval, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable, sign-in by invited work email, ticket requests and approvals, requests from other teams, teams, and company sign-in). Local session fixtures used; real Microsoft OAuth is not exercised.`);
+    console.log(`PASS: ${checks} backend checks (projects, primary developers, project timelines and extensions, more hours on tickets with approval, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable, sign-in by invited work email, ticket requests and approvals, requests from other teams, project manager review, request comments and files, tech lead and admin roles, teams, and company sign-in). Local session fixtures used; real Microsoft OAuth is not exercised.`);
   } finally {
     await db.transaction(async (tx) => {
       const testItems = await tx.select({ id: schema.workItems.id }).from(schema.workItems).where(like(schema.workItems.title, `${trace}%`));
@@ -510,6 +667,6 @@ async function main() {
 }
 main().catch((error) => {
   const cause = error as { code?: string; cause?: { code?: string } };
-  console.error(error instanceof assert.AssertionError ? error.message : `Verification failed (${cause.code ?? cause.cause?.code ?? 'connection or setup error'}).`);
+  console.error(error instanceof assert.AssertionError ? `${error.message}\n${error.stack?.split("\n").filter((line) => line.includes("verify-backend.ts:")).slice(0, 3).join("\n") ?? ""}` : `Verification failed (${cause.code ?? cause.cause?.code ?? 'connection or setup error'}).`);
   process.exitCode = 1;
 });

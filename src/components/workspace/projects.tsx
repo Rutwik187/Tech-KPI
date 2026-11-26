@@ -5,6 +5,7 @@ import Link from 'next/link';
 import clsx from 'clsx';
 import { ArrowRight, ArrowUpRight, Bug, CalendarClock, ChevronRight, CircleDashed, CircleHelp, Clock3, FolderKanban, Pencil } from 'lucide-react';
 import type { DashboardData, Project } from '@/lib/types';
+import { leadsWork } from '@/lib/permissions';
 import { Avatar, EmptyState, FormCheckbox, FormField, FormSelect, Panel, ProgressBar } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -23,7 +24,7 @@ function worksOn(data: DashboardData, project: Project, memberId: string) {
 export function Projects({ data, onEdit, onOpen, onExtend, mutate }: { data: DashboardData } & ProjectActions) {
   const [showArchived, setShowArchived] = useState(false);
   const [developerId, setDeveloperId] = useState('all');
-  const isAdmin = data.currentUser.role === 'admin';
+  const isAdmin = leadsWork(data.currentUser);
   const developers = data.members.filter(m => m.isActive && m.role === 'developer').sort((a, b) => a.name.localeCompare(b.name));
   const developer = developerId === 'all' ? undefined : findMember(data, developerId);
   const list = data.projects.filter(p => (showArchived || !p.isArchived) && (!developer || worksOn(data, p, developer.id)))
@@ -39,7 +40,7 @@ export function Projects({ data, onEdit, onOpen, onExtend, mutate }: { data: Das
     </div>
     {list.length === 0 ? <Panel>{developer
         ? <EmptyState title={`No projects with ${firstName(developer)}`} description={`${firstName(developer)} is not on any ${showArchived ? '' : 'active '}project and owns no work in one.`} action={<Button variant="outline" onClick={() => setDeveloperId('all')}>Show all projects</Button>} />
-        : <EmptyState title="No projects yet" description={isAdmin ? 'Create a project, choose its team, and add phases if you need them.' : 'Your admin will add you to a project.'} />}</Panel>
+        : <EmptyState title="No projects yet" description={isAdmin ? 'Create a project, choose its team, and add phases if you need them.' : 'Your tech lead will add you to a project.'} />}</Panel>
       : <div className="projects-grid">{list.map(project => <ProjectCard key={project.id} data={data} project={project} isAdmin={isAdmin} onEdit={onEdit} onOpen={onOpen} onExtend={onExtend} mutate={mutate} />)}</div>}
     <div className="list-hint"><CircleHelp size={14} />{isAdmin ? 'Open a project to see its progress chart and timeline history. Moving a target date needs a reason, and everyone on the project can read it.' : 'Open a project to see its progress and why its target moved.'}</div>
   </>;

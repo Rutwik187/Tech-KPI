@@ -4,6 +4,7 @@ import { useState } from 'react';
 import clsx from 'clsx';
 import { CalendarCheck, CalendarClock, CalendarDays, ChevronLeft, ChevronRight, Hourglass, Plus, UserRound, Users } from 'lucide-react';
 import type { DashboardData } from '@/lib/types';
+import { leadsWork } from '@/lib/permissions';
 import { getWeekStart, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
 import { FormCheckbox, FormField, FormSelect, Panel } from '@/components/ui';
 import { Button } from '@/components/ui/button';
@@ -31,11 +32,11 @@ function monthLabel(month: string) {
 function daysLabel(n: number) { return `${n} ${n === 1 ? 'day' : 'days'}`; }
 
 /**
- * Who is away and when. Admins see the whole team and approve requests. A developer sees their own leave and requests.
+ * Who is away and when. The tech lead sees the whole team and approves requests. A developer sees their own leave and requests.
  * Leave lowers hours at work, so this is also where people check their history.
  */
 export function LeavePage({ data, mutate, busy, onAdd }: LeavePageProps) {
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   const tz = data.settings.timezone;
   const day = today(tz);
   const [month, setMonth] = useState(monthStart(day));
@@ -135,7 +136,7 @@ export function LeavePage({ data, mutate, busy, onAdd }: LeavePageProps) {
       </table></div>
       <p className="panel-intro leave-calendar-help">{admin
         ? 'Select a day number to add leave on that day. Leave lowers that person’s hours at work for the week.'
-        : 'Select a day number to request leave from that day. Your admin approves it before your hours at work change.'}</p>
+        : 'Select a day number to request leave from that day. Your tech lead approves it before your hours at work change.'}</p>
     </Panel>
 
     <LeaveRequests data={data} mutate={mutate} busy={busy} />
@@ -143,7 +144,7 @@ export function LeavePage({ data, mutate, busy, onAdd }: LeavePageProps) {
     <Panel title={admin ? 'Recorded leave' : 'Your leave'} action={<Button variant="link" size="sm" onClick={() => onAdd({ userId: personId || undefined })}><CalendarDays data-icon="inline-start" size={13} />{admin ? 'Add leave' : 'Request leave'}</Button>}>
       <p className="panel-intro">{admin
         ? `Leave that counts${person ? ` for ${person.name}` : ''}. This includes approved requests and leave you added. Weekends and holidays inside a range are skipped.`
-        : 'Leave that counts for you: approved requests and leave your admin added. Each day lowers your hours at work for that week.'}</p>
+        : 'Leave that counts for you: approved requests and leave your tech lead added. Each day lowers your hours at work for that week.'}</p>
       {upcoming.length === 0
         ? <div className="inline-empty"><CalendarDays size={21} /><div><strong>No upcoming leave</strong><p>{admin ? 'Add full days, half days, or several days at once.' : 'Request leave, and it appears here after approval.'}</p></div></div>
         : <><p className="leave-group-label leave-list-label">Upcoming · {daysLabel(upcoming.reduce((sum, g) => sum + g.days, 0))}</p><LeaveList data={data} groups={upcoming} mutate={mutate} showName={admin && !personId} canRemove={admin} /></>}

@@ -1,5 +1,6 @@
-import type { BugStatus, DashboardData, Department, DueDateRequest, Holiday, Leave, Member, Project, RequestCategory, RequestWork, Settings, TaskStatus, TechRequest, TicketRequest, WorkItem } from '@/lib/types';
+import type { BugStatus, DashboardData, Department, DueDateRequest, Holiday, Leave, Member, Project, RequestCategory, RequestEvent, RequestWork, Role, Settings, TaskStatus, TechRequest, TicketRequest, WorkItem } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
+import { can, isOrgAdmin, isTechTeam, leadsWork, manageableRoles, refusal, aRole, ROLE_NAMES } from '@/lib/permissions';
 import { creditedAt, dateKey, dueDateAfterHours, getBugKpi, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
 
 /** The database calls a ticket a "task". Everything a person reads says "ticket". */
@@ -9,7 +10,6 @@ export const bands = { on_target: 'On target', below_target: 'Below target', nee
 export const ticketStatuses: TaskStatus[] = ['todo', 'in_progress', 'blocked', 'in_review', 'done'];
 export const bugStatuses: BugStatus[] = ['open', 'in_progress', 'fixed', 'verified'];
 export const priorities: WorkItem['priority'][] = ['low', 'medium', 'high', 'urgent'];
-export const adminOnlyPages = ['standup', 'team', 'other-teams', 'settings'];
 const TIMEZONE = 'Asia/Kolkata';
 
 export function isDone(item: WorkItem) { return item.type === 'task' ? item.status === 'done' : item.status === 'verified'; }
@@ -31,11 +31,15 @@ export function hours(n: number) { return Number(n.toFixed(1)); }
 export function firstName(member?: Member) { return member?.name.split(' ')[0] ?? 'Unassigned'; }
 
 export function findMember(data: DashboardData, id: string) { return data.members.find(m => m.id === id); }
-/** People on the tech team. People from other teams only raise requests, so they never own work or join projects. */
-export function techMembers(data: DashboardData) { return data.members.filter(m => m.role !== 'requester'); }
-/** Admin, Developer, or someone from another team, such as "Sales team lead" or "Sales team". The code calls them a requester. */
+/** Admins, tech leads, and developers: the people who can join projects. Project managers and people from other teams handle requests only. */
+export function techMembers(data: DashboardData) { return data.members.filter(m => isTechTeam(m)); }
+/** Everyone on the tech side, including project managers. The Team page lists them. */
+export function staffMembers(data: DashboardData) { return data.members.filter(m => m.role !== 'requester'); }
+/** What people read for each role. Someone from another team is a "requester" in the code. */
+export const roleNames: Record<Role, string> = ROLE_NAMES;
+/** Tech lead, Project manager, Developer, or someone from another team, such as "Sales team lead" or "Sales team". */
 export function roleLabel(data: DashboardData, member: Member) {
-  if (member.role !== 'requester') return member.role === 'admin' ? 'Admin' : 'Developer';
+  if (member.role !== 'requester') return roleNames[member.role];
   const team = findDepartment(data, member.departmentId)?.name;
   if (member.isTeamLead) return team ? `${team} team lead` : 'Team lead';
   return team ? `${team} team` : 'No team yet';
@@ -85,19 +89,20 @@ export function projectPhases(data: DashboardData, projectId: string) { return d
 export function phaseName(data: DashboardData, phaseId: string | null) { return phaseId ? data.phases.find(phase => phase.id === phaseId)?.name ?? 'Unknown phase' : 'Ad hoc'; }
 /** Ad hoc first, then active projects by name. A developer sees only projects they belong to. */
 export function selectableProjects(data: DashboardData, retainedProjectId?: string) {
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   return data.projects
     .filter(p => p.id === retainedProjectId || (!p.isArchived && (admin || isAdhocProject(p) || p.memberIds.includes(data.currentUser.id))))
     .sort((a, b) => Number(isAdhocProject(b)) - Number(isAdhocProject(a)) || a.name.localeCompare(b.name));
 }
 export function findDepartment(data: DashboardData, id?: string | null): Department | undefined { return id ? data.departments.find(d => d.id === id) : undefined; }
-/** Teams a new request can go to, in the admin's order. */
+/** Teams a new request can go to, in the tech lead's order. */
 export function activeDepartments(data: DashboardData) { return data.departments.filter(d => !d.isArchived).sort((a, b) => a.position - b.position || a.name.localeCompare(b.name)); }
 
 /** Kinds of request, in the words other teams use. A broken thing usually becomes a bug, everything else a ticket. */
 export const requestCategories: { value: RequestCategory; label: string; hint: string }[] = [
-  { value: 'feature', label: 'New feature', hint: 'Something new on the website, the app, or a tool you use.' },
-  { value: 'change', label: 'Change', hint: 'Update a page, its content, or how something works.' },
+  { value: 'tool', label: 'New tool', hint: 'A tool or software your team needs and does not have yet.' },
+  { value: 'feature', label: 'New feature', hint: 'Something new on the website, the app, or a tool you already use.' },
+  { value: 'change', label: 'Change to a tool', hint: 'Update a page, a tool, or how something works.' },
   { value: 'problem', label: 'Something is broken', hint: 'An error, or something that stopped working.' },
   { value: 'data', label: 'Data or report', hint: 'A report, an export, or numbers you need.' },
   { value: 'access', label: 'Access or setup', hint: 'Accounts, tools, integrations, or permissions.' },
@@ -106,12 +111,16 @@ export const requestCategories: { value: RequestCategory; label: string; hint: s
 export function categoryLabel(category: RequestCategory) { return requestCategories.find(c => c.value === category)?.label ?? 'Request'; }
 
 /**
- * Where a request is, as its requester reads it. A blocked ticket shows as in progress, because a blocker is the tech team's
- * to clear. Work that waits for the admin's approval or verification shows as being checked.
+ * Where a request is, as everyone reads it. A new request is with a project manager, a forwarded one with the tech lead.
+ * A blocked ticket shows as in progress, because a blocker is the tech team's to clear.
+ * Work that waits for the tech lead's approval or verification shows as being checked.
  */
-export type RequestStage = 'waiting' | 'assigned' | 'in_progress' | 'checking' | 'done' | 'declined';
-export const stageLabels: Record<RequestStage, string> = { waiting: 'Waiting for review', assigned: 'Assigned', in_progress: 'In progress', checking: 'Being checked', done: 'Done', declined: 'Declined' };
-/** The ticket or bug a request became. Admins and developers hold the item itself, so it is always current; a requester gets the server's summary. */
+export type RequestStage = 'with_pm' | 'with_lead' | 'assigned' | 'in_progress' | 'checking' | 'done' | 'declined';
+export const stageLabels: Record<RequestStage, string> = { with_pm: 'With project manager', with_lead: 'With tech lead', assigned: 'Assigned', in_progress: 'In progress', checking: 'Being checked', done: 'Done', declined: 'Declined' };
+/** Stages before a developer has the request. Only then can it be changed, forwarded, assigned, or declined. */
+export const REVIEW_STAGES: RequestStage[] = ['with_pm', 'with_lead'];
+export const OPEN_STAGES: RequestStage[] = ['with_pm', 'with_lead', 'assigned', 'in_progress', 'checking'];
+/** The ticket or bug a request became. The tech lead and developers hold the item itself, so it is always current; a requester gets the server's summary. */
 export function requestWork(data: DashboardData, request: TechRequest): RequestWork | null {
   const item = request.itemId ? data.items.find(i => i.id === request.itemId) : undefined;
   if (!item) return request.work;
@@ -122,7 +131,8 @@ export function requestWork(data: DashboardData, request: TechRequest): RequestW
   };
 }
 export function requestStage(data: DashboardData, request: TechRequest): RequestStage {
-  if (request.status === 'new') return 'waiting';
+  if (request.status === 'new') return 'with_pm';
+  if (request.status === 'forwarded') return 'with_lead';
   if (request.status === 'declined') return 'declined';
   const status = requestWork(data, request)?.status;
   return status === 'done' || status === 'verified' ? 'done' : status === 'in_review' || status === 'fixed' ? 'checking' : status === 'in_progress' || status === 'blocked' ? 'in_progress' : 'assigned';
@@ -130,6 +140,24 @@ export function requestStage(data: DashboardData, request: TechRequest): Request
 /** The request a ticket or bug was made from, if any. */
 export function requestForItem(data: DashboardData, itemId: string) { return data.techRequests.find(r => r.itemId === itemId); }
 export function requestKey(sequence: number) { return `REQ-${String(sequence).padStart(3, '0')}`; }
+/**
+ * What this person can do with a request now. A project manager reviews new requests. The tech lead reviews new and forwarded
+ * ones, and returns forwarded ones. A requester changes or withdraws their own request while a project manager has it.
+ * The server checks the same rules.
+ */
+export function requestPermissions(data: DashboardData, request: TechRequest) {
+  const me = data.currentUser;
+  const lead = can(me, 'requests.assign'), manager = me.role === 'project_manager';
+  const reviewable = lead ? request.status === 'new' || request.status === 'forwarded' : manager && request.status === 'new';
+  return {
+    edit: reviewable, forward: request.status === 'new' && (manager || lead), assign: lead && reviewable, decline: reviewable,
+    sendBack: lead && request.status === 'forwarded',
+    change: me.role === 'requester' && request.requesterId === me.id && request.status === 'new',
+    internalComments: me.role !== 'requester',
+  };
+}
+/** The open request, by its key in the address. A link to it can be shared like a ticket's. */
+export const REQUEST_PARAM = 'request';
 
 export function routeFor(data: DashboardData, section: string) { return `${data.mode === 'demo' ? '/demo' : ''}/${section}`; }
 /** The query parameter that opens a ticket or bug by its key, so a link can be shared. */
@@ -154,10 +182,10 @@ function sentBack(item: WorkItem, data: DashboardData) {
   return latest?.payload.from === 'in_review' && latest.payload.to === 'in_progress' ? latest : null;
 }
 
-/** Why an item needs someone's attention now, or null. Admins act on reviews; developers act on their own work. */
+/** Why an item needs someone's attention now, or null. The tech lead acts on reviews; developers act on their own work. */
 export function attentionReason(item: WorkItem, data: DashboardData, day = today()): string | null {
   if (isDone(item)) return null;
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   if (item.status === 'in_review') return admin ? 'Ready for your review' : null;
   if (item.status === 'fixed') return admin ? 'Fixed · ready to verify' : null;
   if (item.status === 'blocked') return item.blocker ? `Blocked: ${item.blocker}` : 'Blocked';
@@ -259,7 +287,7 @@ export type TeamTicketInput = Pick<WorkItem, 'title' | 'description' | 'projectI
 export type RequestInput = Pick<TicketRequest, 'title' | 'description' | 'note' | 'projectId' | 'phaseId' | 'estimateHours' | 'dueDate' | 'priority'>;
 export type RequestChanges = Partial<Pick<TicketRequest, 'title' | 'projectId' | 'phaseId' | 'estimateHours' | 'dueDate' | 'priority'>>;
 export type PhaseDraft = { name: string; description: string };
-export type TechRequestInput = Pick<TechRequest, 'title' | 'description' | 'category' | 'priority' | 'neededBy' | 'departmentId'>;
+export type TechRequestInput = Pick<TechRequest, 'title' | 'description' | 'category' | 'tool' | 'priority' | 'neededBy' | 'departmentId'>;
 /** Assigning a request makes a ticket, with an estimate and a date, or a bug, which runs on its fix-by time. */
 export type AssignRequestInput = { id: string; type: WorkItem['type']; assigneeId: string; title: string; projectId: string; phaseId: string | null; priority: WorkItem['priority']; severity?: WorkItem['severity']; estimateHours?: number; dueDate?: string | null; note?: string };
 export type Mutation =
@@ -289,11 +317,16 @@ export type Mutation =
   | ({ action: 'addHoliday' } & Omit<Holiday, 'id'>)
   | { action: 'deleteLeave'; ids: string[] }
   | { action: 'deleteHoliday'; id: string }
-  | ({ action: 'createTechRequest' } & TechRequestInput)
+  | ({ action: 'createTechRequest'; id?: string; tool?: string } & Omit<TechRequestInput, 'tool'>)
   | { action: 'updateTechRequest'; id: string; patch: Partial<TechRequestInput> }
   | { action: 'withdrawTechRequest'; id: string }
+  | { action: 'editTechRequest'; id: string; patch: Partial<TechRequestInput> }
+  | { action: 'forwardTechRequest'; id: string; priority?: TechRequest['priority']; note?: string }
+  | { action: 'returnTechRequest'; id: string; reason: string }
   | ({ action: 'assignTechRequest' } & AssignRequestInput)
   | { action: 'declineTechRequest'; id: string; reason: string }
+  | { action: 'addRequestComment'; requestId: string; body: string; internal?: boolean }
+  | { action: 'deleteRequestComment'; id: string }
   | { action: 'createDepartment'; name: string }
   | { action: 'updateDepartment'; id: string; name?: string; isArchived?: boolean };
 export type MutationFn = (mutation: Mutation, message?: string, options?: { optimistic?: boolean }) => Promise<boolean>;
@@ -309,7 +342,10 @@ export type ModalState =
   | { type: 'teamTicket' }
   | { type: 'extend'; target: ExtendTarget }
   | { type: 'techRequest'; request?: TechRequest }
+  | { type: 'requestAction'; kind: RequestActionKind; request: TechRequest }
   | null;
+/** The forms a request opens: forward to the tech lead, assign to a developer, decline, send back to a project manager, or edit. */
+export type RequestActionKind = 'forward' | 'assign' | 'decline' | 'sendBack' | 'edit';
 /** What more hours do to a ticket: they join the estimate, and the due date moves by them. The server applies the same rule. */
 export function ticketExtension(data: DashboardData, item: WorkItem, hours: number, now = new Date()) {
   return {
@@ -326,8 +362,27 @@ export const ESTIMATE_PRESETS = [{ label: 'Half day', hours: WORKDAY_HOURS / 2 }
 /** A ticket opened with `hours` adds hours even without a date. Without it, a ticket with no date gets its first one. */
 export type ExtendTarget = { kind: 'ticket'; item: WorkItem; hours?: boolean } | { kind: 'project'; project: Project };
 
+/** Why a request can no longer change at this stage. The server sends the same messages. */
+function stageMessage(request: TechRequest) {
+  return request.status === 'new' ? 'This request is still with a project manager.'
+    : request.status === 'forwarded' ? 'A project manager already forwarded this request to the tech lead. Add a comment instead.'
+    : request.status === 'assigned' ? 'This request is already assigned to a developer. Add a comment instead.'
+    : 'This request was declined. Add a comment instead.';
+}
+
 /** Applies a change to demo data in the browser. It follows the server's rules closely enough to try every flow. */
 export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Member): DashboardData {
+  // The same role rules as the server, so the demo never allows what the live workspace refuses.
+  const refused = refusal(actor, mutation.action);
+  if (refused) throw new Error(refused);
+  if (mutation.action === 'createMember' && !manageableRoles(actor).includes(mutation.role)) throw new Error('Only an admin can give this role.');
+  if (mutation.action === 'updateMember') {
+    const target = data.members.find(m => m.id === mutation.id);
+    if (target && !manageableRoles(actor).includes(target.role)) throw new Error(`Only an admin can change ${aRole(target.role)}.`);
+    if (mutation.patch.role && !manageableRoles(actor).includes(mutation.patch.role)) throw new Error('Only an admin can give this role.');
+    if (mutation.id === actor.id && (mutation.patch.isActive === false || (mutation.patch.role && mutation.patch.role !== actor.role))) throw new Error('You cannot turn off your own access or change your own role.');
+  }
+  if (mutation.action === 'saveSettings' && !isOrgAdmin(actor) && [...mutation.settings.requestDomains].sort().join() !== [...data.settings.requestDomains].sort().join()) throw new Error('Only an admin can make this change.');
   const next = structuredClone(data);
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
@@ -343,6 +398,18 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       ...(request ? { requestId: request.id, requestedBy: request.requesterId, ...(hours !== request.hours ? { requestedHours: request.hours } : {}) } : {}),
     }, reason);
     Object.assign(item, { dueDate, estimateHours: estimate, updatedAt: now });
+  }
+  /** A step in a request's history, as the server records it. */
+  function step(request: TechRequest, action: string, payload: Record<string, unknown> = {}, note: string | null = null) {
+    request.history.push({ id: crypto.randomUUID(), action, actorId: actor.id, actorName: actor.name, note, payload, createdAt: now });
+  }
+  function comment(request: TechRequest, body: string, internal: boolean) {
+    request.comments.push({ id: crypto.randomUUID(), requestId: request.id, authorId: actor.id, authorName: actor.name, authorRole: actor.role, body, internal, createdAt: now });
+  }
+  function reviewable(requestId: string) {
+    const request = next.techRequests.find(r => r.id === requestId);
+    if (!request) throw new Error('This request was not found.');
+    return request;
   }
   switch (mutation.action) {
     case 'requestTicket':
@@ -372,7 +439,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
     case 'extendTicket': {
       const item = next.items.find(i => i.id === mutation.itemId);
       if (!item || item.type !== 'task' || !['todo', 'in_progress', 'blocked'].includes(item.status)) throw new Error('Only an open ticket can get more time.');
-      if (actor.role === 'admin') { extend(item, mutation.hours, mutation.reasonCategory, mutation.reason); break; }
+      if (leadsWork(actor)) { extend(item, mutation.hours, mutation.reasonCategory, mutation.reason); break; }
       if (item.estimateHours + mutation.hours > MAX_TICKET_HOURS) throw new Error(`This ticket already has ${item.estimateHours} h. A ticket holds up to ${MAX_TICKET_HOURS} h, so split the extra work into a new ticket.`);
       if (next.dueDateRequests.some(r => r.itemId === item.id && r.status === 'pending')) throw new Error('An extension for this ticket already waits for approval.');
       next.dueDateRequests.unshift({ id, itemId: item.id, requesterId: actor.id, fromDate: item.dueDate, fromEstimate: item.estimateHours, hours: mutation.hours, approvedHours: null, reasonCategory: mutation.reasonCategory, reason: mutation.reason, status: 'pending', reviewedById: null, reviewedAt: null, reviewNote: null, createdAt: now });
@@ -445,7 +512,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       if (patch.status && patch.status !== before.status) {
         if (['in_progress', 'in_review', 'done'].includes(patch.status) && !item.startedAt) item.startedAt = now;
         if (patch.status === 'done') {
-          // Approved work counts on the ticket's date, not on the day the admin approves it.
+          // Approved work counts on the ticket's date, not on the day the tech lead approves it.
           const at = item.type === 'task' ? creditedAt(item.dueDate, next.settings.workdayEnd, next.settings.timezone, new Date(now)).toISOString() : now;
           item.completedAt = at;
           if (item.startedAt && item.startedAt > at) item.startedAt = at;
@@ -471,6 +538,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
     }
     case 'createMember':
       next.members.push({ id, name: mutation.name, email: mutation.email.toLowerCase(), role: mutation.role, capacity: mutation.capacity, isActive: true, image: null, departmentId: mutation.role === 'requester' ? mutation.departmentId ?? null : null, isTeamLead: mutation.role === 'requester' && !!mutation.isTeamLead, ...(mutation.microsoftObjectId ? { microsoftObjectId: mutation.microsoftObjectId } : {}) });
+      log(id, 'member.created', { name: mutation.name, role: mutation.role });
       break;
     case 'updateMember': {
       const found = next.members.find(m => m.id === mutation.id);
@@ -479,6 +547,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       Object.assign(found, mutation.patch);
       // Someone who moves to the tech team leaves their other team.
       if (found.role !== 'requester') Object.assign(found, { departmentId: null, isTeamLead: false });
+      log(found.id, 'member.updated', { changes: mutation.patch });
       break;
     }
     case 'createProject':
@@ -511,6 +580,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
     }
     case 'saveSettings':
       next.settings = mutation.settings;
+      log('settings', 'settings.updated', {});
       break;
     case 'requestLeave': {
       if (actor.role !== 'developer' || !actor.isActive) throw new Error('Only active developers can request leave.');
@@ -524,7 +594,7 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
     case 'approveLeaveRequest':
     case 'declineLeaveRequest':
     case 'withdrawLeaveRequest': {
-      if (mutation.action !== 'withdrawLeaveRequest' && actor.role !== 'admin') throw new Error('Only admins can review leave.');
+      if (mutation.action !== 'withdrawLeaveRequest' && !leadsWork(actor)) throw new Error('Only the tech lead can review leave.');
       const request = next.leaveRequests?.find(r => r.id === mutation.id);
       if (!request || (mutation.action === 'withdrawLeaveRequest' && request.requesterId !== actor.id)) throw new Error('This leave request was not found.');
       if (request.status !== 'pending') throw new Error('This leave request was already reviewed.');
@@ -562,27 +632,54 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       next.holidays = next.holidays.filter(h => h.id !== mutation.id);
       break;
     case 'createTechRequest': {
-      const fields: TechRequestInput = { title: mutation.title, description: mutation.description, category: mutation.category, priority: mutation.priority, neededBy: mutation.neededBy, departmentId: mutation.departmentId };
+      if (actor.role !== 'requester') throw new Error('Requests come from other teams. Add a ticket instead.');
+      const fields: TechRequestInput = { title: mutation.title, description: mutation.description, category: mutation.category, tool: mutation.tool ?? '', priority: mutation.priority, neededBy: mutation.neededBy, departmentId: mutation.departmentId };
       if (!next.departments.some(d => d.id === fields.departmentId && !d.isArchived)) throw new Error('Choose a team from the list.');
       const sequence = Math.max(0, ...next.techRequests.map(r => Number(r.key.split('-').pop()) || 0)) + 1;
-      next.techRequests.unshift({ id, key: requestKey(sequence), requesterId: actor.id, requesterName: actor.name, ...fields, status: 'new', reviewedById: null, reviewedAt: null, reviewNote: null, itemId: null, work: null, createdAt: now, updatedAt: now });
+      const requestId = mutation.id ?? id;
+      next.techRequests.unshift({ id: requestId, key: requestKey(sequence), requesterId: actor.id, requesterName: actor.name, ...fields, status: 'new', forwardedById: null, forwardedAt: null, reviewedById: null, reviewedAt: null, reviewNote: null, itemId: null, work: null, createdAt: now, updatedAt: now, comments: [], history: [], attachmentCount: 0 });
+      step(next.techRequests[0], 'tech_request.created');
       // The first request sets the requester's team, as on the server.
       const requester = next.members.find(m => m.id === actor.id);
       if (requester && !requester.departmentId) requester.departmentId = fields.departmentId;
       break;
     }
-    case 'updateTechRequest': {
-      const request = next.techRequests.find(r => r.id === mutation.id && r.requesterId === actor.id);
-      if (!request || request.status !== 'new') throw new Error('The tech team already reviewed this request.');
+    case 'updateTechRequest':
+    case 'editTechRequest': {
+      const own = mutation.action === 'updateTechRequest';
+      const request = next.techRequests.find(r => r.id === mutation.id && (!own || r.requesterId === actor.id));
+      if (!request) throw new Error('This request was not found.');
+      if (own ? request.status !== 'new' : !requestPermissions({ ...next, currentUser: actor }, request).edit) throw new Error(stageMessage(request));
+      const changes = Object.keys(mutation.patch).filter(key => mutation.patch[key as keyof TechRequestInput] !== request[key as keyof TechRequestInput]);
+      if (!changes.length) break;
       Object.assign(request, mutation.patch, { updatedAt: now });
+      step(request, 'tech_request.updated', { changes, ...(own ? {} : { by: actor.role }) });
       break;
     }
     case 'withdrawTechRequest':
       next.techRequests = next.techRequests.filter(r => !(r.id === mutation.id && r.requesterId === actor.id && r.status === 'new'));
       break;
+    case 'forwardTechRequest': {
+      const request = reviewable(mutation.id);
+      if (!requestPermissions({ ...next, currentUser: actor }, request).forward) throw new Error(stageMessage(request));
+      const note = mutation.note?.trim();
+      const priority = mutation.priority && mutation.priority !== request.priority ? mutation.priority : null;
+      Object.assign(request, { status: 'forwarded', forwardedById: actor.id, forwardedAt: now, updatedAt: now, ...(priority ? { priority } : {}) });
+      if (note) comment(request, note, true);
+      step(request, 'tech_request.forwarded', priority ? { priorityTo: priority } : {}, note ?? null);
+      break;
+    }
+    case 'returnTechRequest': {
+      const request = reviewable(mutation.id);
+      if (!requestPermissions({ ...next, currentUser: actor }, request).sendBack) throw new Error(stageMessage(request));
+      Object.assign(request, { status: 'new', forwardedById: null, forwardedAt: null, updatedAt: now });
+      comment(request, mutation.reason, true);
+      step(request, 'tech_request.returned', {}, mutation.reason);
+      break;
+    }
     case 'assignTechRequest': {
-      const request = next.techRequests.find(r => r.id === mutation.id);
-      if (!request || request.status !== 'new') throw new Error('The tech team already reviewed this request.');
+      const request = reviewable(mutation.id);
+      if (!requestPermissions({ ...next, currentUser: actor }, request).assign) throw new Error(stageMessage(request));
       const bug = mutation.type === 'bug';
       const dueDate = bug ? null : mutation.dueDate ?? null;
       next.items.unshift({
@@ -594,12 +691,32 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       log(id, bug ? 'bug.reported' : 'task.created', { estimateHours: bug ? 0 : mutation.estimateHours, dueDate, techRequestId: request.id });
       Object.assign(request, { status: 'assigned', itemId: id, reviewedById: actor.id, reviewedAt: now, reviewNote: mutation.note?.trim() || null, updatedAt: now });
       request.work = requestWork(next, request);
+      step(request, 'tech_request.assigned', { itemId: id, type: mutation.type, assigneeId: mutation.assigneeId }, mutation.note?.trim() || null);
       break;
     }
     case 'declineTechRequest': {
-      const request = next.techRequests.find(r => r.id === mutation.id);
-      if (!request || request.status !== 'new') throw new Error('The tech team already reviewed this request.');
+      const request = reviewable(mutation.id);
+      if (!requestPermissions({ ...next, currentUser: actor }, request).decline) throw new Error(stageMessage(request));
       Object.assign(request, { status: 'declined', reviewedById: actor.id, reviewedAt: now, reviewNote: mutation.reason, updatedAt: now });
+      step(request, 'tech_request.declined', { by: actor.role }, mutation.reason);
+      break;
+    }
+    case 'addRequestComment': {
+      const request = next.techRequests.find(r => r.id === mutation.requestId);
+      if (!request) throw new Error('This request was not found.');
+      if (mutation.internal && actor.role === 'requester') throw new Error('Your comments are for everyone on the request.');
+      const body = mutation.body.trim();
+      if (!body) throw new Error('Write a comment first.');
+      comment(request, body, !!mutation.internal);
+      request.updatedAt = now;
+      break;
+    }
+    case 'deleteRequestComment': {
+      const request = next.techRequests.find(r => r.comments.some(c => c.id === mutation.id));
+      const found = request?.comments.find(c => c.id === mutation.id);
+      if (!request || !found) throw new Error('This comment was not found.');
+      if (found.authorId !== actor.id && !leadsWork(actor)) throw new Error('You can remove only your own comments.');
+      request.comments = request.comments.filter(c => c.id !== found.id);
       break;
     }
     case 'createDepartment': {
@@ -625,11 +742,22 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
 export function viewAs(data: DashboardData, viewerId: string | null): DashboardData {
   const viewer = viewerId ? data.members.find(m => m.id === viewerId && m.isActive) : undefined;
   if (!viewer || viewer.id === data.currentUser.id) return data;
-  if (viewer.role === 'admin') return { ...data, currentUser: viewer };
+  if (isOrgAdmin(viewer)) return { ...data, currentUser: viewer };
+  if (leadsWork(viewer)) {
+    // A tech lead sees the whole tech team, but not the people in teams outside tech, or changes to those teams.
+    const requesterIds = new Set(data.members.filter(m => m.role === 'requester').map(m => m.id));
+    return { ...data, currentUser: viewer, members: data.members.filter(m => m.role !== 'requester'),
+      activities: data.activities.filter(a => !a.action.startsWith('department.') && !requesterIds.has(a.entityId)) };
+  }
+  const requestsOnly = { members: [viewer], projects: [], phases: [], items: [], requests: [], dueDateRequests: [], activities: [], leaves: [], leaveRequests: [], holidays: [], snapshots: [] };
+  if (viewer.role === 'project_manager') {
+    // Every team's requests, with comments and a summary of the work each became. No tickets, people, or scores.
+    return { ...data, ...requestsOnly, currentUser: viewer, techRequests: data.techRequests.map(r => ({ ...r, work: requestWork(data, r) })) };
+  }
   if (viewer.role === 'requester') {
     // Their own and their team's requests, each with a summary of the work it became. Nothing from the tech team's side.
-    const techRequests = data.techRequests.filter(r => r.requesterId === viewer.id || (!!viewer.departmentId && r.departmentId === viewer.departmentId)).map(r => ({ ...r, work: requestWork(data, r) }));
-    return { ...data, currentUser: viewer, members: [viewer], projects: [], phases: [], items: [], requests: [], dueDateRequests: [], activities: [], leaves: [], leaveRequests: [], holidays: [], snapshots: [], techRequests };
+    const techRequests = data.techRequests.filter(r => r.requesterId === viewer.id || (!!viewer.departmentId && r.departmentId === viewer.departmentId)).map(r => forRequester({ ...r, work: requestWork(data, r) }));
+    return { ...data, ...requestsOnly, currentUser: viewer, techRequests };
   }
   const items = data.items.filter(item => item.assigneeId === viewer.id);
   const requests = data.requests.filter(request => request.requesterId === viewer.id);
@@ -648,7 +776,18 @@ export function viewAs(data: DashboardData, viewerId: string | null): DashboardD
   };
 }
 
-export const DEMO_DATA_KEY = 'urban-gabru-kpi-demo-v9';
+/** History steps a requester reads, as on the server. Returns to a project manager are tech-side housekeeping. */
+const REQUESTER_EVENTS = new Set(['tech_request.created', 'tech_request.updated', 'tech_request.forwarded', 'tech_request.assigned', 'tech_request.declined', 'attachment.added', 'attachment.removed']);
+/** A request as its requester receives it: public comments only, and no tech-side notes in its history. */
+export function forRequester(request: TechRequest): TechRequest {
+  const publicNote = (event: RequestEvent) => event.action === 'tech_request.declined' || event.action === 'tech_request.assigned';
+  return {
+    ...request, comments: request.comments.filter(c => !c.internal),
+    history: request.history.filter(e => REQUESTER_EVENTS.has(e.action)).map(e => ({ ...e, note: publicNote(e) ? e.note : null, payload: Object.fromEntries(Object.entries(e.payload).filter(([key]) => ['name', 'changes', 'type'].includes(key))) })),
+  };
+}
+
+export const DEMO_DATA_KEY = 'urban-gabru-kpi-demo-v11';
 /** The extension waiting for approval on a ticket, if any. */
 export function pendingExtension(data: DashboardData, itemId: string) {
   return data.dueDateRequests.find(request => request.itemId === itemId && request.status === 'pending');
@@ -666,7 +805,7 @@ export function demoSnapshot(initialData: DashboardData) {
     try { demoCacheData = JSON.parse(value) as DashboardData; } catch { demoCacheData = null; }
   }
   const valid = demoCacheData?.mode === 'demo' && demoCacheData.currentUser.id === initialData.currentUser.id
-    && Array.isArray(demoCacheData.techRequests) && Array.isArray(demoCacheData.departments)
+    && Array.isArray(demoCacheData.techRequests) && demoCacheData.techRequests.every(r => Array.isArray(r.comments) && Array.isArray(r.history)) && Array.isArray(demoCacheData.departments)
     && Array.isArray(demoCacheData.phases) && demoCacheData.phases.every(phase => typeof phase.description === 'string')
     && demoCacheData.projects.every(p => Array.isArray(p.memberIds) && typeof p.isAdhoc === 'boolean' && p.targetDate !== undefined && p.primaryMemberId !== undefined);
   return valid ? demoCacheData! : initialData;

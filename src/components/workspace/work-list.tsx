@@ -5,6 +5,7 @@ import clsx from 'clsx';
 import { useSearchParams } from 'next/navigation';
 import { ArrowDownUp, CalendarDays, ChevronDown, CircleHelp, Columns3, List, Plus, Rows3, Search, X } from 'lucide-react';
 import type { DashboardData, WorkItem } from '@/lib/types';
+import { leadsWork } from '@/lib/permissions';
 import { dateKey, getBugKpi, getWeekStart } from '@/lib/kpi';
 import { Avatar, EmptyState, FormCheckbox, FormDateRange, FormField, FormSelect, Kbd, PriorityMark, StatusBadge, StatusIcon } from '@/components/ui';
 import { Button } from '@/components/ui/button';
@@ -47,7 +48,7 @@ export function WorkList({ data, kind, onOpen, onAction, onExtend, onAddHours, o
   const query = useSearchParams();
   const tickets = kind === 'task';
   const statuses: WorkItem['status'][] = tickets ? ticketStatuses : bugStatuses;
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState(() => { const value = query.get('status'); return value && (statuses as string[]).includes(value) ? value : 'all'; });
   const [assignee, setAssignee] = useState(query.get('assignee') ?? 'all');
@@ -115,7 +116,7 @@ export function WorkList({ data, kind, onOpen, onAction, onExtend, onAddHours, o
   const empty = <EmptyState
     bug={kind === 'bug'}
     title={ofKind.length ? 'No matches' : tickets ? 'No tickets yet' : 'No bugs. Nice.'}
-    description={ofKind.length ? 'Try another search or clear your filters.' : tickets ? admin ? 'Add a ticket with a title, project, owner, and estimate.' : 'Request a ticket for new work. Your admin approves it, or assigns tickets to you.' : admin ? 'Log a bug when you find one. Its fix-by time starts at once.' : 'Bugs assigned to you will appear here.'}
+    description={ofKind.length ? 'Try another search or clear your filters.' : tickets ? admin ? 'Add a ticket with a title, project, owner, and estimate.' : 'Request a ticket for new work. Your tech lead approves it, or assigns tickets to you.' : admin ? 'Log a bug when you find one. Its fix-by time starts at once.' : 'Bugs assigned to you will appear here.'}
     action={canAdd && !ofKind.length ? <Button onClick={() => onAdd(kind)}><Plus data-icon="inline-start" size={15} />{tickets ? admin ? 'New ticket' : 'Request ticket' : 'Log bug'}</Button> : undefined}
   />;
 
@@ -200,7 +201,7 @@ export function WorkList({ data, kind, onOpen, onAction, onExtend, onAddHours, o
       </div>
     </Card>
     <p className="list-hint"><CircleHelp size={14} aria-hidden="true" /><span>{tickets
-      ? 'Pick a day, week, or month to see the tickets worked on then and the hours earned. A ticket earns its estimated hours when the admin approves it.'
+      ? 'Pick a day, week, or month to see the tickets worked on then and the hours earned. A ticket earns its estimated hours when the tech lead approves it.'
       : `Bug points: fixed by the fix-by time earns 100, up to twice the target earns 50, later earns 0. Bug points are ${data.settings.bugWeight}% of the score.`}
       {' '}Press <Kbd>/</Kbd> to search{canAdd ? <>, <Kbd>C</Kbd> to add a {tickets ? 'ticket' : 'ticket or bug'}</> : ''}, and <Kbd>{searchKey}</Kbd> to find anything.</span></p>
   </>;

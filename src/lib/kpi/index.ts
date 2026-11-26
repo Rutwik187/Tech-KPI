@@ -166,7 +166,7 @@ function isMember(value: unknown): value is Member | (Omit<Member, 'role'> & { r
   if (!value || typeof value !== 'object') return false;
   const member = value as Record<string, unknown>;
   return typeof member.id === 'string' && typeof member.name === 'string' && typeof member.email === 'string'
-    && (member.role === 'admin' || member.role === 'developer' || member.role === 'user') && typeof member.capacity === 'number'
+    && (member.role === 'admin' || member.role === 'tech_lead' || member.role === 'developer' || member.role === 'user') && typeof member.capacity === 'number'
     && Number.isFinite(member.capacity) && typeof member.isActive === 'boolean'
     && (typeof member.image === 'string' || member.image === null);
 }
@@ -178,7 +178,7 @@ function frozenMemberKpi(value: Record<string, unknown>): MemberKpi | null {
   const numeric = ['capacityHours', 'creditedHours', 'deliveryRaw', 'deliveryScore', 'bugScore', 'bugsScored', 'pendingHours', 'openTasks', 'openBugs'] as const;
   if (numeric.some((field) => typeof value[field] !== 'number' || !Number.isFinite(value[field]))) return null;
   return {
-    memberId: value.memberId, member: { ...value.member, role: value.member.role === 'admin' ? 'admin' : 'developer' },
+    memberId: value.memberId, member: { ...value.member, role: value.member.role === 'admin' || value.member.role === 'tech_lead' ? value.member.role : 'developer' },
     capacityHours: value.capacityHours as number, creditedHours: value.creditedHours as number,
     weekCapacityHours: typeof value.weekCapacityHours === 'number' && Number.isFinite(value.weekCapacityHours) ? value.weekCapacityHours : value.capacityHours as number,
     deliveryRaw: value.deliveryRaw as number, deliveryScore: value.deliveryScore as number,
@@ -259,7 +259,7 @@ function mean(values: number[]): number | null {
   return values.length ? roundHours(values.reduce((sum, value) => sum + value, 0) / values.length) : null;
 }
 
-/** Only developers are scored. Admins manage the work and own no tickets, so they have no score. */
+/** Only developers are scored. The tech lead manages the work and owns no tickets, so they have no score. */
 export function calculateMemberKpi(member: Member, data: DashboardData, weekStart: string, now = new Date()): MemberKpi {
   return baseMemberKpi(member, data, weekStart, now);
 }

@@ -5,6 +5,7 @@ import clsx from 'clsx';
 import { toast } from 'sonner';
 import { AlertTriangle, ArrowDown, CalendarClock, CalendarDays, Check, CheckCheck, CircleDot, Clock3, Flag, Link2, MoreHorizontal, PanelRightOpen, Plus, RotateCcw } from 'lucide-react';
 import type { DashboardData, WorkItem } from '@/lib/types';
+import { leadsWork } from '@/lib/permissions';
 import { getBugKpi, type MemberKpi } from '@/lib/kpi';
 import { Avatar, PriorityMark } from '@/components/ui';
 import { Badge } from '@/components/ui/badge';
@@ -37,13 +38,13 @@ export function MetricCard({ label, value, detail, icon, primary, children }: { 
   </Card>;
 }
 
-/** The one button that moves an item to its next state. Approvals and verification belong to the admin. */
+/** The one button that moves an item to its next state. Approvals and verification belong to the tech lead. */
 export function ItemActions({ item, admin, onAction, busy }: { item: WorkItem; admin: boolean; onAction: OnAction; busy: boolean }) {
   let status: WorkItem['status'] | null = null;
   let label = '';
   let Icon = Check;
   if (item.type === 'task') {
-    // One step to finish. A developer's ticket then waits for review; an admin approves as they complete.
+    // One step to finish. A developer's ticket then waits for review; the tech lead approves as they complete.
     if (['todo', 'in_progress', 'blocked'].includes(item.status)) { status = admin ? 'done' : 'in_review'; label = 'Complete'; }
     else if (item.status === 'in_review' && admin) { status = 'done'; label = 'Approve'; }
   } else {
@@ -55,29 +56,29 @@ export function ItemActions({ item, admin, onAction, busy }: { item: WorkItem; a
     return <span className={clsx('cell-muted next-step-note', isDone(item) && 'next-step-done')}>{waiting}</span>;
   }
   const next = status;
-  // An admin's decision on someone's finished work stands out. Everything else is a quiet step.
+  // The tech lead's decision on someone's finished work stands out. Everything else is a quiet step.
   const decision = next === 'done' && item.status === 'in_review' || next === 'verified';
   return <Button variant={decision ? 'default' : 'outline'} size="sm" type="button" className={clsx('next-step', decision && 'next-step-decision')} disabled={busy} onClick={() => onAction(item, next)}>{label}<Icon data-icon="inline-end" size={13} /></Button>;
 }
 
 /**
- * The owner or an admin may change an open ticket's date. Setting the first one is planning.
- * An admin extends directly with a reason; a developer asks, and may not ask again while one request waits.
+ * The owner or the tech lead may change an open ticket's date. Setting the first one is planning.
+ * The tech lead extends directly with a reason; a developer asks, and may not ask again while one request waits.
  */
 export function canMoveDueDate(item: WorkItem, data: DashboardData) {
   if (item.type !== 'task' || !['todo', 'in_progress', 'blocked'].includes(item.status)) return false;
-  if (data.currentUser.role === 'admin') return true;
+  if (leadsWork(data.currentUser)) return true;
   return item.assigneeId === data.currentUser.id && !(item.dueDate && pendingExtension(data, item.id));
 }
 
-/** Who may add hours to an open ticket. An admin adds them directly; the owner asks, one ask at a time. */
+/** Who may add hours to an open ticket. The tech lead adds them directly; the owner asks, one ask at a time. */
 export function canAddHours(item: WorkItem, data: DashboardData) {
   if (item.type !== 'task' || !['todo', 'in_progress', 'blocked'].includes(item.status)) return false;
-  if (data.currentUser.role === 'admin') return true;
+  if (leadsWork(data.currentUser)) return true;
   return item.assigneeId === data.currentUser.id && !pendingExtension(data, item.id);
 }
 
-/** Shows that an extension waits for the admin, with the extra hours that were asked for. */
+/** Shows that an extension waits for the tech lead, with the extra hours that were asked for. */
 export function PendingExtensionBadge({ data, item }: { data: DashboardData; item: WorkItem }) {
   const request = pendingExtension(data, item.id);
   if (!request) return null;
@@ -86,7 +87,7 @@ export function PendingExtensionBadge({ data, item }: { data: DashboardData; ite
 
 function DueDateButton({ item, data, onExtend }: { item: WorkItem; data: DashboardData; onExtend: (item: WorkItem) => void }) {
   // A developer's extension is a request, so the button says so.
-  const label = !item.dueDate ? 'Set date' : data.currentUser.role === 'admin' ? 'Extend' : 'Ask to extend';
+  const label = !item.dueDate ? 'Set date' : leadsWork(data.currentUser) ? 'Extend' : 'Ask to extend';
   return <Button variant="ghost" size="sm" type="button" className="due-action" aria-label={`${item.dueDate ? 'Extend the date of' : 'Set a date for'} ${item.key}`} onClick={() => onExtend(item)}>
     <CalendarClock data-icon="inline-start" />{label}
   </Button>;
@@ -128,7 +129,7 @@ export async function copyItemLink(data: DashboardData, item: WorkItem) {
 
 /** Every other step for an item, in one menu. The same rules as the details panel decide what shows. */
 export function ItemMenu({ item, data, onOpen, onAction, onExtend, onAddHours, busy, align = 'end' }: { item: WorkItem; data: DashboardData; onOpen?: (id: string) => void; onAction: OnAction; onExtend?: (item: WorkItem) => void; onAddHours?: (item: WorkItem) => void; busy: boolean; align?: 'start' | 'end' }) {
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   const ticket = item.type === 'task';
   const canBlock = ticket && ['todo', 'in_progress'].includes(item.status);
   const canUnblock = ticket && item.status === 'blocked';
@@ -160,7 +161,7 @@ export function TicketCard({ item, data, onOpen, onAction, onExtend, onAddHours,
   const owner = findMember(data, item.assigneeId);
   const phase = item.phaseId ? phaseName(data, item.phaseId) : null;
   const overdue = isCarriedOver(item, data);
-  const admin = data.currentUser.role === 'admin';
+  const admin = leadsWork(data.currentUser);
   return <Card className={clsx('task-card', overdue && 'task-card-overdue', isDone(item) && 'task-card-done')} size="sm" style={{ '--project-color': project?.color ?? 'var(--border)' } as CSSProperties}>
     <div className="task-card-top">
       <span className="item-key">{item.key}</span>
@@ -195,7 +196,7 @@ export function ScoreExplainer({ kpi, data, current }: { kpi: MemberKpi; data: D
       <div className="formula-total"><strong>{percent(kpi.efficiency)}</strong><span>Efficiency</span></div>
     </div>
     <ul className="score-rules">
-      <li><strong>Ticket hours.</strong> {hours(kpi.creditedHours)} h of approved tickets ÷ {hours(kpi.capacityHours)} h at work{current ? ' so far this week' : ''}. A ticket earns its estimate when the admin approves it. This part caps at 100%.</li>
+      <li><strong>Ticket hours.</strong> {hours(kpi.creditedHours)} h of approved tickets ÷ {hours(kpi.capacityHours)} h at work{current ? ' so far this week' : ''}. A ticket earns its estimate when the tech lead approves it. This part caps at 100%.</li>
       <li><strong>Bug points.</strong> Fixed by the fix-by time: 100. Up to twice the target: 50. Later: 0. Targets are {normalTargetHours} working hours, or {criticalTargetHours} for critical bugs. {kpi.bugsScored ? `${kpi.bugsScored} bug${kpi.bugsScored === 1 ? '' : 's'} scored this week.` : 'No bugs scored this week, so you keep full bug points.'}</li>
       <li><strong>Hours at work.</strong> Weekly hours minus leave and holidays. Time off lowers the hours, never the score.</li>
     </ul>

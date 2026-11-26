@@ -50,7 +50,7 @@
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
   --radius: 0.5rem;
-  /* Ticket and bug states. Waiting for the admin (in review, fixed) shares one colour. */
+  /* Ticket and bug states. Waiting for the tech lead (in review, fixed) shares one colour. */
   --status-todo: oklch(0.67 0.012 266);
   --status-progress: oklch(0.72 0.155 68);
   --status-blocked: oklch(0.6 0.21 25);
@@ -647,9 +647,32 @@
 .linked-item>svg { color:var(--muted-foreground); }
 .attachments-section .detail-section-heading { min-height:32px; }
 .attachment-help { font-size:12.5px; color:var(--muted-foreground); }
-.attachment-row { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:8px; margin-top:8px; color:var(--muted-foreground); }
-.attachment-row:hover { background:var(--row-hover); color:var(--foreground); }
-.attachment-row>span { flex:1; font-size:12.5px; overflow:hidden; text-overflow:ellipsis; }
+.attachment-help+.attachment-help,.attachment-list+.attachment-help { margin-top:8px; }
+/* Files on a ticket, a bug, or a request. Drop files anywhere on the panel; it highlights while a file is over it. */
+.attachments-section { border-radius:10px; transition:background-color .15s, box-shadow .15s; }
+.attachments-section.is-dragging,.file-picker.is-dragging .attachment-drop { background:color-mix(in oklab, var(--primary) 7%, transparent); box-shadow:0 0 0 2px color-mix(in oklab, var(--primary) 45%, transparent); }
+.attachment-list { display:flex; flex-direction:column; border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+.attachment-list+.attachment-list { margin-top:8px; }
+.attachment-item { display:flex; align-items:center; gap:10px; min-width:0; padding:8px 8px 8px 10px; }
+.attachment-item+.attachment-item { border-top:1px solid var(--border); }
+.attachment-item.is-uploading { color:var(--muted-foreground); }
+.attachment-icon,.attachment-thumb { display:grid; place-items:center; width:36px; height:36px; flex-shrink:0; border-radius:7px; background:var(--muted); color:var(--muted-foreground); overflow:hidden; }
+.attachment-icon svg { width:17px; height:17px; }
+.attachment-thumb img { width:100%; height:100%; object-fit:cover; }
+.attachment-text { display:flex; flex-direction:column; flex:1; min-width:0; }
+.attachment-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:550; color:var(--foreground); }
+a.attachment-name:hover { text-decoration:underline; text-underline-offset:2px; }
+.attachment-meta { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11.5px; color:var(--muted-foreground); }
+.attachment-actions { display:flex; align-items:center; gap:2px; flex-shrink:0; }
+.attachment-drop { display:flex; align-items:center; gap:12px; width:100%; padding:14px; border:1.5px dashed color-mix(in oklab, var(--muted-foreground) 35%, transparent); border-radius:10px; text-align:left; color:var(--muted-foreground); transition:border-color .15s, background-color .15s; }
+.attachment-drop:hover:not(:disabled) { border-color:var(--primary); background:color-mix(in oklab, var(--primary) 4%, transparent); }
+.attachment-drop:disabled { opacity:.6; cursor:not-allowed; }
+.attachment-drop>svg { width:20px; height:20px; flex-shrink:0; }
+.attachment-drop span { display:flex; flex-direction:column; gap:2px; font-size:12px; line-height:1.45; }
+.attachment-drop strong { font-size:12.5px; font-weight:550; color:var(--foreground); }
+.file-picker { display:flex; flex-direction:column; gap:8px; }
+.request-files-note { display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin:-8px 0 14px; font-size:12.5px; color:var(--muted-foreground); }
+.request-files-note .h-8,.request-files-note [data-slot="button"] { height:auto; padding:0; }
 .activity-section { padding-top:18px; margin-top:6px; border-top:1px solid var(--border); }
 .timeline-entry { display:flex; gap:12px; position:relative; padding-bottom:16px; }
 .timeline-entry:not(:last-child)::before { content:""; position:absolute; left:11px; top:24px; bottom:2px; width:1px; background:var(--border); }
@@ -776,6 +799,39 @@
 .mini-metric-icon { display:grid; place-items:center; width:32px; height:32px; flex-shrink:0; border-radius:9px; background:var(--accent); color:var(--primary); }
 .mini-metric-icon svg { width:16px; height:16px; }
 .approvals-strip { grid-template-columns:repeat(4,minmax(0,1fr)); }
+/* The organisation at a glance: request numbers, open requests by team, and people by role. */
+.org-overview { margin-bottom:20px; }
+.org-body { padding:2px 18px 18px; }
+.org-tiles { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:1px; overflow:hidden; border-radius:var(--radius-lg); background:var(--border); box-shadow:0 0 0 1px var(--border); }
+.org-tiles>div { display:flex; flex-direction:column; gap:6px; padding:12px 14px; background:var(--card); }
+.org-tiles strong { font-size:22px; font-weight:650; letter-spacing:-.03em; font-variant-numeric:tabular-nums; }
+.org-tiles>div>span:last-child { color:var(--muted-foreground); font-size:12px; line-height:1.4; }
+.org-columns { display:grid; grid-template-columns:minmax(0,3fr) minmax(0,2fr); gap:24px; margin-top:18px; }
+.org-columns h3 { display:flex; align-items:center; gap:7px; margin-bottom:10px; font-size:13px; font-weight:600; }
+.org-columns h3 svg { width:15px; height:15px; color:var(--muted-foreground); }
+.org-team-list,.org-people-list { display:flex; flex-direction:column; gap:8px; margin:0; padding:0; list-style:none; }
+.org-team-list li { display:grid; grid-template-columns:minmax(120px,180px) minmax(0,1fr) 28px; align-items:center; gap:10px; font-size:12.5px; }
+.org-team-list a { text-align:right; font-weight:600; font-variant-numeric:tabular-nums; color:var(--foreground); }
+.org-team-list a:hover { color:var(--primary); }
+.org-bar { height:6px; border-radius:999px; background:var(--muted); overflow:hidden; }
+.org-bar i { display:block; height:100%; border-radius:999px; background:var(--primary); }
+.org-people-list li { display:flex; justify-content:space-between; padding-bottom:6px; border-bottom:1px solid var(--border); font-size:12.5px; color:var(--muted-foreground); }
+.org-people-list strong { color:var(--foreground); font-variant-numeric:tabular-nums; }
+.lead-tag { margin-left:6px; color:var(--primary); font-size:11px; font-weight:600; }
+.people-table td>.role-tag+.lead-tag { display:inline-block; }
+/* The activity log, one day at a time. */
+.activity-days { display:flex; flex-direction:column; gap:18px; padding:4px 18px 18px; }
+.activity-day h3 { position:sticky; top:0; margin-bottom:6px; padding:6px 0; font-size:12px; font-weight:600; color:var(--muted-foreground); background:var(--card); text-transform:uppercase; letter-spacing:.04em; }
+.activity-day ol { display:flex; flex-direction:column; margin:0; padding:0; list-style:none; }
+.activity-line { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:start; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); }
+.activity-line:last-child { border-bottom:0; }
+.activity-line p { font-size:13px; line-height:1.55; color:var(--muted-foreground); }
+.activity-line p strong { color:var(--foreground); font-weight:600; }
+.activity-line blockquote { margin-top:4px; padding:6px 10px; border-left:2px solid var(--primary); border-radius:0 6px 6px 0; background:var(--muted); font-size:12.5px; color:var(--foreground); }
+.activity-line time { font-size:12px; color:var(--muted-foreground); font-variant-numeric:tabular-nums; padding-top:2px; }
+.activity-target { height:auto !important; padding:0 !important; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
+.activity-target-text { color:var(--foreground); font-weight:500; }
+.activity-more { display:flex; align-items:center; gap:12px; padding:0 18px 18px; font-size:12.5px; color:var(--muted-foreground); }
 .request-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:12px; padding:2px 18px 18px; }
 .request-list-compact { grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); }
 .request-card { display:flex; flex-direction:column; gap:9px; padding:14px; border:1px solid var(--border); border-radius:var(--radius-xl); background:var(--card); }
@@ -828,7 +884,8 @@
 .dark .team-tag>i { background:oklch(0.72 0.13 var(--team-hue)); }
 .stage-badge { display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--stage-color); }
 .stage-badge>i { width:6px; height:6px; border-radius:50%; background:currentColor; }
-.stage-waiting { --stage-color:var(--status-review); }
+.stage-with_pm { --stage-color:var(--status-review); }
+.stage-with_lead { --stage-color:var(--info-foreground); }
 .stage-assigned { --stage-color:var(--muted-foreground); }
 .stage-in_progress { --stage-color:var(--warning-foreground); }
 .stage-checking { --stage-color:var(--info-foreground); }
@@ -846,7 +903,7 @@
 .tech-request-details a,.request-context a { color:var(--primary); text-decoration:underline; text-underline-offset:2px; overflow-wrap:anywhere; }
 .details-toggle { height:auto; padding:0; font-size:12px; }
 .request-progress { display:flex; flex-direction:column; gap:7px; padding:10px 12px; border-radius:8px; background:var(--muted); }
-.request-steps { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); margin:0; padding:0; list-style:none; }
+.request-steps { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); margin:0; padding:0; list-style:none; }
 /* Each step is a dot with its label under it. A line joins each dot to the one before it. */
 .request-steps li { position:relative; display:flex; flex-direction:column; align-items:center; gap:4px; min-width:0; font-size:11px; color:var(--muted-foreground); text-align:center; }
 .request-steps li::before { content:""; position:absolute; top:7px; left:calc(-50% + 11px); right:calc(50% + 11px); height:2px; border-radius:2px; background:color-mix(in oklab, var(--muted-foreground) 25%, transparent); }
@@ -952,6 +1009,43 @@
 .access-invited>i { background:var(--warning-foreground); }
 .role-cell { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
 .role-tag { gap:4px; }
+.role-tech-lead { color:var(--info-foreground); border-color:color-mix(in oklab, var(--info-foreground) 30%, var(--border)); }
+.role-requester { color:var(--muted-foreground); }
+.role-project-manager { color:var(--status-review); border-color:color-mix(in oklab, var(--status-review) 30%, var(--border)); }
+/* A request's file and comment counts, its tool, and who forwarded it. */
+.request-counts { display:inline-flex; align-items:center; gap:8px; margin-left:auto; }
+.request-counts button { display:inline-flex; align-items:center; gap:3px; border-radius:6px; padding:1px 4px; font-size:12px; font-variant-numeric:tabular-nums; color:var(--muted-foreground); }
+.request-counts button:hover { background:var(--row-hover); color:var(--foreground); }
+.request-counts svg { width:13px; height:13px; }
+.request-tool { padding:1px 7px; border-radius:999px; background:var(--muted); color:var(--foreground); font-weight:500; }
+.request-forwarded { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--info-foreground); }
+.request-forwarded svg { width:13px; height:13px; }
+.request-context-counts { font-size:12px; color:var(--muted-foreground); }
+.request-drawer-body .detail-status-row .request-category { display:inline-flex; align-items:center; gap:4px; font-size:12px; }
+.request-drawer-body .detail-status-row .request-category svg { width:13px; height:13px; }
+.request-drawer-body .detail-status-row { margin-bottom:14px; }
+.request-drawer-body .request-progress,.request-drawer-body>.request-review { margin-bottom:18px; }
+.request-drawer-body .detail-description .request-description { white-space:pre-wrap; overflow-wrap:anywhere; font-size:13.5px; line-height:1.75; }
+.request-drawer-body .detail-description a { color:var(--primary); text-decoration:underline; text-underline-offset:2px; }
+/* The conversation on a request. A comment only the tech team sees has a tinted edge. */
+.comment-list { display:flex; flex-direction:column; gap:12px; margin:0 0 12px; padding:0; list-style:none; }
+.comment { display:flex; gap:10px; }
+.comment-body { flex:1; min-width:0; padding:9px 12px; border:1px solid var(--border); border-radius:10px; background:var(--card); }
+.comment.is-internal .comment-body { border-color:color-mix(in oklab, var(--warning-foreground) 30%, var(--border)); background:color-mix(in oklab, var(--warning-foreground) 5%, var(--card)); }
+.comment-meta { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; font-size:12px; color:var(--muted-foreground); }
+.comment-meta strong { font-weight:600; color:var(--foreground); }
+.comment-meta time { opacity:.85; }
+.internal-tag { gap:3px; height:20px; font-size:11px; color:var(--warning-foreground); border-color:color-mix(in oklab, var(--warning-foreground) 35%, var(--border)); }
+.internal-tag svg { width:11px; height:11px; }
+.comment-text { margin-top:4px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; line-height:1.6; color:var(--foreground); }
+.comment-text a { color:var(--primary); text-decoration:underline; text-underline-offset:2px; }
+.comment-remove { height:auto !important; padding:0 !important; margin-top:4px; font-size:12px; color:var(--muted-foreground); }
+.comment-body .confirm-inline { margin-top:6px; font-size:12px; }
+.comment-form { display:flex; flex-direction:column; gap:8px; }
+.comment-form-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; }
+.comment-form-actions [type="submit"] { margin-left:auto; }
+.internal-toggle { display:inline-flex; align-items:center; gap:7px; font-size:12.5px; font-weight:500; cursor:pointer; }
+.comment-form-hint { font-size:12px; color:var(--muted-foreground); }
 .role-admin { color:var(--accent-foreground); border-color:color-mix(in oklab, var(--primary) 30%, var(--border)); }
 .availability-list { padding:0 18px 8px; }
 .availability-row { display:flex; align-items:center; gap:12px; padding:11px 0; border-top:1px solid var(--border); }
@@ -1320,7 +1414,9 @@ button.project-title svg { width:15px; height:15px; color:var(--muted-foreground
   .standup-title-field,.standup-with-phases>.standup-title-field { grid-column:1/-1; grid-row:1; }
   .standup-quick-form>[data-slot="button"] { grid-column:1/-1; }
   .standup-person-heading,.standup-capacity,.standup-task { padding-inline:14px; }
-  .team-overview-strip,.approvals-strip { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .team-overview-strip,.approvals-strip,.org-tiles { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .org-columns { grid-template-columns:minmax(0,1fr); }
+  .org-team-list li { grid-template-columns:minmax(0,1fr) 72px 24px; }
   .team-overview-strip>div { flex-wrap:wrap; padding:12px; gap:6px 8px; }
   .team-overview-strip strong { font-size:20px; }
   .team-overview-strip>div>span:last-child { flex-basis:100%; font-size:11.5px; }

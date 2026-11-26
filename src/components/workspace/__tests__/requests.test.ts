@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDemoData } from '@/lib/demo';
 import type { TechRequest, WorkItem } from '@/lib/types';
-import { mutateDemo, requestStage, requestWork, roleLabel, viewAs } from '../lib';
+import { mutateDemo, requestPermissions, requestStage, requestWork, roleLabel, viewAs } from '../lib';
 
 const demo = () => createDemoData(new Date('2026-11-04T12:00:00+05:30'));
 const ask = { title: 'Size chart on product pages', description: 'Customers ask which size fits. Add a size chart under the size picker.', category: 'feature', priority: 'medium', neededBy: null } as const;
@@ -17,7 +17,8 @@ describe('requests from other teams', () => {
     expect(requestStage(withStatus('blocked'), request)).toBe('in_progress');
     expect(requestStage(withStatus('in_review'), request)).toBe('checking');
     expect(requestStage(withStatus('done'), request)).toBe('done');
-    expect(requestStage(data, { ...request, status: 'new' })).toBe('waiting');
+    expect(requestStage(data, { ...request, status: 'new' })).toBe('with_pm');
+    expect(requestStage(data, { ...request, status: 'forwarded' })).toBe('with_lead');
     expect(requestStage(data, { ...request, status: 'declined' })).toBe('declined');
   });
 
@@ -53,13 +54,13 @@ describe('requests from other teams', () => {
     expect(view.techRequests.every(r => r.itemId && own.has(r.itemId))).toBe(true);
   });
 
-  it('remembers a requester’s team from their first request, and only the admin decides on it', () => {
+  it('remembers a requester’s team from their first request, and only the tech lead assigns it', () => {
     let data = demo();
     data.members = data.members.map(m => m.id === 'demo-priya' ? { ...m, departmentId: null } : m);
     const priya = data.members.find(m => m.id === 'demo-priya')!;
     data = mutateDemo(data, { action: 'createTechRequest', ...ask, departmentId: 'demo-team-1' }, priya);
     const raised = data.techRequests.find(r => r.title === ask.title)!;
-    expect(raised).toMatchObject({ status: 'new', requesterId: 'demo-priya', requesterName: 'Priya Kapoor', key: 'REQ-008' });
+    expect(raised).toMatchObject({ status: 'new', requesterId: 'demo-priya', requesterName: 'Priya Kapoor', key: 'REQ-009', tool: '' });
     expect(data.members.find(m => m.id === 'demo-priya')?.departmentId).toBe('demo-team-1');
 
     const admin = data.currentUser;
@@ -119,5 +120,81 @@ describe('requests from other teams', () => {
     data = mutateDemo(data, { action: 'createMember', name: 'Dev Rao', email: 'dev@example.com', role: 'developer', capacity: 33, isTeamLead: true }, admin);
     expect(data.members.find(m => m.email === 'dev@example.com')).toMatchObject({ departmentId: null, isTeamLead: false });
     expect(roleLabel(data, { ...ira, role: 'requester', departmentId: null, isTeamLead: false })).toBe('No team yet');
+  });
+
+  it('passes a request from the project manager to the tech lead, and keeps each step in its history', () => {
+    let data = demo();
+    const priya = data.members.find(m => m.id === 'demo-priya')!;
+    const kavya = data.members.find(m => m.id === 'demo-kavya')!;
+    const lead = data.currentUser;
+    data = mutateDemo(data, { action: 'createTechRequest', ...ask, tool: 'Shopify', departmentId: 'demo-team-1' }, priya);
+    const id = data.techRequests.find(r => r.title === ask.title)!.id;
+    const now = () => data.techRequests.find(r => r.id === id)!;
+    expect(requestStage(data, now())).toBe('with_pm');
+    // A project manager cannot assign. They correct the request, then forward it with a note only the tech side reads.
+    expect(() => mutateDemo(data, { action: 'assignTechRequest', id, type: 'task', assigneeId: 'demo-aarav', title: ask.title, projectId: 'demo-commerce', phaseId: null, priority: 'medium', estimateHours: 4, dueDate: null }, kavya)).toThrow();
+    data = mutateDemo(data, { action: 'editTechRequest', id, patch: { title: 'Size chart under the size picker' } }, kavya);
+    data = mutateDemo(data, { action: 'forwardTechRequest', id, priority: 'high', note: 'Finance agreed. Start with the shirts.' }, kavya);
+    expect(now()).toMatchObject({ status: 'forwarded', priority: 'high', forwardedById: 'demo-kavya', title: 'Size chart under the size picker' });
+    expect(requestStage(data, now())).toBe('with_lead');
+    expect(now().comments).toMatchObject([{ body: 'Finance agreed. Start with the shirts.', internal: true, authorRole: 'project_manager' }]);
+    // Once forwarded, the requester and the project manager can no longer change it. Comments still work.
+    expect(() => mutateDemo(data, { action: 'updateTechRequest', id, patch: { priority: 'urgent' } }, priya)).toThrow('already forwarded');
+    expect(() => mutateDemo(data, { action: 'declineTechRequest', id, reason: 'Not now' }, kavya)).toThrow('already forwarded');
+    data = mutateDemo(data, { action: 'addRequestComment', requestId: id, body: 'The size chart images are in the shared drive.' }, priya);
+    // The tech lead sends it back with a reason, and the project manager forwards it again.
+    data = mutateDemo(data, { action: 'returnTechRequest', id, reason: 'Which product types need it?' }, lead);
+    expect(now()).toMatchObject({ status: 'new', forwardedById: null, forwardedAt: null });
+    data = mutateDemo(data, { action: 'forwardTechRequest', id }, kavya);
+    data = mutateDemo(data, { action: 'assignTechRequest', id, type: 'task', assigneeId: 'demo-aarav', title: now().title, projectId: 'demo-commerce', phaseId: null, priority: 'high', estimateHours: 6, dueDate: '2026-11-09', note: 'Aarav starts Monday.' }, lead);
+    expect(requestStage(data, now())).toBe('assigned');
+    expect(now().history.map(e => e.action)).toEqual(['tech_request.created', 'tech_request.updated', 'tech_request.forwarded', 'tech_request.returned', 'tech_request.forwarded', 'tech_request.assigned']);
+
+    // The requester sees their own words and the public steps, never the tech side's notes.
+    const view = viewAs(data, 'demo-priya').techRequests.find(r => r.id === id)!;
+    expect(view.comments.map(c => c.body)).toEqual(['The size chart images are in the shared drive.']);
+    expect(view.history.map(e => e.action)).toEqual(['tech_request.created', 'tech_request.updated', 'tech_request.forwarded', 'tech_request.forwarded', 'tech_request.assigned']);
+    expect(view.history.find(e => e.action === 'tech_request.forwarded')?.note).toBeNull();
+    expect(view.history.at(-1)?.note).toBe('Aarav starts Monday.');
+  });
+
+  it('lets the tech lead act on a new request when no project manager has reviewed it', () => {
+    let data = demo();
+    const request = data.techRequests.find(r => r.status === 'new')!;
+    const lead = data.currentUser;
+    expect(requestPermissions(data, request)).toMatchObject({ assign: true, decline: true, edit: true, sendBack: false });
+    expect(() => mutateDemo(data, { action: 'returnTechRequest', id: request.id, reason: 'Check it' }, lead)).toThrow('still with a project manager');
+    data = mutateDemo(data, { action: 'declineTechRequest', id: request.id, reason: 'Already possible in the CMS.' }, lead);
+    expect(requestStage(data, data.techRequests.find(r => r.id === request.id)!)).toBe('declined');
+  });
+
+  it('gives a project manager every team’s requests and nothing from the tech team', () => {
+    const data = demo();
+    const view = viewAs(data, 'demo-kavya');
+    expect(view.currentUser.role).toBe('project_manager');
+    expect(view.techRequests.map(r => r.id)).toEqual(data.techRequests.map(r => r.id));
+    expect(view).toMatchObject({ items: [], projects: [], leaves: [], requests: [], activities: [] });
+    expect(view.members.map(m => m.id)).toEqual(['demo-kavya']);
+    // The tech side's notes come along for a project manager.
+    expect(view.techRequests.some(r => r.comments.some(c => c.internal))).toBe(true);
+    const forwarded = view.techRequests.find(r => r.status === 'forwarded')!;
+    const fresh = view.techRequests.find(r => r.status === 'new')!;
+    expect(requestPermissions(view, fresh)).toMatchObject({ forward: true, decline: true, edit: true, assign: false, sendBack: false });
+    expect(requestPermissions(view, forwarded)).toMatchObject({ forward: false, decline: false, edit: false, assign: false });
+    expect(roleLabel(data, view.currentUser)).toBe('Project manager');
+  });
+
+  it('keeps tech-side comments from requesters, and lets people remove only their own comments', () => {
+    let data = demo();
+    const neha = data.members.find(m => m.id === 'demo-neha')!;
+    const kavya = data.members.find(m => m.id === 'demo-kavya')!;
+    const request = data.techRequests.find(r => r.requesterId === 'demo-neha' && r.comments.length)!;
+    expect(viewAs(data, 'demo-neha').techRequests.find(r => r.id === request.id)!.comments.every(c => !c.internal)).toBe(true);
+    expect(() => mutateDemo(data, { action: 'addRequestComment', requestId: request.id, body: 'Secret', internal: true }, neha)).toThrow();
+    data = mutateDemo(data, { action: 'addRequestComment', requestId: request.id, body: 'Monday 10 am is the launch.' }, neha);
+    const added = data.techRequests.find(r => r.id === request.id)!.comments.at(-1)!;
+    expect(() => mutateDemo(data, { action: 'deleteRequestComment', id: added.id }, kavya)).toThrow('only your own');
+    data = mutateDemo(data, { action: 'deleteRequestComment', id: added.id }, data.currentUser);
+    expect(data.techRequests.find(r => r.id === request.id)!.comments.some(c => c.id === added.id)).toBe(false);
   });
 });
