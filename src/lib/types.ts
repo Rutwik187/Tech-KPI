@@ -10,7 +10,7 @@ export type Priority = 'low' | 'medium' | 'high' | 'urgent';
 export type Severity = 'normal' | 'critical';
 /** Why a due date or project target moved. Estimate revisions always use `scope_change`. */
 export type ExtensionReason = 'blocked_dependency' | 'scope_change' | 'underestimated' | 'other';
-export interface Member { id: string; name: string; email: string; role: Role; image: string | null; capacity: number; isActive: boolean; joinedOn?: string; microsoftObjectId?: string; departmentId?: string | null; isTeamLead?: boolean; }
+export interface Member { id: string; name: string; email: string; role: Role; image: string | null; capacity: number; isActive: boolean; joinedOn?: string; microsoftObjectId?: string; departmentId?: string | null; isTeamLead?: boolean; emailNotifications?: boolean; }
 /** `targetDate` is the current deadline. `originalTargetDate` is the first one set, so extensions stay visible. */
 export interface Project { id: string; name: string; color: string; description: string; isArchived: boolean; memberIds: string[]; primaryMemberId: string | null; isAdhoc: boolean; startDate: string | null; targetDate: string | null; originalTargetDate: string | null; }
 export interface Phase { id: string; projectId: string; name: string; description: string; position: number; }
@@ -51,7 +51,19 @@ export interface TechRequest {
   reviewedById: string | null; reviewedAt: string | null; reviewNote: string | null;
   itemId: string | null; work: RequestWork | null; createdAt: string; updatedAt: string;
   comments: RequestComment[]; history: RequestEvent[]; attachmentCount: number;
+  /** The plan's working draft. Only the tech side receives it; a requester sees what was sent. */
+  plan: RequestPlan | null;
+  /** The last version sent to the requester, which everyone who can see the request receives. */
+  sharedPlan: SharedPlan | null;
 }
+/** One item on a request's feature list. */
+export interface PlanFeature { id: string; text: string }
+/** One step on a request's timeline, such as "Design ready" on a date. */
+export interface PlanMilestone { id: string; title: string; date: string }
+/** What a project manager plans for a request: the features, the timeline, and notes for the requester. */
+export interface RequestPlan { features: PlanFeature[]; timeline: PlanMilestone[]; notes: string }
+/** A plan as sent to the requester. Each send has the next version. The requester can confirm it. */
+export interface SharedPlan extends RequestPlan { version: number; sharedAt: string; sharedById: string; sharedByName: string; confirmedAt: string | null; confirmedById: string | null }
 /** A file on a ticket, a bug, or a request, as the attachments endpoint returns it. Links expire after a few minutes. */
 export interface Attachment { id: string; name: string; size: number; mimeType: string; createdAt: string; uploadedById: string; uploadedByName: string; canDelete: boolean; url: string; viewUrl: string | null; }
 /** The ticket or bug a request became, as its requester may see it. */

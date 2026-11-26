@@ -87,6 +87,8 @@ export const ACTION_CAPABILITY = {
   editTechRequest: ['requests.review'], forwardTechRequest: ['requests.review'], declineTechRequest: ['requests.review'],
   assignTechRequest: ['requests.assign'], returnTechRequest: ['requests.assign'],
   addRequestComment: null, deleteRequestComment: null,
+  savePlan: ['requests.review'], sharePlan: ['requests.review'], confirmPlan: ['requests.raise'],
+  updateMyPreferences: null,
 } as const satisfies Record<string, readonly Capability[] | null>;
 export type ActionName = keyof typeof ACTION_CAPABILITY;
 /** Whether this person's role may make this kind of change at all. */

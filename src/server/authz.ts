@@ -29,6 +29,7 @@ export async function requireSession(headers: Headers): Promise<Member> {
     role: memberRole(identity.user.role), image: identity.user.image,
     capacity: identity.profile?.capacity ?? (leadsWork(memberRole(identity.user.role)) ? 10 : 33), isActive: true,
     joinedOn: identity.profile?.joinedOn, departmentId: identity.profile?.departmentId ?? null, isTeamLead: identity.profile?.isTeamLead ?? false,
+    emailNotifications: identity.profile?.emailNotifications ?? true,
   };
 }
 /** Refuses the change unless this person's role has the capability. See `src/lib/permissions.ts`. */

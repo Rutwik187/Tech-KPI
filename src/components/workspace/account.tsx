@@ -5,14 +5,15 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { LoaderCircle, LogOut, ShieldCheck } from 'lucide-react';
 import type { DashboardData } from '@/lib/types';
-import { findDepartment, roleLabel } from './lib';
+import { findDepartment, roleLabel, type MutationFn } from './lib';
+import { Switch } from '@/components/ui/switch';
 import { authClient } from '@/lib/auth-client';
 import { Avatar, Panel } from '@/components/ui';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 
-export function Account({ data }: { data: DashboardData }) {
+export function Account({ data, mutate, busy: saving }: { data: DashboardData; mutate: MutationFn; busy: boolean }) {
   const [busy, setBusy] = useState(false);
   const router = useRouter();
   const user = data.currentUser;
@@ -43,6 +44,13 @@ export function Account({ data }: { data: DashboardData }) {
         : <div className="profile-fact"><span>Hours per week</span><strong>{user.capacity} hours</strong></div>}
       <div className="profile-fact"><span>Workspace</span><strong>Urban Gabru</strong></div>
       <Button variant="outline" disabled={busy} onClick={signOut}>{busy ? <LoaderCircle data-icon="inline-start" size={15} className="spin" /> : <LogOut data-icon="inline-start" size={15} />}Sign out</Button>
+    </Panel>
+    <Panel title="Emails" className="account-emails">
+      <label className="email-toggle">
+        <span><strong>Email me about requests</strong><span>{requester ? 'When your request moves forward, when a plan is ready for you, and when someone writes to you.' : 'When a request needs you, when it moves forward, and when someone writes to you.'}</span></span>
+        <Switch checked={user.emailNotifications !== false} disabled={saving} onCheckedChange={on => void mutate({ action: 'updateMyPreferences', emailNotifications: on }, on ? 'You will get request emails.' : 'Request emails are off. You still see everything here.')} aria-label="Email me about requests" />
+      </label>
+      <p className="form-help">Emails go to {user.email}.</p>
     </Panel>
     <Panel title="Microsoft work account">
       <div className="account-access">

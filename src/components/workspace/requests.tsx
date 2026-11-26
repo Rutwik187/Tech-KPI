@@ -5,8 +5,8 @@ import Link from 'next/link';
 import clsx from 'clsx';
 import { toast } from 'sonner';
 import { useSearchParams } from 'next/navigation';
-import { ArrowUpRight, Briefcase, Bug, CalendarDays, ChartColumn, Check, CheckCheck, CircleHelp, Clock3, Forward, Hourglass, Inbox, KeyRound, Link2, ListTodo, Lock, MessageSquareText, Paperclip, Pencil, PencilLine, Plus, Search, Send, Sparkles, Trash2, TriangleAlert, Undo2, Wrench, X } from 'lucide-react';
-import type { DashboardData, Member, RequestCategory, RequestComment, RequestEvent, TechRequest, WorkItem } from '@/lib/types';
+import { ArrowUpRight, Briefcase, Bug, CalendarDays, ChartColumn, Check, CheckCheck, CircleHelp, Clock3, Forward, Hourglass, Inbox, KeyRound, Link2, ListChecks, ListTodo, Lock, MessageSquareText, Paperclip, Pencil, PencilLine, Plus, Search, Send, Sparkles, Trash2, TriangleAlert, Undo2, Wrench, X } from 'lucide-react';
+import type { DashboardData, Member, RequestCategory, RequestComment, RequestEvent, RequestPlan, TechRequest, WorkItem } from '@/lib/types';
 import { isOrgAdmin, leadsWork } from '@/lib/permissions';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
 import { addWorkingHours, dateKey, getWorkCalendar } from '@/lib/kpi';
@@ -22,9 +22,10 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/in
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { activeDepartments, categoryLabel, displayDate, displayDateTime, findDepartment, findMember, firstName, OPEN_STAGES, priorities, REQUEST_PARAM, requestCategories, requestPermissions, requestStage, requestWork, roleNames, routeFor, stageLabels, today, type MutationFn, type RequestActionKind, type RequestStage, type TechRequestInput, type WorkClassification } from './lib';
+import { activeDepartments, requesterCategories, categoryLabel, displayDate, displayDateTime, findDepartment, findMember, firstName, OPEN_STAGES, priorities, REQUEST_PARAM, requestCategories, requestPermissions, requestStage, requestWork, roleNames, routeFor, stageLabels, today, type MutationFn, type RequestActionKind, type RequestStage, type TechRequestInput, type WorkClassification } from './lib';
 import { ClassificationFields, EstimateField, FormChoice, FormFooter } from './forms';
 import { AttachmentPanel, FilePicker, uploadFiles } from './attachments';
+import { PlanSection, PlanView } from './plan';
 import { plural } from './timeline';
 
 const PRIORITY_OPTIONS = [{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }, { value: 'urgent', label: 'Urgent' }];
@@ -343,6 +344,8 @@ function eventText(data: DashboardData, request: TechRequest, event: RequestEven
       return `assigned it to ${owner ?? request.work?.assigneeName ?? 'a developer'}${event.payload.type === 'bug' ? ' as a bug' : ''}`;
     }
     case 'tech_request.declined': return 'declined it';
+    case 'tech_request.plan_shared': return `sent version ${event.payload.version ?? ''} of the plan`;
+    case 'tech_request.plan_confirmed': return `confirmed version ${event.payload.version ?? ''} of the plan`;
     case 'attachment.added': return `added ${name}`;
     case 'attachment.removed': return `removed ${name}`;
     default: return event.action.replace('tech_request.', '').replaceAll('_', ' ');
@@ -400,63 +403,83 @@ export function RequestDrawer({ data, request, mutate, busy, onClose, onAct, onE
       </div>
       {request.itemId && <section className="drawer-section"><h3 className="detail-section-heading">Work</h3><WorkLine data={data} request={request} onOpenItem={onOpenItem} /></section>}
       <section className="drawer-section detail-description"><h3 className="detail-section-heading">Details</h3><p className="request-description"><LinkedText text={request.description} /></p></section>
+      <PlanSection data={data} request={request} mutate={mutate} busy={busy} onAskForChanges={() => { const box = document.getElementById(`reply-${request.id}`); box?.scrollIntoView({ behavior: 'smooth', block: 'center' }); box?.focus({ preventScroll: true }); }} />
       <AttachmentPanel data={data} target={{ requestId: request.id }} title="Files" onChange={onFilesChanged}
         empty={me.role === 'requester' ? 'Screenshots, documents, or a short screen recording help the tech team. Up to 10 MB each.' : 'Add designs, specs, or screenshots. Up to 10 MB each.'} />
-      <RequestComments data={data} request={request} mutate={mutate} busy={busy} />
-      <section className="activity-section">
-        <h3 className="detail-section-heading">History <span>{request.history.length}</span></h3>
-        <div className="timeline">{request.history.length === 0 ? <p className="form-help">Each step of this request will appear here.</p>
-          : request.history.map(event => <div className="timeline-entry" key={event.id}>
-            <span className="timeline-marker"><Clock3 size={12} /></span>
-            <div className="timeline-content"><p><strong>{event.actorId === me.id ? 'You' : event.actorName}</strong> {eventText(data, request, event)}.</p><time dateTime={event.createdAt}>{displayDateTime(event.createdAt)}</time>{event.note && <blockquote>{event.note}</blockquote>}</div>
-          </div>)}</div>
-      </section>
+      <RequestConversation data={data} request={request} mutate={mutate} busy={busy} />
     </div>
     <div className="drawer-footer"><span>Updated {displayDateTime(request.updatedAt)}</span>{lead && request.status === 'new' && <span>A project manager has not forwarded it yet. You can still assign it.</span>}</div>
   </Modal>;
 }
 
+type ConversationEntry = { at: string; comment: RequestComment; event?: never } | { at: string; event: RequestEvent; comment?: never };
 /**
- * The conversation on a request. A requester and the tech side talk here, so questions do not need a meeting.
- * The tech side can also leave a note only they see, such as how to build it.
+ * The whole conversation on a request, oldest first: comments, each version of the plan that was sent, and each step,
+ * such as forwarded or assigned. A requester and the tech side talk here, so nothing needs a meeting or an email thread.
+ * The tech side can also leave a note only they see.
  */
-function RequestComments({ data, request, mutate, busy }: { data: DashboardData; request: TechRequest; mutate: MutationFn; busy: boolean }) {
+function RequestConversation({ data, request, mutate, busy }: { data: DashboardData; request: TechRequest; mutate: MutationFn; busy: boolean }) {
   const me = data.currentUser;
   const can = requestPermissions(data, request);
   const [body, setBody] = useState('');
   const [internal, setInternal] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
+  const who = firstName(personOf(data, request.requesterId, request.requesterName));
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = body.trim();
     if (!text) return;
-    if (await mutate({ action: 'addRequestComment', requestId: request.id, body: text, ...(internal ? { internal: true } : {}) }, internal ? 'Comment added for the tech team' : 'Comment added')) { setBody(''); setInternal(false); }
+    if (await mutate({ action: 'addRequestComment', requestId: request.id, body: text, ...(internal ? { internal: true } : {}) }, internal ? 'Note added for the tech team' : 'Message sent')) { setBody(''); setInternal(false); }
   }
   const canRemove = (comment: RequestComment) => comment.authorId === me.id || leadsWork(me);
-  return <section className="drawer-section request-comments">
-    <h3 className="detail-section-heading">Comments <span>{request.comments.length}</span></h3>
-    {request.comments.length === 0 && <p className="form-help">{me.role === 'requester' ? 'Ask a question or add details. The tech team sees your comment.' : `Ask ${firstName(personOf(data, request.requesterId, request.requesterName))} a question, or leave a note for the tech team.`}</p>}
-    <ol className="comment-list">{request.comments.map(comment => {
-      const author = personOf(data, comment.authorId, comment.authorName, comment.authorRole);
-      return <li key={comment.id} className={clsx('comment', comment.internal && 'is-internal')}>
-        <Avatar member={author} size="small" />
-        <div className="comment-body">
-          <p className="comment-meta"><strong>{comment.authorId === me.id ? 'You' : comment.authorName}</strong><span>{comment.authorRole === 'requester' ? findDepartment(data, request.departmentId)?.name ?? 'Other team' : roleNames[comment.authorRole]}</span><time dateTime={comment.createdAt}>{when(data, comment.createdAt)}</time>
-            {comment.internal && <Badge variant="outline" className="internal-tag"><Lock aria-hidden="true" />Tech team only</Badge>}</p>
-          <p className="comment-text"><LinkedText text={comment.body} /></p>
-          {canRemove(comment) && (removing === comment.id
-            ? <span className="confirm-inline"><span>Remove this comment?</span><Button size="sm" variant="destructive" disabled={busy} onClick={async () => { if (await mutate({ action: 'deleteRequestComment', id: comment.id }, 'Comment removed')) setRemoving(null); }}>Remove</Button><Button size="sm" variant="ghost" onClick={() => setRemoving(null)}>Keep</Button></span>
-            : <Button variant="link" size="sm" className="comment-remove" onClick={() => setRemoving(comment.id)}><Trash2 data-icon="inline-start" />Remove</Button>)}
-        </div>
+  const entries: ConversationEntry[] = [
+    ...request.comments.map(comment => ({ at: comment.createdAt, comment })),
+    ...request.history.map(event => ({ at: event.createdAt, event })),
+  ].sort((a, b) => a.at.localeCompare(b.at));
+  const latestVersion = request.sharedPlan?.version;
+  return <section className="drawer-section request-conversation">
+    <h3 className="detail-section-heading">Conversation <span>{request.comments.length}</span></h3>
+    <ol className="conversation">{entries.map(entry => {
+      if (entry.comment) {
+        const comment = entry.comment;
+        const author = personOf(data, comment.authorId, comment.authorName, comment.authorRole);
+        return <li key={comment.id} className={clsx('comment', comment.internal && 'is-internal', comment.authorId === me.id && 'is-mine')}>
+          <Avatar member={author} size="small" />
+          <div className="comment-body">
+            <p className="comment-meta"><strong>{comment.authorId === me.id ? 'You' : comment.authorName}</strong><span>{comment.authorRole === 'requester' ? findDepartment(data, request.departmentId)?.name ?? 'Other team' : roleNames[comment.authorRole]}</span><time dateTime={comment.createdAt}>{when(data, comment.createdAt)}</time>
+              {comment.internal && <Badge variant="outline" className="internal-tag"><Lock aria-hidden="true" />Tech team only</Badge>}</p>
+            <p className="comment-text"><LinkedText text={comment.body} /></p>
+            {canRemove(comment) && (removing === comment.id
+              ? <span className="confirm-inline"><span>Remove this message?</span><Button size="sm" variant="destructive" disabled={busy} onClick={async () => { if (await mutate({ action: 'deleteRequestComment', id: comment.id }, 'Message removed')) setRemoving(null); }}>Remove</Button><Button size="sm" variant="ghost" onClick={() => setRemoving(null)}>Keep</Button></span>
+              : <Button variant="link" size="sm" className="comment-remove" onClick={() => setRemoving(comment.id)}><Trash2 data-icon="inline-start" />Remove</Button>)}
+          </div>
+        </li>;
+      }
+      const event = entry.event;
+      const actor = event.actorId === me.id ? 'You' : event.actorName;
+      if (event.action === 'tech_request.plan_shared') {
+        const plan = event.payload.plan as RequestPlan | undefined;
+        const version = Number(event.payload.version);
+        return <li key={event.id} className="conversation-plan">
+          <p className="conversation-plan-head"><ListChecks aria-hidden="true" /><span><strong>{actor}</strong> sent version {version} of the plan{version === latestVersion ? <Badge variant="outline" className="plan-latest">Latest</Badge> : null}</span><time dateTime={event.createdAt}>{when(data, event.createdAt)}</time></p>
+          {event.note && <p className="comment-text"><LinkedText text={event.note} /></p>}
+          {/* The latest version is open in the Plan section above, so every version here starts folded. */}
+          {plan && <details><summary>Show version {version}</summary><PlanView plan={plan} compact /></details>}
+        </li>;
+      }
+      return <li key={event.id} className="conversation-step">
+        <span aria-hidden="true" />
+        <p><strong>{actor}</strong> {eventText(data, request, event)}<time dateTime={event.createdAt}> · {when(data, event.createdAt)}</time></p>
+        {event.note && event.action !== 'tech_request.created' && <blockquote>{event.note}</blockquote>}
       </li>;
     })}</ol>
     <form className="comment-form" onSubmit={submit}>
-      <Textarea aria-label="Write a comment" value={body} onChange={event => setBody(event.target.value)} rows={2} maxLength={5000} placeholder={internal ? 'A note only the tech team sees…' : me.role === 'requester' ? 'Ask a question or add details…' : 'Write a comment…'}
+      <Textarea id={`reply-${request.id}`} aria-label="Write a message" value={body} onChange={event => setBody(event.target.value)} rows={2} maxLength={5000} placeholder={internal ? 'A note only the tech team sees…' : me.role === 'requester' ? 'Ask a question, add details, or ask for changes to the plan…' : `Write to ${who}…`}
         onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />
       <div className="comment-form-actions">
-        {can.internalComments && <label className="internal-toggle"><Switch checked={internal} onCheckedChange={setInternal} aria-label="Only the tech team sees this comment" />Tech team only</label>}
-        <span className="comment-form-hint">{internal ? `${firstName(personOf(data, request.requesterId, request.requesterName))} will not see this.` : me.role === 'requester' ? 'The tech team sees this.' : `${firstName(personOf(data, request.requesterId, request.requesterName))} and the tech team see this.`}</span>
-        <Button type="submit" size="sm" disabled={busy || !body.trim()}><Send data-icon="inline-start" />Comment</Button>
+        {can.internalComments && <label className="internal-toggle"><Switch checked={internal} onCheckedChange={setInternal} aria-label="Only the tech team sees this message" />Tech team only</label>}
+        <span className="comment-form-hint">{internal ? `${who} will not see this.` : me.role === 'requester' ? 'The tech team sees this and gets an email.' : `${who} sees this and gets an email.`}</span>
+        <Button type="submit" size="sm" disabled={busy || !body.trim()}><Send data-icon="inline-start" />Send</Button>
       </div>
     </form>
   </section>;
@@ -600,6 +623,9 @@ export function TechRequestForm({ data, editing, staff = false, mutate, onClose,
   const ownTeam = teams.find(t => t.id === data.currentUser.departmentId);
   const pickTeam = staff;
   const noTeam = !pickTeam && !editing && !ownTeam;
+  // People in other teams ask for a new tool or a new feature. A project manager can file a request under any kind.
+  // An older request keeps its kind as a choice, so editing it never changes the kind by surprise.
+  const kinds = staff ? requestCategories : requestCategories.filter(c => requesterCategories.includes(c) || c.value === editing?.category);
   const [category, setCategory] = useState<RequestCategory>(editing?.category ?? 'tool');
   const [departmentId, setDepartmentId] = useState(editing?.departmentId ?? ownTeam?.id ?? '');
   const [neededBy, setNeededBy] = useState(editing?.neededBy ?? '');
@@ -651,9 +677,9 @@ export function TechRequestForm({ data, editing, staff = false, mutate, onClose,
         <FormField className="title-label">What do you need?<Input className="task-title-input" name="title" required minLength={3} maxLength={200} defaultValue={editing?.title} placeholder="e.g. A shared inbox for customer WhatsApp messages" autoComplete="off" /></FormField>
         <FormField>What kind of request is it?
           <ToggleGroup type="single" variant="outline" value={category} onValueChange={value => { if (value) setCategory(value as RequestCategory); }} className="category-choice" aria-label="Kind of request">
-            {requestCategories.map(c => <ToggleGroupItem key={c.value} value={c.value}>{categoryIcons[c.value]}{c.label}</ToggleGroupItem>)}
+            {kinds.map(c => <ToggleGroupItem key={c.value} value={c.value}>{categoryIcons[c.value]}{c.label}</ToggleGroupItem>)}
           </ToggleGroup>
-          <span className="field-help">{requestCategories.find(c => c.value === category)?.hint}</span></FormField>
+          <span className="field-help">{kinds.find(c => c.value === category)?.hint}</span></FormField>
         <FormField>Which tool or system is it about? <span className="optional">optional</span><Input name="tool" maxLength={120} defaultValue={editing?.tool} placeholder="e.g. Shopify, the CRM, the website, Google Sheets" autoComplete="off" /></FormField>
         <FormField>Details<Textarea name="description" required minLength={10} maxLength={20000} rows={5} defaultValue={editing?.description} placeholder={category === 'problem' ? 'What went wrong, where, and since when? Attach a screenshot or a short screen recording.' : category === 'tool' ? 'What should the tool do, who will use it, and how do you work today? Name any tool you already like.' : 'What should happen, and why does your team need it? Add links to examples, sheets, or designs.'} /></FormField>
         <FieldGroup className="form-grid">

@@ -34,6 +34,12 @@ const techRequestFields = {
   tool: z.string().trim().max(120, "Keep the tool name under 120 characters.").optional(),
 };
 const commentBody = z.string().trim().min(1, "Write a comment first.").max(5000, "Keep a comment under 5,000 characters.");
+/** A request's plan: up to 50 features, 30 timeline steps, and notes. Ids come from the page and only order the rows. */
+const requestPlan = z.object({
+  features: z.array(z.object({ id: z.string().min(1).max(64), text: z.string().trim().min(1, "Write each feature, or remove the empty row.").max(500) }).strict()).max(50, "Keep the list to 50 features."),
+  timeline: z.array(z.object({ id: z.string().min(1).max(64), title: z.string().trim().min(1, "Name each step on the timeline.").max(200), date }).strict()).max(30, "Keep the timeline to 30 steps."),
+  notes: z.string().trim().max(10_000),
+}).strict();
 const timelineOrder = (value: { startDate?: string | null; targetDate?: string | null }) => !value.startDate || !value.targetDate || value.targetDate >= value.startDate;
 const timelineOrderMessage = "The target date must be on or after the start date.";
 const itemFields = {
@@ -135,6 +141,12 @@ export const actionSchema = z.discriminatedUnion("action", [
   // Anyone who can see a request can comment on it. Only the tech side can mark a comment internal.
   z.object({ action: z.literal("addRequestComment"), requestId: uuid, body: commentBody, internal: z.boolean().optional() }).strict(),
   z.object({ action: z.literal("deleteRequestComment"), id: uuid }).strict(),
+  // The plan: a project manager or the tech lead saves a draft, then sends it. The requester confirms what was sent.
+  z.object({ action: z.literal("savePlan"), id: uuid, plan: requestPlan }).strict(),
+  z.object({ action: z.literal("sharePlan"), id: uuid, plan: requestPlan, message: z.string().trim().max(5000).optional() }).strict(),
+  z.object({ action: z.literal("confirmPlan"), id: uuid, version: z.number().int().positive() }).strict(),
+  // Each person's own choice about request emails.
+  z.object({ action: z.literal("updateMyPreferences"), emailNotifications: z.boolean() }).strict(),
   // Assigning makes a ticket, which needs an estimate, or a bug, which runs on its fix-by time instead.
   z.object({ action: z.literal("assignTechRequest"), id: uuid, type: z.enum(["task", "bug"]), assigneeId: z.string().min(1), title: shortText,
     projectId: uuid.optional(), phaseId: uuid.nullable().optional(), priority: priority.optional(), severity: severity.optional(),

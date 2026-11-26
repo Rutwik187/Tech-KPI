@@ -1,4 +1,4 @@
-import type { Activity, DashboardData, Department, DueDateRequest, Member, Phase, Project, RequestComment, RequestEvent, TechRequest, TicketRequest, WorkItem } from './types';
+import type { Activity, DashboardData, Department, DueDateRequest, Member, Phase, Project, RequestComment, RequestEvent, RequestPlan, TechRequest, TicketRequest, WorkItem } from './types';
 import { dateKey, defaultSettings, getWeekStart, localDate, shiftDate } from './kpi';
 import { ADHOC_PROJECT } from './project-defaults';
 
@@ -191,7 +191,7 @@ export function createDemoData(now = new Date()): DashboardData {
   const hoursAfter = (iso: string, hours: number) => past(new Date(Date.parse(iso) + hours * 3_600_000).toISOString());
   let requestNumber = 0;
   const techRequests: TechRequest[] = [];
-  type Outcome = { forwarded?: boolean; itemTitle?: string; declined?: string; note?: string; tool?: string; comments?: [Member, string, boolean?][] };
+  type Outcome = { forwarded?: boolean; itemTitle?: string; declined?: string; note?: string; tool?: string; comments?: [Member, string, boolean?][]; plan?: RequestPlan & { message?: string } };
   const addRequest = (id: string, title: string, description: string, category: TechRequest['category'], priority: TechRequest['priority'], raised: string, neededBy: string | null, outcome: Outcome = {}) => {
     const person = requester(id);
     const item = outcome.itemTitle ? items.find(row => row.title === outcome.itemTitle) : undefined;
@@ -204,6 +204,10 @@ export function createDemoData(now = new Date()): DashboardData {
     if (forwardedAt) history.push({ id: `${requestId}-forwarded`, action: 'tech_request.forwarded', actorId: manager.id, actorName: manager.name, note: null, payload: {}, createdAt: forwardedAt });
     if (item && reviewedAt) history.push({ id: `${requestId}-assigned`, action: 'tech_request.assigned', actorId: lead.id, actorName: lead.name, note: outcome.note ?? null, payload: { itemId: item.id, type: item.type, assigneeId: item.assigneeId }, createdAt: reviewedAt });
     if (outcome.declined && reviewedAt) history.push({ id: `${requestId}-declined`, action: 'tech_request.declined', actorId: manager.id, actorName: manager.name, note: outcome.declined, payload: { by: 'project_manager' }, createdAt: reviewedAt });
+    // A plan the project manager sent: it appears in the history, and the requester has not confirmed it yet.
+    const plan = outcome.plan ? { features: outcome.plan.features, timeline: outcome.plan.timeline, notes: outcome.plan.notes } : null;
+    const planSentAt = plan ? hoursAfter(raised, 2) : null;
+    if (plan && planSentAt) history.push({ id: `${requestId}-plan-1`, action: 'tech_request.plan_shared', actorId: manager.id, actorName: manager.name, note: outcome.plan?.message ?? null, payload: { version: 1, plan }, createdAt: planSentAt });
     const comments: RequestComment[] = (outcome.comments ?? []).map(([author, body, internal], index) => ({
       id: `${requestId}-comment-${index + 1}`, requestId, authorId: author.id, authorName: author.name, authorRole: author.role, body, internal: !!internal, createdAt: hoursAfter(raised, 0.5 + index),
     }));
@@ -215,6 +219,7 @@ export function createDemoData(now = new Date()): DashboardData {
       reviewedById: reviewedAt ? item ? lead.id : manager.id : null, reviewedAt, reviewNote: outcome.declined ?? outcome.note ?? null, itemId: item?.id ?? null,
       work: item ? { key: item.key, type: item.type, status: item.status, assigneeId: item.assigneeId, assigneeName: developers.find(d => d.id === item.assigneeId)?.name ?? 'A developer', dueDate: item.dueDate, doneAt: item.completedAt ?? item.fixedAt } : null,
       createdAt, updatedAt: comments.at(-1)?.createdAt ?? reviewedAt ?? forwardedAt ?? createdAt, comments, history, attachmentCount: 0,
+      plan, sharedPlan: plan && planSentAt ? { ...plan, version: 1, sharedAt: planSentAt, sharedById: manager.id, sharedByName: manager.name, confirmedAt: null, confirmedById: null } : null,
     });
   };
   addRequest('rahul', 'Show customers how much they save in the cart', 'Customers ask how much a coupon saved them. Show the total saving under the cart total, on mobile and desktop.', 'feature', 'medium', dateAt(2, '11:00', -1), null,
@@ -233,7 +238,10 @@ export function createDemoData(now = new Date()): DashboardData {
       [requester('neha'), 'The pixel ID is in the shared marketing sheet, row 4.'],
     ] });
   addRequest('priya', 'Bulk order form for corporate gifting', 'Companies ask for 50 to 500 gift boxes. We need a form on the website that collects company, quantity, budget, and delivery date, and emails the sales team.', 'feature', 'high', dateAt(2, '11:15'), day(11),
-    { comments: [[manager, 'Priya, do you want the form to also check stock before it accepts an order?']] });
+    { comments: [[manager, 'Priya, do you want the form to also check stock before it accepts an order?']], plan: {
+      features: [{ id: 'f1', text: 'Form fields: company, contact, quantity (50 to 500), budget, delivery date' }, { id: 'f2', text: 'Email to the sales team for each order, with all the details' }, { id: 'f3', text: 'Thank-you page that says when sales will call back' }],
+      timeline: [{ id: 't1', title: 'Form design shared with Sales', date: day(5) }, { id: 't2', title: 'Form live on the website', date: day(11) }],
+      notes: 'Stock check is not in this version. We can add it once the form is live.', message: 'Here is what we plan. Does this cover what Sales needs?' } });
   addRequest('rahul', 'A shared inbox tool for customer WhatsApp messages', 'Three of us answer customer WhatsApp messages from one phone. We need a tool where all of us can reply, see who answered, and tag orders.', 'tool', 'medium', dateAt(2, '16:40'), null,
     { tool: 'WhatsApp Business' });
 

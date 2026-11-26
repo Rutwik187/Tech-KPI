@@ -439,8 +439,12 @@ async function main() {
     requesterView = await mutate(requesterCookie, { action: "withdrawTechRequest", id: toWithdraw.id });
     assert(!requesterView.techRequests.some((request) => request.id === toWithdraw.id)); checks++;
     // Something broken becomes a bug with a fix-by time instead of an estimate.
-    requesterView = await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, title: `${trace}-broken`, category: "problem" });
+    // People in other teams raise a new tool or a new feature. The tech side files it as broken when it is.
+    await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, title: `${trace}-broken`, category: "problem" }, 400);
+    requesterView = await mutate(requesterCookie, { action: "createTechRequest", ...teamAsk, title: `${trace}-broken` });
     const broken = requesterView.techRequests.find((request) => request.title === `${trace}-broken`)!; ids.add(broken.id);
+    await mutate(requesterCookie, { action: "updateTechRequest", id: broken.id, patch: { category: "problem" } }, 400);
+    await mutate(adminCookie, { action: "editTechRequest", id: broken.id, patch: { category: "problem" } });
     adminView = await mutate(adminCookie, { action: "assignTechRequest", id: broken.id, type: "bug", assigneeId: member.id, title: `${trace}-broken-bug`, projectId: project.id, severity: "critical" });
     const bugFromRequest = adminView.items.find((item) => item.id === adminView.techRequests.find((request) => request.id === broken.id)?.itemId)!;
     assert.equal(bugFromRequest.type, "bug"); assert.equal(bugFromRequest.status, "open"); assert.equal(bugFromRequest.severity, "critical"); assert.equal(bugFromRequest.estimateHours, 0); assert.equal(bugFromRequest.dueDate, null); checks += 5;
@@ -569,6 +573,52 @@ async function main() {
     // Finishing an upload that never arrived lists nothing.
     await direct(requesterCookie, { step: "finish", requestId: flow.id, attachmentId: started.attachmentId, name: "screen.png" }, 409);
     await direct(outsiderCookie, { step: "finish", requestId: flow.id, attachmentId: started.attachmentId, name: "screen.png" }, 404);
+    // The plan: a draft stays on the tech side; each send is the next version, which only its requester confirms.
+    const flowPlan = { features: [{ id: "a", text: "Size chart under the size picker" }], timeline: [{ id: "t", title: "Live on shirts", date: "2099-11-20" }], notes: "Trousers come next." };
+    await mutate(developerCookie, { action: "savePlan", id: flow.id, plan: flowPlan }, 403);
+    await mutate(requesterCookie, { action: "savePlan", id: flow.id, plan: flowPlan }, 403);
+    await mutate(managerCookie, { action: "savePlan", id: flow.id, plan: { ...flowPlan, timeline: [{ id: "t", title: "", date: "2099-11-20" }] } }, 400);
+    managerView = await mutate(managerCookie, { action: "savePlan", id: flow.id, plan: flowPlan });
+    assert.equal(managerView.techRequests.find((request) => request.id === flow.id)?.plan?.features.length, 1); checks++;
+    requesterView = await (await call("/api/data", requesterCookie)).json();
+    assert.equal(requesterView.techRequests.find((request) => request.id === flow.id)?.plan, null);
+    assert.equal(requesterView.techRequests.find((request) => request.id === flow.id)?.sharedPlan, null); checks += 2;
+    await mutate(managerCookie, { action: "sharePlan", id: flow.id, plan: { features: [], timeline: [], notes: "" } }, 400);
+    await mutate(managerCookie, { action: "sharePlan", id: flow.id, plan: flowPlan, message: "Please check the date." });
+    requesterView = await (await call("/api/data", requesterCookie)).json();
+    const sharedFlow = requesterView.techRequests.find((request) => request.id === flow.id)!;
+    assert.equal(sharedFlow.sharedPlan?.version, 1); assert.equal(sharedFlow.plan, null);
+    assert(sharedFlow.history.some((event) => event.action === "tech_request.plan_shared" && event.note === "Please check the date.")); checks += 3;
+    await mutate(teammateCookie, { action: "confirmPlan", id: flow.id, version: 1 }, 404);
+    await mutate(requesterCookie, { action: "confirmPlan", id: flow.id, version: 2 }, 409);
+    requesterView = await mutate(requesterCookie, { action: "confirmPlan", id: flow.id, version: 1 });
+    assert(requesterView.techRequests.find((request) => request.id === flow.id)?.sharedPlan?.confirmedAt); checks++;
+    // Emails are written with each step, to the right people, and nobody emails themselves.
+    const mails = async () => db.select({ kind: schema.notifications.kind, email: schema.notifications.email, status: schema.notifications.status }).from(schema.notifications).where(eq(schema.notifications.entityId, flow.id));
+    let flowMail = await mails();
+    const to = (kind: string) => flowMail.filter((mail) => mail.kind === kind).map((mail) => mail.email).sort();
+    assert.deepEqual(to("request.created"), [managerFixture.member.email, requesterFixture.member.email].sort());
+    assert(to("request.forwarded").includes(fixture.member.email)); assert(to("request.forwarded").includes(requesterFixture.member.email));
+    assert(!to("request.forwarded").includes(managerFixture.member.email));
+    assert.deepEqual(to("request.returned"), [managerFixture.member.email]);
+    const [developerAccount] = await db.select({ email: schema.user.email }).from(schema.user).where(eq(schema.user.id, member.id));
+    assert(to("request.assigned").includes(requesterFixture.member.email)); assert(to("request.assigned").includes(developerAccount.email));
+    assert.deepEqual(to("plan.shared"), [requesterFixture.member.email]);
+    assert(to("plan.confirmed").includes(managerFixture.member.email));
+    assert(flowMail.every((mail) => mail.status === "pending" || mail.status === "expired")); checks += 9;
+    // Someone who turns emails off gets none, and still sees everything in the workspace.
+    requesterView = await mutate(requesterCookie, { action: "updateMyPreferences", emailNotifications: false });
+    assert.equal(requesterView.currentUser.emailNotifications, false); checks++;
+    await mutate(managerCookie, { action: "sharePlan", id: flow.id, plan: { ...flowPlan, notes: "Version two." } });
+    flowMail = await mails();
+    assert.equal(to("plan.shared").length, 1); checks++;
+    await mutate(requesterCookie, { action: "updateMyPreferences", emailNotifications: true });
+    // Only an admin sees the email log and sends a test. Here, sending is not set up, so the test says so.
+    await call("/api/notifications", managerCookie, undefined, 403);
+    const emailStatus = await (await call("/api/notifications", adminCookie)).json() as { sender: string | null; recent: unknown[] };
+    assert(Array.isArray(emailStatus.recent)); checks++;
+    if (!emailStatus.sender) await call("/api/notifications", adminCookie, {}, 409);
+    await call("/api/cron/notifications", "", undefined, 401);
     // Project managers own no work and join no projects.
     await mutate(adminCookie, { action: "updateMember", id: member.id, patch: { role: "project_manager" } }, 400);
     await mutate(adminCookie, { action: "updateProject", id: project.id, patch: { memberIds: [fixture.userId, member.id, managerFixture.userId] } }, 400);
@@ -678,7 +728,7 @@ async function main() {
       const cron = await fetch(`${baseURL}/api/cron/weekly-snapshot`, { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } });
       assert.equal(cron.status, 200); checks++;
     }
-    console.log(`PASS: ${checks} backend checks (projects, primary developers, project timelines and extensions, more hours on tickets with approval, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable, sign-in by invited work email, ticket requests and approvals, requests from other teams, project manager review, request comments and files, tech lead and admin roles, removing people, teams, and company sign-in). Local session fixtures used; real Microsoft OAuth is not exercised.`);
+    console.log(`PASS: ${checks} backend checks (projects, primary developers, project timelines and extensions, more hours on tickets with approval, phases, membership, Ad hoc defaults, linked bugs, Microsoft identity provisioning, disabled passwords, private reads, role guards, workflow, reasons, atomic audit, leave, settings, account disable, sign-in by invited work email, ticket requests and approvals, requests from other teams, project manager review, request comments and files, tech lead and admin roles, removing people, request plans, email notifications, teams, and company sign-in). Local session fixtures used; real Microsoft OAuth is not exercised.`);
   } finally {
     await db.transaction(async (tx) => {
       const testItems = await tx.select({ id: schema.workItems.id }).from(schema.workItems).where(like(schema.workItems.title, `${trace}%`));
@@ -689,6 +739,8 @@ async function main() {
       if (auditIds.size) await tx.delete(schema.activities).where(inArray(schema.activities.id, [...auditIds]));
       if (memberIds.size) await tx.delete(schema.activities).where(inArray(schema.activities.actorId, [...memberIds]));
       await tx.delete(schema.ticketRequests).where(like(schema.ticketRequests.title, `${trace}%`));
+      const testRequests = await tx.select({ id: schema.techRequests.id }).from(schema.techRequests).where(like(schema.techRequests.title, `${trace}%`));
+      if (testRequests.length) await tx.delete(schema.notifications).where(inArray(schema.notifications.entityId, testRequests.map((request) => request.id)));
       await tx.delete(schema.techRequests).where(like(schema.techRequests.title, `${trace}%`));
       await tx.delete(schema.departments).where(like(schema.departments.name, `${trace}%`));
       await tx.delete(schema.workItems).where(like(schema.workItems.title, `${trace}%`));

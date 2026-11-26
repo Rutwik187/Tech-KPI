@@ -6,6 +6,9 @@ import { account, activities, attachments, departments, dueDateRequests, holiday
 import type { Member, TechRequestStatus } from "@/lib/types";
 import { attachmentBucket, storageClient } from "@/lib/storage";
 import { canSeeRequest } from "./request-access";
+import { notify, type NotifyEvent } from "./notify";
+import { deliverPending } from "./mailer";
+import { waitUntil } from "@vercel/functions";
 import { memberRole, requireCapability, storedRole } from "./authz";
 import { ACTION_CAPABILITY, can, isOrgAdmin, isTechTeam, leadsWork, manageableRoles, mayDo, ownsNoWork, aRole, type Capability } from "@/lib/permissions";
 import { AppError } from "./errors";
@@ -216,6 +219,8 @@ async function assertAnotherAdmin(tx: Tx, leavingId: string) {
     .where(and(eq(user.role, "admin"), ne(user.id, leavingId), sql`${user.banned} IS NOT TRUE`, sql`${memberProfiles.isActive} IS NOT FALSE`)).limit(1);
   if (!other) throw new AppError("Make someone else an admin first. The organisation always needs one active admin.");
 }
+/** The kinds of request people in other teams raise. */
+const REQUESTER_KINDS: string[] = ["tool", "feature"];
 const OPEN_TICKET = ["todo", "in_progress", "blocked"];
 
 type ItemInput = Extract<DataAction, { action: "createItem" }> | (Omit<Extract<DataAction, { action: "createItem" }>, "action">);
@@ -321,7 +326,10 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
   assertAllowed(actor, action.action);
   // Files of a withdrawn request leave storage after its rows are gone.
   const removedObjects: string[] = [];
+  // Emails are written with the change, and sent once it is saved.
+  let queued = 0;
   await db.transaction(async (tx) => {
+    const tell = async (event: NotifyEvent) => { queued += await notify(tx, actor, event); };
     switch (action.action) {
       case "createItem": {
         await insertItem(tx, actor, action);
@@ -426,6 +434,8 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         break;
       }
       case "createTechRequest": {
+        // People in other teams ask for a new tool or a new feature. The tech side can file a request under another kind later.
+        if (!REQUESTER_KINDS.includes(action.category)) throw new AppError("Choose New tool or New feature.");
         // People raise requests for the team an admin put them in. Someone without a team waits until an admin sets it,
         // so nobody can choose a team and then read its requests.
         const [profile] = await tx.select({ departmentId: memberProfiles.departmentId }).from(memberProfiles).where(eq(memberProfiles.userId, actor.id));
@@ -446,6 +456,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
           category: action.category, tool: action.tool ?? "", priority: action.priority, neededBy: action.neededBy,
         }).returning();
         await audit(tx, actor, request.id, "tech_request.created", { departmentId: request.departmentId, category: request.category, priority: request.priority, neededBy: request.neededBy });
+        await tell({ kind: "request.created", requestId: request.id });
         break;
       }
       case "updateTechRequest":
@@ -454,6 +465,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         const own = action.action === "updateTechRequest";
         const request = await openTechRequest(tx, action.id, own ? ["new"] : openStages(actor), own ? actor.id : undefined);
         const patch = action.patch;
+        if (own && patch.category && patch.category !== request.category && !REQUESTER_KINDS.includes(patch.category)) throw new AppError("Choose New tool or New feature.");
         // A requester's request stays with their team. A project manager or the tech lead may move it to the right team.
         if (own && patch.departmentId && patch.departmentId !== request.departmentId) throw new AppError("You raise requests for your own team only.");
         if (patch.departmentId && patch.departmentId !== request.departmentId) await activeDepartment(tx, patch.departmentId);
@@ -481,6 +493,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         const note = action.note?.trim();
         if (note) await tx.insert(requestComments).values({ requestId: request.id, authorId: actor.id, body: note, internal: true });
         await audit(tx, actor, request.id, "tech_request.forwarded", { ...(priority.priority ? { priorityFrom: request.priority, priorityTo: priority.priority } : {}) }, note);
+        await tell({ kind: "request.forwarded", requestId: request.id, note });
         break;
       }
       case "returnTechRequest": {
@@ -489,6 +502,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         await tx.update(techRequests).set({ status: "new", forwardedById: null, forwardedAt: null, updatedAt: now }).where(eq(techRequests.id, request.id));
         await tx.insert(requestComments).values({ requestId: request.id, authorId: actor.id, body: action.reason, internal: true });
         await audit(tx, actor, request.id, "tech_request.returned", { forwardedById: request.forwardedById }, action.reason);
+        await tell({ kind: "request.returned", requestId: request.id, reason: action.reason });
         break;
       }
       case "assignTechRequest": {
@@ -503,6 +517,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         const now = new Date();
         await tx.update(techRequests).set({ status: "assigned", itemId: item.id, reviewedById: actor.id, reviewedAt: now, reviewNote: action.note?.trim() || null, updatedAt: now }).where(eq(techRequests.id, request.id));
         await audit(tx, actor, request.id, "tech_request.assigned", { itemId: item.id, type: item.type, assigneeId: item.assigneeId, skippedReview: request.status === "new" }, action.note);
+        await tell({ kind: "request.assigned", requestId: request.id, note: action.note?.trim() || undefined });
         break;
       }
       case "declineTechRequest": {
@@ -510,6 +525,7 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         const now = new Date();
         await tx.update(techRequests).set({ status: "declined", reviewedById: actor.id, reviewedAt: now, reviewNote: action.reason, updatedAt: now }).where(eq(techRequests.id, request.id));
         await audit(tx, actor, request.id, "tech_request.declined", { by: actor.role }, action.reason);
+        await tell({ kind: "request.declined", requestId: request.id, reason: action.reason });
         break;
       }
       case "addRequestComment": {
@@ -519,6 +535,48 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
         const [comment] = await tx.insert(requestComments).values({ requestId: request.id, authorId: actor.id, body: action.body, internal: !!action.internal }).returning();
         await tx.update(techRequests).set({ updatedAt: new Date() }).where(eq(techRequests.id, request.id));
         await audit(tx, actor, request.id, "tech_request.commented", { commentId: comment.id, internal: comment.internal });
+        await tell({ kind: "request.commented", requestId: request.id, commentId: comment.id });
+        break;
+      }
+      case "savePlan":
+      case "sharePlan": {
+        // Project managers and the tech lead keep the plan while the request is open. Saving keeps a draft only they see.
+        // Sending makes the next version, which the requester reads and can confirm. Every version stays in the history.
+        const [request] = await tx.select().from(techRequests).where(eq(techRequests.id, action.id)).for("update");
+        if (!request) throw new AppError("This request was not found.", 404);
+        if (request.status === "declined") throw new AppError("This request was declined. Add a comment instead.", 409);
+        const plan = { features: action.plan.features, timeline: [...action.plan.timeline].sort((a, b) => a.date.localeCompare(b.date)), notes: action.plan.notes };
+        const now = new Date();
+        if (action.action === "savePlan") {
+          await tx.update(techRequests).set({ plan, updatedAt: now }).where(eq(techRequests.id, request.id));
+          await audit(tx, actor, request.id, "tech_request.plan_saved", { features: plan.features.length, timeline: plan.timeline.length });
+          break;
+        }
+        if (!plan.features.length && !plan.timeline.length && !plan.notes) throw new AppError("Add a feature, a timeline step, or a note before you send the plan.");
+        const version = (request.planShared?.version ?? 0) + 1;
+        const message = action.message?.trim() || undefined;
+        const planShared = { ...plan, version, sharedAt: now.toISOString(), sharedById: actor.id, sharedByName: actor.name, confirmedAt: null, confirmedById: null };
+        await tx.update(techRequests).set({ plan, planShared, updatedAt: now }).where(eq(techRequests.id, request.id));
+        await audit(tx, actor, request.id, "tech_request.plan_shared", { version, plan }, message);
+        await tell({ kind: "plan.shared", requestId: request.id, version, message });
+        break;
+      }
+      case "confirmPlan": {
+        const [request] = await tx.select().from(techRequests).where(eq(techRequests.id, action.id)).for("update");
+        if (!request || request.requesterId !== actor.id) throw new AppError("This request was not found.", 404);
+        const shared = request.planShared;
+        if (!shared) throw new AppError("There is no plan to confirm yet.", 409);
+        // Only the version the requester read. A newer one arrived meanwhile needs reading first.
+        if (shared.version !== action.version) throw new AppError("A newer version of the plan arrived. Read it before you confirm.", 409);
+        if (shared.confirmedAt) break;
+        await tx.update(techRequests).set({ planShared: { ...shared, confirmedAt: new Date().toISOString(), confirmedById: actor.id }, updatedAt: new Date() }).where(eq(techRequests.id, request.id));
+        await audit(tx, actor, request.id, "tech_request.plan_confirmed", { version: shared.version });
+        await tell({ kind: "plan.confirmed", requestId: request.id, version: shared.version });
+        break;
+      }
+      case "updateMyPreferences": {
+        await tx.insert(memberProfiles).values({ userId: actor.id, emailNotifications: action.emailNotifications })
+          .onConflictDoUpdate({ target: memberProfiles.userId, set: { emailNotifications: action.emailNotifications } });
         break;
       }
       case "deleteRequestComment": {
@@ -642,6 +700,11 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
               holidays: daysOff(holidaysRows),
               extraDaysOff: new Set(leaveRows.filter((leave) => leave.type === "full_day").map((leave) => leave.date)),
             }).toFixed(2));
+          }
+          // A finished ticket or a verified bug finishes the request it came from. Its requester hears about it.
+          if (nextStatus === "done" || nextStatus === "verified") {
+            const [origin] = await tx.select({ id: techRequests.id }).from(techRequests).where(eq(techRequests.itemId, item.id));
+            if (origin) await tell({ kind: "request.done", requestId: origin.id });
           }
           await audit(tx, actor, item.id, event, {
             from: item.status, to: nextStatus,
@@ -887,6 +950,8 @@ export async function executeAction(actor: Member, action: DataAction): Promise<
       }
     }
   });
+  // Sends the emails this change wrote, after the response, without slowing it down.
+  if (queued) waitUntil(deliverPending().catch((error) => console.error("Email delivery failed", error instanceof Error ? error.message : error)));
   if (removedObjects.length) {
     try {
       const s3 = storageClient();

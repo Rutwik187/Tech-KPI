@@ -80,8 +80,11 @@ describe('requests from other teams', () => {
   it('turns a broken thing into a bug with no estimate or date, and refuses archived or duplicate teams', () => {
     let data = demo();
     const rahul = data.members.find(m => m.id === 'demo-rahul')!;
-    data = mutateDemo(data, { action: 'createTechRequest', ...ask, title: 'Checkout button missing', category: 'problem', departmentId: 'demo-team-2' }, rahul);
+    // People in other teams ask for a new tool or a new feature. A project manager files it as broken when it is.
+    expect(() => mutateDemo(data, { action: 'createTechRequest', ...ask, title: 'Checkout button missing', category: 'problem', departmentId: 'demo-team-2' }, rahul)).toThrow('New tool or New feature');
+    data = mutateDemo(data, { action: 'createTechRequest', ...ask, title: 'Checkout button missing', category: 'feature', departmentId: 'demo-team-2' }, rahul);
     const broken = data.techRequests.find(r => r.title === 'Checkout button missing')!;
+    data = mutateDemo(data, { action: 'editTechRequest', id: broken.id, patch: { category: 'problem' } }, data.members.find(m => m.role === 'project_manager')!);
     data = mutateDemo(data, { action: 'assignTechRequest', id: broken.id, type: 'bug', assigneeId: 'demo-arjun', title: broken.title, projectId: 'demo-commerce', phaseId: null, priority: 'urgent', severity: 'critical' }, data.currentUser);
     const bug = data.items.find(i => i.id === data.techRequests.find(r => r.id === broken.id)!.itemId)!;
     expect(bug).toMatchObject({ type: 'bug', status: 'open', severity: 'critical', estimateHours: 0, dueDate: null });
@@ -200,4 +203,35 @@ describe('requests from other teams', () => {
     data = mutateDemo(data, { action: 'deleteRequestComment', id: added.id }, data.currentUser);
     expect(data.techRequests.find(r => r.id === request.id)!.comments.some(c => c.id === added.id)).toBe(false);
   });
+
+  it('keeps a plan as a draft for the tech side, sends it in versions, and lets the requester confirm the one they read', () => {
+    let data = demo();
+    const kavya = data.members.find(m => m.id === 'demo-kavya')!;
+    const neha = data.members.find(m => m.id === 'demo-neha')!;
+    const request = data.techRequests.find(r => r.requesterId === 'demo-neha' && r.status === 'forwarded')!;
+    const plan = { features: [{ id: 'a', text: 'Meta pixel on the landing page' }, { id: 'b', text: 'Purchase event' }], timeline: [{ id: 't2', title: 'Live', date: '2026-11-09' }, { id: 't1', title: 'Test event', date: '2026-11-06' }], notes: 'Add-to-cart is not included.' };
+    data = mutateDemo(data, { action: 'savePlan', id: request.id, plan }, kavya);
+    const now = () => data.techRequests.find(r => r.id === request.id)!;
+    // The timeline is kept in date order. A draft is not sent, so the requester sees nothing yet.
+    expect(now().plan?.timeline.map(t => t.title)).toEqual(['Test event', 'Live']);
+    expect(now().sharedPlan).toBeNull();
+    expect(viewAs(data, 'demo-neha').techRequests.find(r => r.id === request.id)?.plan).toBeNull();
+    expect(() => mutateDemo(data, { action: 'confirmPlan', id: request.id, version: 1 }, neha)).toThrow('no plan');
+    data = mutateDemo(data, { action: 'sharePlan', id: request.id, plan, message: 'Please check the dates.' }, kavya);
+    expect(now().sharedPlan).toMatchObject({ version: 1, sharedById: 'demo-kavya', confirmedAt: null });
+    const nehaView = viewAs(data, 'demo-neha').techRequests.find(r => r.id === request.id)!;
+    expect(nehaView.sharedPlan?.features).toHaveLength(2);
+    expect(nehaView.history.find(e => e.action === 'tech_request.plan_shared')).toMatchObject({ note: 'Please check the dates.', payload: { version: 1 } });
+    // A second version arrives before Neha confirms. Confirming the first one is refused, so nobody agrees to a plan they did not read.
+    data = mutateDemo(data, { action: 'sharePlan', id: request.id, plan: { ...plan, notes: 'Add-to-cart comes next month.' } }, kavya);
+    expect(() => mutateDemo(data, { action: 'confirmPlan', id: request.id, version: 1 }, neha)).toThrow('newer version');
+    expect(() => mutateDemo(data, { action: 'confirmPlan', id: request.id, version: 2 }, kavya)).toThrow();
+    data = mutateDemo(data, { action: 'confirmPlan', id: request.id, version: 2 }, neha);
+    expect(now().sharedPlan).toMatchObject({ version: 2, confirmedById: 'demo-neha' });
+    // Every version stays in the conversation.
+    expect(now().history.filter(e => e.action === 'tech_request.plan_shared').map(e => e.payload.version)).toEqual([1, 2]);
+    expect(now().history.at(-1)?.action).toBe('tech_request.plan_confirmed');
+    expect(() => mutateDemo(data, { action: 'savePlan', id: request.id, plan }, neha)).toThrow();
+  });
 });
+

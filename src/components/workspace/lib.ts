@@ -1,4 +1,4 @@
-import type { BugStatus, DashboardData, Department, DueDateRequest, Holiday, Leave, Member, Project, RequestCategory, RequestEvent, RequestWork, Role, Settings, TaskStatus, TechRequest, TicketRequest, WorkItem } from '@/lib/types';
+import type { BugStatus, DashboardData, Department, DueDateRequest, Holiday, Leave, Member, Project, RequestCategory, RequestEvent, RequestPlan, RequestWork, Role, Settings, TaskStatus, TechRequest, TicketRequest, WorkItem } from '@/lib/types';
 import { ADHOC_PROJECT_ID } from '@/lib/project-defaults';
 import { can, isOrgAdmin, isTechTeam, leadsWork, manageableRoles, refusal, aRole, ROLE_NAMES } from '@/lib/permissions';
 import { creditedAt, dateKey, dueDateAfterHours, getBugKpi, getWorkCalendar, isWorkingDay, shiftDate } from '@/lib/kpi';
@@ -124,6 +124,8 @@ export const requestCategories: { value: RequestCategory; label: string; hint: s
   { value: 'access', label: 'Access or setup', hint: 'Accounts, tools, integrations, or permissions.' },
   { value: 'other', label: 'Something else', hint: 'Anything that does not fit the other kinds.' },
 ];
+/** People in other teams ask for one of these two. The tech side may file a request under any kind. */
+export const requesterCategories = requestCategories.filter(c => c.value === 'tool' || c.value === 'feature');
 export function categoryLabel(category: RequestCategory) { return requestCategories.find(c => c.value === category)?.label ?? 'Request'; }
 
 /**
@@ -168,6 +170,9 @@ export function requestPermissions(data: DashboardData, request: TechRequest) {
   return {
     edit: reviewable, forward: request.status === 'new' && (manager || lead), assign: lead && reviewable, decline: reviewable,
     sendBack: lead && request.status === 'forwarded',
+    // Project managers and the tech lead keep the plan until the request is declined. The requester confirms what was sent.
+    plan: (manager || lead) && request.status !== 'declined',
+    confirmPlan: me.role === 'requester' && request.requesterId === me.id && !!request.sharedPlan && !request.sharedPlan.confirmedAt,
     change: me.role === 'requester' && request.requesterId === me.id && request.status === 'new',
     internalComments: me.role !== 'requester',
   };
@@ -343,6 +348,10 @@ export type Mutation =
   | ({ action: 'assignTechRequest' } & AssignRequestInput)
   | { action: 'declineTechRequest'; id: string; reason: string }
   | { action: 'addRequestComment'; requestId: string; body: string; internal?: boolean }
+  | { action: 'savePlan'; id: string; plan: RequestPlan }
+  | { action: 'sharePlan'; id: string; plan: RequestPlan; message?: string }
+  | { action: 'confirmPlan'; id: string; version: number }
+  | { action: 'updateMyPreferences'; emailNotifications: boolean }
   | { action: 'deleteRequestComment'; id: string }
   | { action: 'createDepartment'; name: string }
   | { action: 'updateDepartment'; id: string; name?: string; isArchived?: boolean };
@@ -673,7 +682,8 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       const fields: TechRequestInput = { title: mutation.title, description: mutation.description, category: mutation.category, tool: mutation.tool ?? '', priority: mutation.priority, neededBy: mutation.neededBy, departmentId: ownTeam };
       const sequence = Math.max(0, ...next.techRequests.map(r => Number(r.key.split('-').pop()) || 0)) + 1;
       const requestId = mutation.id ?? id;
-      next.techRequests.unshift({ id: requestId, key: requestKey(sequence), requesterId: actor.id, requesterName: actor.name, ...fields, status: 'new', forwardedById: null, forwardedAt: null, reviewedById: null, reviewedAt: null, reviewNote: null, itemId: null, work: null, createdAt: now, updatedAt: now, comments: [], history: [], attachmentCount: 0 });
+      if (!requesterCategories.some(c => c.value === fields.category)) throw new Error('Choose New tool or New feature.');
+      next.techRequests.unshift({ id: requestId, key: requestKey(sequence), requesterId: actor.id, requesterName: actor.name, ...fields, status: 'new', forwardedById: null, forwardedAt: null, reviewedById: null, reviewedAt: null, reviewNote: null, itemId: null, work: null, createdAt: now, updatedAt: now, comments: [], history: [], attachmentCount: 0, plan: null, sharedPlan: null });
       step(next.techRequests[0], 'tech_request.created');
       break;
     }
@@ -745,6 +755,35 @@ export function mutateDemo(data: DashboardData, mutation: Mutation, actor: Membe
       request.updatedAt = now;
       break;
     }
+    case 'savePlan':
+    case 'sharePlan': {
+      const request = reviewable(mutation.id);
+      if (!requestPermissions({ ...next, currentUser: actor }, request).plan) throw new Error('This request was declined. Add a comment instead.');
+      const plan: RequestPlan = { features: mutation.plan.features, timeline: [...mutation.plan.timeline].sort((a, b) => a.date.localeCompare(b.date)), notes: mutation.plan.notes.trim() };
+      request.plan = plan; request.updatedAt = now;
+      if (mutation.action === 'savePlan') break;
+      if (!plan.features.length && !plan.timeline.length && !plan.notes) throw new Error('Add a feature, a timeline step, or a note before you send the plan.');
+      const version = (request.sharedPlan?.version ?? 0) + 1;
+      const message = mutation.message?.trim() || null;
+      request.sharedPlan = { ...plan, version, sharedAt: now, sharedById: actor.id, sharedByName: actor.name, confirmedAt: null, confirmedById: null };
+      step(request, 'tech_request.plan_shared', { version, plan }, message);
+      break;
+    }
+    case 'confirmPlan': {
+      const request = next.techRequests.find(r => r.id === mutation.id && r.requesterId === actor.id);
+      if (!request?.sharedPlan) throw new Error('There is no plan to confirm yet.');
+      if (request.sharedPlan.version !== mutation.version) throw new Error('A newer version of the plan arrived. Read it before you confirm.');
+      if (request.sharedPlan.confirmedAt) break;
+      request.sharedPlan = { ...request.sharedPlan, confirmedAt: now, confirmedById: actor.id };
+      step(request, 'tech_request.plan_confirmed', { version: mutation.version });
+      break;
+    }
+    case 'updateMyPreferences': {
+      const me = next.members.find(m => m.id === actor.id);
+      if (me) me.emailNotifications = mutation.emailNotifications;
+      if (next.currentUser.id === actor.id) next.currentUser = { ...next.currentUser, emailNotifications: mutation.emailNotifications };
+      break;
+    }
     case 'deleteRequestComment': {
       const request = next.techRequests.find(r => r.comments.some(c => c.id === mutation.id));
       const found = request?.comments.find(c => c.id === mutation.id);
@@ -811,13 +850,13 @@ export function viewAs(data: DashboardData, viewerId: string | null): DashboardD
 }
 
 /** History steps a requester reads, as on the server. Returns to a project manager are tech-side housekeeping. */
-const REQUESTER_EVENTS = new Set(['tech_request.created', 'tech_request.updated', 'tech_request.forwarded', 'tech_request.assigned', 'tech_request.declined', 'attachment.added', 'attachment.removed']);
+const REQUESTER_EVENTS = new Set(['tech_request.created', 'tech_request.updated', 'tech_request.forwarded', 'tech_request.assigned', 'tech_request.declined', 'tech_request.plan_shared', 'tech_request.plan_confirmed', 'attachment.added', 'attachment.removed']);
 /** A request as its requester receives it: public comments only, and no tech-side notes in its history. */
 export function forRequester(request: TechRequest): TechRequest {
-  const publicNote = (event: RequestEvent) => event.action === 'tech_request.declined' || event.action === 'tech_request.assigned';
+  const publicNote = (event: RequestEvent) => event.action === 'tech_request.declined' || event.action === 'tech_request.assigned' || event.action === 'tech_request.plan_shared';
   return {
-    ...request, comments: request.comments.filter(c => !c.internal),
-    history: request.history.filter(e => REQUESTER_EVENTS.has(e.action)).map(e => ({ ...e, note: publicNote(e) ? e.note : null, payload: Object.fromEntries(Object.entries(e.payload).filter(([key]) => ['name', 'changes', 'type'].includes(key))) })),
+    ...request, plan: null, comments: request.comments.filter(c => !c.internal),
+    history: request.history.filter(e => REQUESTER_EVENTS.has(e.action)).map(e => ({ ...e, note: publicNote(e) ? e.note : null, payload: Object.fromEntries(Object.entries(e.payload).filter(([key]) => ['name', 'changes', 'type', 'version', 'plan'].includes(key))) })),
   };
 }
 

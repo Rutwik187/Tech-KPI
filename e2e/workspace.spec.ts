@@ -37,6 +37,12 @@ async function clickDay(page: Page, iso: string) {
 }
 
 /** Picks a calendar day (`YYYY-MM-DD`) in a shadcn date picker. */
+/** Closes the open details panel with its close button, and waits until it is gone. */
+async function closeDrawer(page: Page) {
+  await page.locator('.drawer').getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await expect(page.locator('.drawer')).toHaveCount(0);
+}
+
 async function pickDate(page: Page, trigger: Locator, iso: string) {
   await trigger.click();
   await clickDay(page, iso);
@@ -1265,7 +1271,9 @@ test('someone from another team raises a request, a project manager forwards it,
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: 'Raise a request' })).toBeVisible();
   await dialog.getByRole('textbox', { name: 'What do you need?', exact: true }).fill('Invoice download for B2B orders');
-  await dialog.getByRole('radio', { name: 'Data or report', exact: true }).click();
+  // People in other teams pick one of two kinds.
+  await expect(dialog.getByRole('radio')).toHaveText(['New tool', 'New feature', 'Low', 'Medium', 'High', 'Urgent']);
+  await dialog.getByRole('radio', { name: 'New feature', exact: true }).click();
   await dialog.getByRole('textbox', { name: 'Details', exact: true }).fill('B2B customers need a GST invoice PDF on the order page. Sample: https://example.com/sample-invoice');
   // A request goes to the requester's own team, so the form shows it instead of asking.
   await expect(dialog.getByRole('combobox', { name: 'Team', exact: true })).toHaveCount(0);
@@ -1283,7 +1291,7 @@ test('someone from another team raises a request, a project manager forwards it,
   await dialog.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(dialog).toBeHidden();
   const raised = (await readDemoData(page)).techRequests.find(request => request.title === 'GST invoice download for B2B orders')!;
-  expect(raised).toMatchObject({ status: 'new', category: 'data', priority: 'high', requesterId: 'demo-priya', departmentId: 'demo-team-1' });
+  expect(raised).toMatchObject({ status: 'new', category: 'feature', priority: 'high', requesterId: 'demo-priya', departmentId: 'demo-team-1' });
 
   // A project manager reviews it first. They ask a question, then forward it with a note only the tech side reads.
   await chooseOption(page, viewAs, 'Kavya Menon · Project manager');
@@ -1294,8 +1302,8 @@ test('someone from another team raises a request, a project manager forwards it,
   await review.getByRole('button', { name: 'Details', exact: true }).click();
   const drawer = page.locator('.drawer');
   await expect(drawer.getByRole('heading', { name: 'GST invoice download for B2B orders' })).toBeVisible();
-  await drawer.getByRole('textbox', { name: 'Write a comment', exact: true }).fill('Is this for every B2B order, or only GST-registered customers?');
-  await drawer.getByRole('button', { name: 'Comment', exact: true }).click();
+  await drawer.getByRole('textbox', { name: 'Write a message', exact: true }).fill('Is this for every B2B order, or only GST-registered customers?');
+  await drawer.getByRole('button', { name: 'Send', exact: true }).click();
   await expect(drawer.locator('.comment')).toContainText('only GST-registered customers?');
   await drawer.getByRole('button', { name: 'Forward to the tech lead', exact: true }).click();
   await expect(dialog.getByRole('heading', { name: 'Forward to the tech lead' })).toBeVisible();
@@ -1316,8 +1324,8 @@ test('someone from another team raises a request, a project manager forwards it,
   await expect(drawer.locator('.comment')).toHaveCount(1);
   await expect(drawer).not.toContainText('Finance confirmed.');
   await expect(drawer.getByRole('switch')).toHaveCount(0);
-  await drawer.getByRole('textbox', { name: 'Write a comment', exact: true }).fill('Only GST-registered customers.');
-  await drawer.getByRole('button', { name: 'Comment', exact: true }).click();
+  await drawer.getByRole('textbox', { name: 'Write a message', exact: true }).fill('Only GST-registered customers.');
+  await drawer.getByRole('button', { name: 'Send', exact: true }).click();
   await expect(drawer.locator('.comment')).toHaveCount(2);
   await page.keyboard.press('Escape');
 
@@ -1428,7 +1436,7 @@ test('the tech lead creates a team and adds its members, who raise requests and 
   await page.getByRole('button', { name: 'Raise a request', exact: true }).first().click();
   await expect(dialog.locator('.request-team-fact')).toContainText('Customer support');
   await dialog.getByRole('textbox', { name: 'What do you need?', exact: true }).fill('Coupon field rejects valid codes');
-  await dialog.getByRole('radio', { name: 'Something is broken', exact: true }).click();
+  await dialog.getByRole('radio', { name: 'New feature', exact: true }).click();
   await dialog.getByRole('textbox', { name: 'Details', exact: true }).fill('Since this morning, WELCOME10 shows as invalid at checkout on mobile.');
   await dialog.getByRole('radio', { name: 'Urgent', exact: true }).click();
   await dialog.getByRole('button', { name: 'Send request', exact: true }).click();
@@ -1442,7 +1450,15 @@ test('the tech lead creates a team and adds its members, who raise requests and 
   await chooseOption(page, viewAs, 'Rohan Desai · Admin');
   await page.locator('[data-slot="sidebar"]').getByRole('link', { name: /^Requests/ }).click();
   await page.getByRole('radio', { name: /^With project manager/ }).click();
-  await page.locator('.tech-request-card').filter({ hasText: 'Coupon field rejects valid codes' }).getByRole('button', { name: 'Assign', exact: true }).click();
+  // The tech side files it as broken. It sees every kind, where the team member saw two.
+  const coupon = page.locator('.tech-request-card').filter({ hasText: 'Coupon field rejects valid codes' });
+  await coupon.getByRole('button', { name: 'Details', exact: true }).click();
+  await page.locator('.drawer').getByRole('button', { name: 'Edit', exact: true }).click();
+  await dialog.getByRole('radio', { name: 'Something is broken', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(page.locator('.drawer .request-category')).toContainText('Something is broken');
+  await closeDrawer(page);
+  await coupon.getByRole('button', { name: 'Assign', exact: true }).click();
   await expect(dialog.getByRole('radio', { name: 'Bug', exact: true })).toHaveAttribute('aria-checked', 'true');
   await expect(dialog.getByRole('radio', { name: 'Critical', exact: true })).toHaveAttribute('aria-checked', 'true');
   await chooseOption(page, dialog.getByRole('combobox', { name: 'Owner', exact: true }), 'Arjun Patil');
@@ -1653,4 +1669,71 @@ test('an admin removes and restores people from the People list, and deletes an 
   await dialog.getByRole('button', { name: 'Delete invite', exact: true }).click();
   await expect(page.locator('.people-table')).not.toContainText('Wrong Email');
   expect((await readDemoData(page)).members.some(m => m.email === 'wrong.email@urbangabru.in')).toBe(false);
+});
+
+test('a project manager writes a plan and sends it, and the team member confirms it in the conversation', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await openDemo(page, 'requests');
+  const viewAs = page.getByRole('combobox', { name: 'View the demo as', exact: true });
+  const drawer = page.locator('.drawer');
+  await chooseOption(page, viewAs, 'Kavya Menon · Project manager');
+  await page.getByRole('radio', { name: /^With tech lead/ }).click();
+  await page.locator('.tech-request-card').filter({ hasText: 'Add the Meta pixel' }).getByRole('button', { name: 'Details', exact: true }).click();
+  const plan = drawer.locator('.plan-section');
+  await plan.getByRole('button', { name: 'Write a plan', exact: true }).click();
+  await plan.getByRole('textbox', { name: 'Feature 1', exact: true }).fill('Meta pixel on the landing page');
+  await page.keyboard.press('Enter');
+  await plan.getByRole('textbox', { name: 'Feature 2', exact: true }).fill('Purchase event');
+  await plan.getByRole('button', { name: 'Add a step', exact: true }).click();
+  const goLive = shiftDate(dateKey(new Date(), 'Asia/Kolkata'), 3, 'Asia/Kolkata');
+  await pickDate(page, plan.getByRole('button', { name: /^Date of step 1/ }), goLive);
+  await plan.getByRole('textbox', { name: 'Step 1', exact: true }).fill('Live on the landing page');
+  await plan.getByRole('textbox', { name: 'Notes', exact: true }).fill('Add-to-cart is not included.');
+  await plan.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(plan.locator('.plan-view')).toContainText('Purchase event');
+  // A draft stays with the tech side.
+  await closeDrawer(page);
+  await chooseOption(page, viewAs, 'Neha Joshi · Digital marketing team lead');
+  await page.locator('.tech-request-card').filter({ hasText: 'Add the Meta pixel' }).getByRole('button', { name: 'Details', exact: true }).click();
+  await expect(drawer.locator('.plan-section')).toHaveCount(0);
+  await closeDrawer(page);
+
+  // Sent, it becomes version 1, with a message, in the plan and in the conversation.
+  await chooseOption(page, viewAs, 'Kavya Menon · Project manager');
+  await page.getByRole('radio', { name: /^With tech lead/ }).click();
+  await page.locator('.tech-request-card').filter({ hasText: 'Add the Meta pixel' }).getByRole('button', { name: 'Details', exact: true }).click();
+  await plan.getByRole('button', { name: 'Edit plan', exact: true }).click();
+  await plan.getByRole('button', { name: 'Send to Neha', exact: true }).click();
+  await plan.getByRole('textbox', { name: 'Message for Neha', exact: true }).fill('Please check the go-live date.');
+  await plan.getByRole('button', { name: 'Send version 1 to Neha', exact: true }).click();
+  await expect(plan.locator('.plan-status')).toContainText('Version 1');
+  await expect(plan.locator('.plan-status')).toContainText('Waiting for Neha');
+  await expect(drawer.locator('.conversation-plan')).toContainText('sent version 1 of the plan');
+  await closeDrawer(page);
+
+  // The team member reads it and confirms it. Both sides see it confirmed.
+  await chooseOption(page, viewAs, 'Neha Joshi · Digital marketing team lead');
+  await page.locator('.tech-request-card').filter({ hasText: 'Add the Meta pixel' }).getByRole('button', { name: 'Details', exact: true }).click();
+  await expect(plan.locator('.plan-view')).toContainText('Live on the landing page');
+  await expect(drawer.locator('.conversation-plan')).toContainText('Please check the go-live date.');
+  await plan.getByRole('button', { name: 'Looks good', exact: true }).click();
+  await expect(plan.locator('.plan-status')).toContainText('You confirmed it');
+  await expect(drawer.locator('.conversation')).toContainText('confirmed version 1 of the plan');
+  await closeDrawer(page);
+  await chooseOption(page, viewAs, 'Kavya Menon · Project manager');
+  await page.getByRole('radio', { name: /^With tech lead/ }).click();
+  await page.locator('.tech-request-card').filter({ hasText: 'Add the Meta pixel' }).getByRole('button', { name: 'Details', exact: true }).click();
+  await expect(plan.locator('.plan-status')).toContainText('Neha confirmed it');
+  await closeDrawer(page);
+
+  // Each person chooses whether to get request emails.
+  await chooseOption(page, viewAs, 'Neha Joshi · Digital marketing team lead');
+  await page.goto('/demo/account');
+  const toggle = page.getByRole('switch', { name: 'Email me about requests', exact: true });
+  await expect(toggle).toBeChecked();
+  await toggle.click();
+  await expect(toggle).not.toBeChecked();
+  expect((await readDemoData(page)).members.find(m => m.id === 'demo-neha')?.emailNotifications).toBe(false);
+  expect(pageErrors).toEqual([]);
 });

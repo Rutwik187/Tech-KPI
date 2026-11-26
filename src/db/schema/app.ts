@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { boolean, check, date, foreignKey, index, integer, jsonb, numeric, pgEnum, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { RequestCategory, Settings, TechRequest } from "@/lib/types";
+import type { RequestCategory, RequestPlan, Settings, SharedPlan, TechRequest } from "@/lib/types";
 import { ADHOC_PROJECT_ID } from "@/lib/project-defaults";
 import { user } from "./auth";
 
@@ -62,6 +62,8 @@ export const memberProfiles = pgTable("tech_kpi_member_profile", {
   departmentId: uuid("department_id").references(() => departments.id, { onDelete: "set null" }),
   // A team can have several members who raise requests. The admin marks who leads it. It changes no permission.
   isTeamLead: boolean("is_team_lead").notNull().default(false),
+  // Request emails. Each person can turn them off on My account.
+  emailNotifications: boolean("email_notifications").notNull().default(true),
 }, (t) => [check("tech_kpi_capacity_range", sql`${t.capacity} > 0 AND ${t.capacity} <= 168`)]);
 export const workItems = pgTable("tech_kpi_work_item", {
   id: uuid("id").defaultRandom().primaryKey(), sequence: integer("sequence").generatedAlwaysAsIdentity().notNull().unique(),
@@ -123,6 +125,8 @@ export const techRequests = pgTable("tech_kpi_tech_request", {
   forwardedById: text("forwarded_by_id").references(() => user.id, { onDelete: "set null" }), forwardedAt: stamp("forwarded_at"),
   reviewedById: text("reviewed_by_id").references(() => user.id, { onDelete: "set null" }), reviewedAt: stamp("reviewed_at"), reviewNote: text("review_note"),
   itemId: uuid("item_id").references(() => workItems.id, { onDelete: "set null" }),
+  // The plan's working draft, and the last version sent to the requester. See migration 0015.
+  plan: jsonb("plan").$type<RequestPlan>(), planShared: jsonb("plan_shared").$type<SharedPlan>(),
   createdAt: stamp("created_at").defaultNow().notNull(), updatedAt: stamp("updated_at").defaultNow().notNull(),
 }, (t) => [
   index("tech_kpi_tech_request_status_idx").on(t.status, t.createdAt),
@@ -220,3 +224,19 @@ export const leaveRequests = pgTable("tech_kpi_leave_request", {
   check("tech_kpi_leave_request_dates", sql`jsonb_typeof(${t.dates}) = 'array' AND jsonb_array_length(${t.dates}) BETWEEN 1 AND 62`),
   check("tech_kpi_leave_request_reviewed", sql`(${t.status} = 'pending') = (${t.reviewedAt} IS NULL)`),
 ]);
+
+/** Emails the workspace sends. Written with the change they report, then sent. Recent waiting rows go out once sending is set up. */
+export const notifications = pgTable("tech_kpi_notification", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+  email: text("email").notNull(), kind: text("kind").notNull(), entityId: text("entity_id"),
+  subject: text("subject").notNull(), html: text("html").notNull(), text: text("text").notNull(),
+  status: text("status").$type<"pending" | "sent" | "failed" | "expired">().notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0), lastError: text("last_error"),
+  createdAt: stamp("created_at").defaultNow().notNull(), sentAt: stamp("sent_at"),
+}, (t) => [
+  index("tech_kpi_notification_status_idx").on(t.status, t.createdAt),
+  index("tech_kpi_notification_entity_idx").on(t.entityId),
+  check("tech_kpi_notification_status", sql`${t.status} IN ('pending', 'sent', 'failed', 'expired')`),
+]);
+

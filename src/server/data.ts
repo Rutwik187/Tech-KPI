@@ -46,9 +46,9 @@ const assignee = alias(user, "assignee");
  * History steps a requester may read. Returning a request to a project manager, and comment removals, are tech-side
  * housekeeping, so the requester's history leaves them out. Their stage already shows where the request is.
  */
-const REQUESTER_EVENTS = new Set(["tech_request.created", "tech_request.updated", "tech_request.forwarded", "tech_request.assigned", "tech_request.declined", "attachment.added", "attachment.removed"]);
+const REQUESTER_EVENTS = new Set(["tech_request.created", "tech_request.updated", "tech_request.forwarded", "tech_request.assigned", "tech_request.declined", "tech_request.plan_shared", "tech_request.plan_confirmed", "attachment.added", "attachment.removed"]);
 /** History steps everyone on the tech side reads. Comments are shown as comments, so they are not repeated as steps. */
-const HIDDEN_EVENTS = new Set(["tech_request.commented", "tech_request.comment_removed"]);
+const HIDDEN_EVENTS = new Set(["tech_request.commented", "tech_request.comment_removed", "tech_request.plan_saved"]);
 
 /**
  * Requests with their requester's name, the work they became, their comments, their history, and how many files they have.
@@ -83,12 +83,12 @@ async function loadTechRequests(where: SQL | undefined, limit: number, viewer: R
   for (const { event, actorName } of eventRows) {
     if (HIDDEN_EVENTS.has(event.action) || (requester && !REQUESTER_EVENTS.has(event.action))) continue;
     // A forwarding note is for the tech lead. The decline reason and the assignment note are written for the requester.
-    const publicNote = event.action === "tech_request.declined" || event.action === "tech_request.assigned";
+    const publicNote = event.action === "tech_request.declined" || event.action === "tech_request.assigned" || event.action === "tech_request.plan_shared";
     const list = history.get(event.entityId) ?? [];
     list.push({
       id: event.id, action: event.action, actorId: event.actorId, actorName, createdAt: event.createdAt.toISOString(),
       note: requester && !publicNote ? null : event.reason,
-      payload: requester ? pick(event.payload, ["name", "changes", "type"]) : event.payload,
+      payload: requester ? pick(event.payload, ["name", "changes", "type", "version", "plan"]) : event.payload,
     });
     history.set(event.entityId, list);
   }
@@ -104,6 +104,8 @@ async function loadTechRequests(where: SQL | undefined, limit: number, viewer: R
       doneAt: (item.type === "task" ? item.completedAt : item.fixedAt)?.toISOString() ?? null,
     } : null,
     comments: comments.get(request.id) ?? [], history: history.get(request.id) ?? [], attachmentCount: files.get(request.id) ?? 0,
+    // A requester reads the plan that was sent, never the draft.
+    plan: requester ? null : request.plan ?? null, sharedPlan: request.planShared ?? null,
   }));
 }
 function pick(value: Record<string, unknown>, keys: string[]) {
@@ -216,6 +218,7 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
     capacity: profile?.capacity ?? (leadsWork(memberRole(identity.role)) ? appSettings.defaultLeadCapacityHours : appSettings.defaultDevCapacityHours),
     isActive: !identity.banned && profile?.isActive !== false,
     joinedOn: profile?.joinedOn, departmentId: profile?.departmentId ?? null, isTeamLead: profile?.isTeamLead ?? false,
+    ...(identity.id === currentUser.id ? { emailNotifications: profile?.emailNotifications ?? true } : {}),
     // A Microsoft ID shows whether someone has signed in. Only people who may change that person receive it.
     ...(microsoftObjectId && manageable.has(memberRole(identity.role)) ? { microsoftObjectId } : {}),
   }));

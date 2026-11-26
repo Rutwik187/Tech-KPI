@@ -1090,6 +1090,78 @@ a.attachment-name:hover { text-decoration:underline; text-underline-offset:2px; 
 .comment-remove { height:auto !important; padding:0 !important; margin-top:4px; font-size:12px; color:var(--muted-foreground); }
 .comment-body .confirm-inline { margin-top:6px; font-size:12px; }
 .comment-form { display:flex; flex-direction:column; gap:8px; }
+/* A request's plan: what will be built, when, and notes, with who sent which version. */
+.plan-section .detail-section-heading>[data-slot="button"] { margin-left:auto; }
+.plan-status { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; margin-bottom:10px; font-size:12.5px; color:var(--muted-foreground); }
+.plan-version { padding:1px 8px; border-radius:999px; background:var(--accent); color:var(--primary); font-weight:600; }
+.plan-confirmed { display:inline-flex; align-items:center; gap:4px; color:var(--success-foreground); font-weight:550; }
+.plan-confirmed svg { width:14px; height:14px; }
+.plan-waiting { color:var(--warning-foreground); font-weight:550; }
+.plan-unsent { margin:-4px 0 10px; font-size:12.5px; color:var(--warning-foreground); }
+.plan-view { display:flex; flex-direction:column; gap:14px; padding:14px; border:1px solid var(--border); border-radius:10px; background:var(--card); }
+.plan-view.is-compact { gap:10px; padding:10px 12px; margin-top:8px; }
+.plan-view h4 { display:flex; align-items:center; gap:6px; margin-bottom:6px; font-size:12px; font-weight:600; letter-spacing:.02em; text-transform:uppercase; color:var(--muted-foreground); }
+.plan-view h4 svg { width:14px; height:14px; }
+.plan-features,.plan-timeline { display:flex; flex-direction:column; gap:6px; margin:0; padding:0; list-style:none; font-size:13.5px; line-height:1.5; }
+.plan-features li { display:flex; gap:8px; }
+.plan-features svg { width:15px; height:15px; margin-top:3px; flex-shrink:0; color:var(--success-foreground); }
+.plan-timeline li { display:grid; grid-template-columns:96px minmax(0,1fr); gap:10px; padding-left:12px; border-left:2px solid var(--border); }
+.plan-timeline time { font-size:12.5px; font-weight:600; color:var(--primary); font-variant-numeric:tabular-nums; }
+.plan-notes { white-space:pre-wrap; font-size:13.5px; line-height:1.6; }
+.plan-confirm { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:10px; padding:10px 12px; border-radius:10px; background:color-mix(in oklab, var(--primary) 7%, var(--card)); }
+.plan-confirm p { flex:1; min-width:160px; font-size:13px; font-weight:550; }
+.plan-editor { display:flex; flex-direction:column; gap:14px; padding:14px; border:1px solid var(--border); border-radius:10px; background:var(--muted); }
+.plan-editor fieldset { display:flex; flex-direction:column; gap:6px; min-width:0; border:0; padding:0; margin:0; }
+.plan-editor legend { display:flex; align-items:center; gap:6px; margin-bottom:6px; font-size:12.5px; font-weight:600; }
+.plan-editor legend svg { width:14px; height:14px; color:var(--muted-foreground); }
+.plan-editor fieldset>[data-slot="button"] { align-self:flex-start; }
+.plan-row { display:grid; grid-template-columns:22px minmax(0,1fr) auto; align-items:center; gap:8px; }
+.plan-row-date { grid-template-columns:minmax(140px,170px) minmax(0,1fr) auto; }
+.plan-row-number { font-size:12px; font-weight:600; color:var(--muted-foreground); text-align:right; font-variant-numeric:tabular-nums; }
+.plan-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+.plan-send { display:flex; flex-direction:column; gap:8px; }
+/* The conversation: messages, plan versions, and steps in one line of time. */
+.conversation { display:flex; flex-direction:column; gap:12px; margin:0 0 14px; padding:0; list-style:none; }
+.conversation .comment.is-mine .comment-body { background:color-mix(in oklab, var(--primary) 5%, var(--card)); }
+.conversation-step { display:grid; grid-template-columns:28px minmax(0,1fr); gap:0 10px; align-items:start; font-size:12.5px; color:var(--muted-foreground); }
+.conversation-step>span { justify-self:center; width:8px; height:8px; margin-top:6px; border-radius:50%; background:color-mix(in oklab, var(--muted-foreground) 45%, transparent); }
+.conversation-step strong { color:var(--foreground); font-weight:550; }
+.conversation-step time { opacity:.85; }
+.conversation-step blockquote { grid-column:2; margin-top:4px; padding:6px 10px; border-left:2px solid var(--primary); border-radius:0 6px 6px 0; background:var(--muted); color:var(--foreground); font-size:12.5px; white-space:pre-wrap; }
+.conversation-plan { padding:10px 12px; border:1px solid color-mix(in oklab, var(--primary) 30%, var(--border)); border-radius:10px; background:color-mix(in oklab, var(--primary) 4%, var(--card)); }
+.conversation-plan-head { display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted-foreground); }
+.conversation-plan-head svg { width:15px; height:15px; color:var(--primary); flex-shrink:0; }
+.conversation-plan-head>span { flex:1; min-width:0; }
+.conversation-plan-head strong { color:var(--foreground); font-weight:600; }
+.conversation-plan .comment-text { margin-top:6px; }
+.conversation-plan details { margin-top:6px; }
+.conversation-plan summary { cursor:pointer; font-size:12.5px; font-weight:550; color:var(--primary); }
+.plan-latest { margin-left:6px; height:18px; font-size:10.5px; color:var(--primary); }
+/* Emails: each person's switch, and the admin's view of what went out. */
+.email-toggle { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:4px 0 10px; cursor:pointer; }
+.email-toggle>span { display:flex; flex-direction:column; gap:2px; font-size:12.5px; color:var(--muted-foreground); line-height:1.45; }
+.email-toggle strong { font-size:13.5px; color:var(--foreground); font-weight:600; }
+.account-emails .form-help { padding:0 0 2px; }
+.email-settings-body { display:flex; flex-direction:column; gap:12px; padding:0 18px 18px; }
+.email-sender { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:12px 14px; border-radius:10px; border:1px solid var(--border); }
+.email-sender>svg { width:20px; height:20px; flex-shrink:0; }
+.email-sender.is-ready>svg { color:var(--success-foreground); }
+.email-sender.is-off { border-color:color-mix(in oklab, var(--warning-foreground) 35%, var(--border)); background:color-mix(in oklab, var(--warning-foreground) 6%, var(--card)); }
+.email-sender.is-off>svg { color:var(--warning-foreground); }
+.email-sender>div { display:flex; flex-direction:column; flex:1; min-width:200px; gap:2px; font-size:12.5px; color:var(--muted-foreground); }
+.email-sender strong { font-size:13.5px; color:var(--foreground); }
+.email-week { font-size:12.5px; color:var(--muted-foreground); }
+.email-week strong { color:var(--foreground); }
+.email-list { display:flex; flex-direction:column; margin:0; padding:0; list-style:none; border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+.email-list li { display:flex; align-items:center; gap:10px; padding:8px 12px; }
+.email-list li+li { border-top:1px solid var(--border); }
+.email-list li>svg { width:15px; height:15px; flex-shrink:0; color:var(--muted-foreground); }
+.email-list-text { display:flex; flex-direction:column; flex:1; min-width:0; font-size:12px; color:var(--muted-foreground); }
+.email-list-text strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; font-weight:550; color:var(--foreground); }
+.email-list-text span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.email-status.is-sent { color:var(--success-foreground); }
+.email-status.is-failed { color:var(--destructive); }
+.email-status.is-pending { color:var(--warning-foreground); }
 .comment-form-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; }
 .comment-form-actions [type="submit"] { margin-left:auto; }
 .internal-toggle { display:inline-flex; align-items:center; gap:7px; font-size:12.5px; font-weight:500; cursor:pointer; }

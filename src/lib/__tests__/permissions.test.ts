@@ -18,7 +18,7 @@ describe('roles', () => {
 
   it('lets an admin make every change, and nobody else make organisation changes', () => {
     for (const action of Object.keys(ACTION_CAPABILITY) as ActionName[]) {
-      const ownOnly = ['requestTicket', 'withdrawTicketRequest', 'withdrawDueDateRequest', 'requestLeave', 'withdrawLeaveRequest', 'createTechRequest', 'updateTechRequest', 'withdrawTechRequest'];
+      const ownOnly = ['requestTicket', 'withdrawTicketRequest', 'withdrawDueDateRequest', 'requestLeave', 'withdrawLeaveRequest', 'createTechRequest', 'updateTechRequest', 'withdrawTechRequest', 'confirmPlan'];
       expect(mayDo('admin', action), action).toBe(!ownOnly.includes(action));
     }
     for (const role of ['tech_lead', 'project_manager', 'developer', 'requester'] as const) {

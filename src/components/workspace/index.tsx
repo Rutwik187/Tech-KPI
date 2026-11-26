@@ -145,7 +145,8 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
   const requestKey = searchParams.get(REQUEST_PARAM);
   const selectedRequest = requestKey ? data.techRequests.find(r => r.key === requestKey || r.id === requestKey) : undefined;
   // The list keeps its filters while a ticket opens and closes, so the open ticket is not part of its identity.
-  const listQuery = useMemo(() => { const params = new URLSearchParams(searchParams.toString()); params.delete(OPEN_PARAM); return params.toString(); }, [searchParams]);
+  // The same goes for an open request, so opening one never resets the inbox's tab or search.
+  const listQuery = useMemo(() => { const params = new URLSearchParams(searchParams.toString()); params.delete(OPEN_PARAM); params.delete(REQUEST_PARAM); return params.toString(); }, [searchParams]);
 
   const openItem = useCallback((id: string | null) => {
     const item = id ? data.items.find(i => i.id === id) : undefined;
@@ -337,10 +338,10 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
           : <Panel><EmptyState title={['people', 'other-teams', 'activity'].includes(page) ? 'This page is for admins' : 'This page is for the tech lead'} description="Every page you can use is in the menu." action={<Button variant="outline" asChild><Link href={routeFor(data, 'dashboard')}>Go to my overview<ArrowRight data-icon="inline-end" /></Link></Button>} /></Panel>
         : isRequester ? <>
           {(page === 'dashboard' || page === 'requests') && <MyRequests data={data} onRaise={raiseRequest} onOpen={openRequest} onEdit={editRequest} mutate={mutate} busy={busy} />}
-          {page === 'account' && <Account data={data} />}
+          {page === 'account' && <Account data={data} mutate={mutate} busy={busy} />}
         </> : isManager ? <>
           {(page === 'dashboard' || page === 'requests') && <RequestInbox key={`${data.currentUser.role}?${listQuery}`} data={data} onOpen={openRequest} onAct={actOnRequest} onOpenItem={openItem} busy={busy} />}
-          {page === 'account' && <Account data={data} />}
+          {page === 'account' && <Account data={data} mutate={mutate} busy={busy} />}
         </> : <>
           {page === 'dashboard' && isAdmin && <OrgOverview data={data} />}
           {page === 'dashboard' && <Dashboard data={data} week={week} scores={scores} onOpen={openItem} onOpenProject={setProjectId} onAction={act} onExtend={extendTicket} onAddHours={addHours} onAdd={addItem} busy={busy} />}
@@ -355,7 +356,7 @@ export function Workspace({ initialData, children }: { initialData: DashboardDat
           {page === 'people' && <People data={data} onEdit={m => setModal({ type: 'member', member: m })} mutate={mutate} busy={busy} />}
           {page === 'activity' && <ActivityLog data={data} onOpenItem={openItem} onOpenRequest={openRequest} />}
           {page === 'settings' && <SettingsPage key={JSON.stringify(data.settings)} data={data} mutate={mutate} busy={busy} onHoliday={() => setModal({ type: 'holiday' })} />}
-          {page === 'account' && <Account data={data} />}
+          {page === 'account' && <Account data={data} mutate={mutate} busy={busy} />}
         </>}
         {children}
         <footer className="workspace-footer">{requestsOnly
