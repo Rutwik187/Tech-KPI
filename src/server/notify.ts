@@ -34,6 +34,12 @@ async function person(tx: Tx, id: string | null | undefined): Promise<Person[]> 
     .leftJoin(memberProfiles, eq(memberProfiles.userId, user.id))
     .where(and(eq(user.id, id), sql`${user.banned} IS NOT TRUE`, sql`${memberProfiles.isActive} IS NOT FALSE`, sql`${memberProfiles.emailNotifications} IS NOT FALSE`));
 }
+/** Whether anyone active has the project manager role, even if they turned emails off. Without one, the tech lead reviews new requests. */
+async function anyProjectManager(tx: Tx) {
+  const [row] = await tx.select({ id: user.id }).from(user).leftJoin(memberProfiles, eq(memberProfiles.userId, user.id))
+    .where(and(eq(user.role, "project_manager"), sql`${user.banned} IS NOT TRUE`, sql`${memberProfiles.isActive} IS NOT FALSE`)).limit(1);
+  return !!row;
+}
 /** Project managers review new requests. With none, the tech lead and admins hear about them, so nothing waits unseen. */
 async function projectManagers(tx: Tx) {
   const managers = await peopleWithRoles(tx, ["project_manager"]);
@@ -94,11 +100,15 @@ export async function notify(tx: Tx, actor: Member, event: NotifyEvent): Promise
 
   switch (event.kind) {
     case "request.created": {
-      letters.push({ to: await projectManagers(tx), mail: compose({ subject: `${tag} New request from ${row.requesterName} (${team}): ${request.title}`, heading: "A new request needs review",
-        intro: `${row.requesterName} from ${team} asked the tech team for something. Review it, ask any questions in the comments, then forward it to the tech lead or decline it.`,
+      // With no project manager, new requests wait for the tech lead, so the email asks them to assign it.
+      const managed = await anyProjectManager(tx);
+      letters.push({ to: managed ? await projectManagers(tx) : await techLeads(tx), mail: compose({ subject: `${tag} New request from ${row.requesterName} (${team}): ${request.title}`, heading: managed ? "A new request needs review" : "A new request is ready to assign",
+        intro: managed
+          ? `${row.requesterName} from ${team} asked the tech team for something. Review it, ask any questions in the comments, then forward it to the tech lead or decline it.`
+          : `${row.requesterName} from ${team} asked the tech team for something. Ask any questions in the comments, then assign it to a developer or decline it.`,
         facts: [...facts, ["Kind", request.category === "tool" ? "New tool" : request.category === "feature" ? "New feature" : request.category], ["Tool", request.tool], ["Needed by", request.neededBy ?? ""]], quote: request.description, quoteLabel: "Details", button: { label: "Review the request", ...link } }) });
       letters.push({ to: await requester(), mail: compose({ subject: `${tag} We got your request: ${request.title}`, heading: "Your request was sent",
-        intro: "A project manager reviews it next. You will get an email at each step, and you can follow it any time in the workspace.", facts, button: { label: "Follow your request", ...link } }), receipt: true });
+        intro: `${managed ? "A project manager" : "The tech lead"} reviews it next. You will get an email at each step, and you can follow it any time in the workspace.`, facts, button: { label: "Follow your request", ...link } }), receipt: true });
       break;
     }
     case "request.forwarded": {

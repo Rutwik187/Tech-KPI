@@ -8,9 +8,17 @@ import { auth } from "@/lib/auth";
 import type { Member, Role } from "@/lib/types";
 import { storedRole } from "./authz";
 
+const LOCAL_HOSTS = ["localhost", "127.0.0.1", "[::1]", "::1"];
+/**
+ * Test people may only be made on a local server with a local database. .env.local holds the production database,
+ * so a test run without an exported scratch DATABASE_URL would otherwise write test records to the live workspace.
+ */
 function assertLocal(baseURL: string): URL {
   const url = new URL(baseURL);
-  if (process.env.VERCEL || !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) throw new Error("Offline session fixtures are limited to a local test server.");
+  if (process.env.VERCEL || !LOCAL_HOSTS.includes(url.hostname)) throw new Error("Offline session fixtures are limited to a local test server.");
+  let databaseHost = "";
+  try { databaseHost = new URL(process.env.DATABASE_URL ?? "").hostname; } catch { /* no usable address */ }
+  if (!LOCAL_HOSTS.includes(databaseHost)) throw new Error("Offline session fixtures need a local test database. Export a scratch DATABASE_URL on localhost first; .env.local points at production.");
   return url;
 }
 export async function createOfflineSessionForUser(userId: string, baseURL: string) {

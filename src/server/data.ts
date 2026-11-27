@@ -129,16 +129,25 @@ export async function getSnapshotSource(): Promise<DashboardData | null> {
   });
 }
 
+/** Whether anyone active has the project manager role. Without one, new requests wait for the tech lead instead. */
+async function noProjectManager(): Promise<boolean> {
+  const [row] = await db.select({ id: user.id }).from(user).leftJoin(memberProfiles, eq(memberProfiles.userId, user.id))
+    .where(and(eq(user.role, "project_manager"), sql`${user.banned} IS NOT TRUE`, sql`${memberProfiles.isActive} IS NOT FALSE`)).limit(1);
+  return !row;
+}
+
 /** A requester sees the teams, their own requests, and their team's requests. No tickets, people, or scores. */
 async function loadRequesterData(currentUser: Member): Promise<DashboardData> {
-  const [departmentRows, settingRows, requests] = await Promise.all([
+  const [departmentRows, settingRows, requests, noManager] = await Promise.all([
     loadDepartments(),
     db.select().from(settings).where(eq(settings.id, 1)),
     loadTechRequests(or(eq(techRequests.requesterId, currentUser.id), currentUser.departmentId ? eq(techRequests.departmentId, currentUser.departmentId) : undefined), 300, "requester"),
+    noProjectManager(),
   ]);
   return {
     currentUser, members: [currentUser], projects: [], phases: [], items: [], requests: [], dueDateRequests: [], activities: [], leaves: [], leaveRequests: [], holidays: [],
     settings: withDefaults(settingRows[0]?.value), mode: "live", snapshots: [], departments: departmentRows, techRequests: requests,
+    ...(noManager ? { noProjectManager: true } : {}),
   };
 }
 
@@ -232,5 +241,6 @@ async function loadDashboardData(currentUser: Member): Promise<DashboardData> {
     items: itemRows.map(serializeItem), requests: requestRows.map(serializeRequest), dueDateRequests: dueDateRows.map(serializeDueDateRequest), activities: activityRows.map((activity) => ({ ...activity, createdAt: activity.createdAt.toISOString() })),
     leaveRequests: leaveRequestRows.map(r => ({ ...r, reviewedAt: r.reviewedAt?.toISOString() ?? null, createdAt: r.createdAt.toISOString() })), leaves: leaveRows, holidays: holidayRows, settings: appSettings, mode: "live", snapshots: snapshotRows,
     departments: departmentRows, techRequests: techRequestRows,
+    ...(await noProjectManager() ? { noProjectManager: true } : {}),
   };
 }

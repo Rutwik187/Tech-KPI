@@ -149,7 +149,8 @@ export function requestWork(data: DashboardData, request: TechRequest): RequestW
   };
 }
 export function requestStage(data: DashboardData, request: TechRequest): RequestStage {
-  if (request.status === 'new') return 'with_pm';
+  // With no project manager in the workspace, a new request waits for the tech lead, so it never sits with nobody.
+  if (request.status === 'new') return data.noProjectManager ? 'with_lead' : 'with_pm';
   if (request.status === 'forwarded') return 'with_lead';
   if (request.status === 'declined') return 'declined';
   const status = requestWork(data, request)?.status;

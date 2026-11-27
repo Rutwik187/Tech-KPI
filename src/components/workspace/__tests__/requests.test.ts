@@ -22,6 +22,16 @@ describe('requests from other teams', () => {
     expect(requestStage(data, { ...request, status: 'declined' })).toBe('declined');
   });
 
+  it('sends a new request straight to the tech lead when the workspace has no project manager', () => {
+    const data = { ...demo(), noProjectManager: true };
+    const request = data.techRequests.find(r => r.status === 'new')!;
+    expect(requestStage(data, request)).toBe('with_lead');
+    expect(requestStage(data, { ...request, status: 'forwarded' })).toBe('with_lead');
+    // The tech lead can still assign or decline it, and the requester can still change it.
+    const lead = data.members.find(m => m.role === 'tech_lead')!;
+    expect(requestPermissions({ ...data, currentUser: lead }, request)).toMatchObject({ assign: true, decline: true });
+  });
+
   it('prefers the live ticket over the server summary, and uses the summary when the ticket is not visible', () => {
     const data = demo();
     const request = data.techRequests.find(r => r.status === 'assigned')!;

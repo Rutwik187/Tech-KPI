@@ -378,6 +378,9 @@ async function main() {
     await call(`/api/attachments?itemId=${task.id}`, requesterCookie, undefined, 404);
     await call("/api/workload", requesterCookie, undefined, 403);
     let adminView: DashboardData = await (await call("/api/data", adminCookie)).json();
+    // With no project manager, new requests wait for the tech lead. The page learns that from this flag.
+    const hadManager = (await db.select({ id: schema.user.id }).from(schema.user).where(eq(schema.user.role, "project_manager")).limit(1)).length > 0;
+    assert.equal(!!adminView.noProjectManager, !hadManager); assert.equal(!!requesterView.noProjectManager, !hadManager); checks += 2;
     assert(adminView.techRequests.some((request) => request.id === raised.id && request.status === "new")); checks++;
     assert(!((await (await call("/api/data", developerCookie)).json()) as DashboardData).techRequests.some((request) => request.id === raised.id)); checks++;
     await mutate(adminCookie, { action: "assignTechRequest", id: raised.id, type: "task", assigneeId: requesterFixture.userId, title: `${trace}-from-request`, estimateHours: 4 }, 400);
@@ -458,6 +461,8 @@ async function main() {
     const managerFixture = await createOfflineSessionFixture({ baseURL, role: "project_manager", name: `${trace}-manager` }); extraFixtures.push(managerFixture);
     const managerCookie = managerFixture.cookieHeader;
     let managerView: DashboardData = await (await call("/api/data", managerCookie)).json();
+    assert.equal((await (await call("/api/data", adminCookie)).json() as DashboardData).noProjectManager, undefined);
+    assert.equal((await (await call("/api/data", requesterCookie)).json() as DashboardData).noProjectManager, undefined); checks += 2;
     assert.equal(managerView.currentUser.role, "project_manager"); assert.equal(managerView.items.length, 0); assert.equal(managerView.members.length, 1);
     assert.equal(managerView.projects.length, 0); assert.equal(managerView.activities.length, 0); assert(managerView.techRequests.some((request) => request.id === toDecline.id)); checks += 6;
     await call("/requests", managerCookie);

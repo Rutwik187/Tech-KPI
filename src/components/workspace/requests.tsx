@@ -90,7 +90,10 @@ const STEPS = ['Raised', 'Project manager', 'Tech lead', 'In progress', 'Done'];
 function RequestProgress({ data, request }: { data: DashboardData; request: TechRequest }) {
   const stage = requestStage(data, request);
   const work = requestWork(data, request);
-  const step = stage === 'with_pm' ? 1 : stage === 'with_lead' ? 2 : stage === 'done' ? 4 : 3;
+  // With no project manager, a request goes from raised straight to the tech lead, so that step is left out.
+  const steps = data.noProjectManager ? STEPS.filter(label => label !== 'Project manager') : STEPS;
+  const step = (stage === 'with_pm' ? 1 : stage === 'with_lead' ? 2 : stage === 'done' ? 4 : 3) - (data.noProjectManager && stage !== 'with_pm' ? 1 : 0);
+  const last = steps.length - 1;
   const who = work ? work.assigneeName.split(' ')[0] : 'A developer';
   const planned = work?.type === 'task' && work.dueDate && stage !== 'done' ? ` It is planned for ${displayDate(work.dueDate, { weekday: 'short' })}.` : '';
   const line = stage === 'with_pm' ? `A project manager is reviewing it.${data.currentUser.role === 'requester' ? ' They may ask you a question in the comments.' : ''}`
@@ -101,8 +104,8 @@ function RequestProgress({ data, request }: { data: DashboardData; request: Tech
     : `Done${work?.doneAt ? ` on ${displayDate(work.doneAt, { weekday: 'short' })}` : ''}.`;
   return <div className="request-progress">
     <ol className="request-steps" aria-label={`Progress: ${stageLabels[stage]}`}>
-      {STEPS.map((label, index) => <li key={label} className={clsx(index < step && 'is-done', index === step && 'is-current', step === 4 && 'is-done')}>
-        <span aria-hidden="true">{index < step || step === 4 ? <Check /> : null}</span><em>{label}</em>
+      {steps.map((label, index) => <li key={label} className={clsx(index < step && 'is-done', index === step && 'is-current', step === last && 'is-done')}>
+        <span aria-hidden="true">{index < step || step === last ? <Check /> : null}</span><em>{label}</em>
       </li>)}
     </ol>
     <p className="request-progress-line">{line}</p>
@@ -230,10 +233,11 @@ export function MyRequests({ data, onRaise, onOpen, onEdit, mutate, busy }: MyRe
 type InboxTab = 'with_pm' | 'with_lead' | 'active' | 'done' | 'declined' | 'all';
 const ALL_STAGES: RequestStage[] = ['with_pm', 'with_lead', 'assigned', 'in_progress', 'checking', 'done', 'declined'];
 /** The tabs in the order each person works: a project manager starts with new requests, the tech lead with forwarded ones. */
-function inboxTabs(lead: boolean): { id: InboxTab; label: string; stages: RequestStage[] }[] {
+function inboxTabs(lead: boolean, noManager = false): { id: InboxTab; label: string; stages: RequestStage[] }[] {
   const pm = { id: 'with_pm' as const, label: lead ? 'With project manager' : 'New', stages: ['with_pm'] as RequestStage[] };
   const tl = { id: 'with_lead' as const, label: lead ? 'To assign' : 'With tech lead', stages: ['with_lead'] as RequestStage[] };
-  return [...(lead ? [tl, pm] : [pm, tl]),
+  // With no project manager, new requests wait for the tech lead, so the project manager tab would always be empty.
+  return [...(lead ? noManager ? [tl] : [tl, pm] : [pm, tl]),
     { id: 'active', label: 'In progress', stages: ['assigned', 'in_progress', 'checking'] },
     { id: 'done', label: 'Done', stages: ['done'] },
     { id: 'declined', label: 'Declined', stages: ['declined'] },
@@ -248,7 +252,8 @@ type InboxProps = { data: DashboardData; onOpen: OpenRequest; onAct: ActOnReques
 export function RequestInbox({ data, onOpen, onAct, onOpenItem, busy }: InboxProps) {
   const query = useSearchParams();
   const lead = leadsWork(data.currentUser);
-  const tabs = inboxTabs(lead);
+  const noManager = !!data.noProjectManager;
+  const tabs = inboxTabs(lead, noManager);
   // Older links say status=new. They mean the first tab: what waits for this person.
   const asked = query.get('status');
   const [tab, setTab] = useState<InboxTab>(() => tabs.find(t => t.id === asked)?.id ?? (asked === 'new' ? tabs[0].id : query.get('q') ? 'all' : tabs[0].id));
@@ -285,8 +290,10 @@ export function RequestInbox({ data, onOpen, onAct, onOpenItem, busy }: InboxPro
 
   return <>
     <div className="team-overview-strip approvals-strip">
-      <div><span className="mini-metric-icon"><Inbox /></span><strong>{waiting.length}</strong><span>{lead ? waiting.length === 1 ? 'forwarded request waits' : 'forwarded requests wait' : waiting.length === 1 ? 'new request waits' : 'new requests wait'} for you</span></div>
-      <div><span className="mini-metric-icon"><Forward /></span><strong>{otherStage}</strong><span>{lead ? 'with project managers' : 'with the tech lead'}</span></div>
+      <div><span className="mini-metric-icon"><Inbox /></span><strong>{waiting.length}</strong><span>{lead ? noManager ? waiting.length === 1 ? 'request waits' : 'requests wait' : waiting.length === 1 ? 'forwarded request waits' : 'forwarded requests wait' : waiting.length === 1 ? 'new request waits' : 'new requests wait'} for you</span></div>
+      {lead && noManager
+        ? <div><span className="mini-metric-icon"><Forward /></span><strong>—</strong><span>no project manager yet, so new requests come straight to you</span></div>
+        : <div><span className="mini-metric-icon"><Forward /></span><strong>{otherStage}</strong><span>{lead ? 'with project managers' : 'with the tech lead'}</span></div>}
       <div><span className="mini-metric-icon"><Clock3 /></span><strong>{data.techRequests.filter(r => inTab(r, 'active')).length}</strong><span>with a developer</span></div>
       <div><span className="mini-metric-icon"><Hourglass /></span><strong>{oldest ? oldestDays <= 0 ? 'Today' : plural(oldestDays, 'day') : '—'}</strong><span>{oldest ? 'the oldest one has waited' : 'nothing waits for you'}</span></div>
     </div>
@@ -316,7 +323,7 @@ export function RequestInbox({ data, onOpen, onAct, onOpenItem, busy }: InboxPro
             </TechRequestCard>;
           })}</div>
         : <EmptyState title={filtering ? 'No matches' : reviewing ? 'Nothing waits here' : 'Nothing here yet'}
-            description={filtering ? 'Try another search or team.' : tab === 'with_pm' ? 'When someone from Sales, E-commerce, or another team raises a request, it lands here.' : tab === 'with_lead' ? 'Requests a project manager forwards land here.' : 'Requests move here as the team works on them.'} />}
+            description={filtering ? 'Try another search or team.' : tab === 'with_pm' ? 'When someone from Sales, E-commerce, or another team raises a request, it lands here.' : tab === 'with_lead' ? noManager ? 'New requests from other teams land here.' : 'Requests a project manager forwards land here.' : 'Requests move here as the team works on them.'} />}
     </Card>
     {isOrgAdmin(data.currentUser) && <p className="inbox-footnote"><Briefcase size={13} aria-hidden="true" />Create teams, add their members, and choose who can sign in on <Link href={routeFor(data, 'other-teams')}>Other teams</Link>. Give people the project manager role on <Link href={routeFor(data, 'people')}>People</Link>.</p>}
   </>;
@@ -408,7 +415,7 @@ export function RequestDrawer({ data, request, mutate, busy, onClose, onAct, onE
         empty={me.role === 'requester' ? 'Screenshots, documents, or a short screen recording help the tech team. Up to 10 MB each.' : 'Add designs, specs, or screenshots. Up to 10 MB each.'} />
       <RequestConversation data={data} request={request} mutate={mutate} busy={busy} />
     </div>
-    <div className="drawer-footer"><span>Updated {displayDateTime(request.updatedAt)}</span>{lead && request.status === 'new' && <span>A project manager has not forwarded it yet. You can still assign it.</span>}</div>
+    <div className="drawer-footer"><span>Updated {displayDateTime(request.updatedAt)}</span>{lead && request.status === 'new' && !data.noProjectManager && <span>A project manager has not forwarded it yet. You can still assign it.</span>}</div>
   </Modal>;
 }
 
@@ -574,7 +581,7 @@ function AssignRequestForm({ data, request, mutate, busy, onClose }: { data: Das
     <form onSubmit={submit} className="item-form">
       <FieldGroup className="modal-form-body">
         <RequestContext data={data} request={request} />
-        {request.status === 'new' && <Alert><Inbox /><AlertDescription>A project manager has not reviewed this request yet. Assigning it now skips that step.</AlertDescription></Alert>}
+        {request.status === 'new' && !data.noProjectManager && <Alert><Inbox /><AlertDescription>A project manager has not reviewed this request yet. Assigning it now skips that step.</AlertDescription></Alert>}
         <FormField>Create as<FormChoice value={type} onValueChange={value => setType(value as WorkItem['type'])} options={[{ value: 'task', label: 'Ticket' }, { value: 'bug', label: 'Bug' }]} />
           <span className="field-help">{type === 'task' ? 'A ticket has an estimate. Its hours count when you approve it.' : 'A bug has a fix-by time from its severity. It earns bug points.'}</span></FormField>
         <FormField>Title<Input name="title" required minLength={3} maxLength={200} defaultValue={request.title} /></FormField>
