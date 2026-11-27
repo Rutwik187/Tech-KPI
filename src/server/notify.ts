@@ -45,10 +45,9 @@ async function projectManagers(tx: Tx) {
   const managers = await peopleWithRoles(tx, ["project_manager"]);
   return managers.length ? managers : techLeads(tx);
 }
-/** The tech lead assigns forwarded requests. With no tech lead, the admins hear about them. */
+/** The tech lead assigns forwarded requests. Admins do the tech lead's work too, so they always hear about them. */
 async function techLeads(tx: Tx) {
-  const leads = await peopleWithRoles(tx, ["tech_lead"]);
-  return leads.length ? leads : peopleWithRoles(tx, ["admin"]);
+  return peopleWithRoles(tx, ["tech_lead", "admin"]);
 }
 
 const escape = (text: string) => text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);

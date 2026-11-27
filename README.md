@@ -116,7 +116,7 @@ The tech lead can also act on a request that is still with a project manager. So
   | Step | Who gets an email |
   | --- | --- |
   | Request raised | Project managers, and a receipt to the person who raised it |
-  | Forwarded | The tech lead (admins when there is no tech lead), and the requester |
+  | Forwarded | The tech lead and admins, and the requester |
   | Sent back | Project managers |
   | Assigned | The requester and the developer |
   | Declined | The requester |
